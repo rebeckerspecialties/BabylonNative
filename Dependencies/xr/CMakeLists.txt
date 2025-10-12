@@ -30,9 +30,10 @@ set(SOURCES "Include/XR.h"
             "Source/Shared/XRHelpers.h")
 
 if (ANDROID)
+    # Always use OpenXR for Android XR devices
     set(SOURCES ${SOURCES}
-        "Source/ARCore/Include/IXrContextARCore.h"
-        "Source/ARCore/XR.cpp")
+        "Source/OpenXR/Include/IXrContextOpenXR.h"
+        "Source/OpenXR/XR.cpp")
 elseif(IOS OR BABYLON_NATIVE_BUILD_SOURCETREE)
     set(SOURCES ${SOURCES}
         "Source/ARKit/Include/IXrContextARKit.h"
@@ -52,16 +53,22 @@ if (APPLE)
 endif()
 
 if (ANDROID)
-    add_library(arcore SHARED IMPORTED)
-    set_target_properties(arcore PROPERTIES IMPORTED_LOCATION
-                          ${ARCORE_LIBPATH}/${ANDROID_ABI}/libarcore_sdk_c.so
-                          INTERFACE_INCLUDE_DIRECTORIES ${arcore-android-sdk_SOURCE_DIR}/libraries/include)
+    # OpenXR dependencies
+    include(FetchContent)
+    FetchContent_Declare(
+        OpenXR-SDK
+        GIT_REPOSITORY https://github.com/KhronosGroup/OpenXR-SDK.git
+        GIT_TAG release-1.1.52
+    )
+    FetchContent_MakeAvailable(OpenXR-SDK)
 
-    add_library(glm INTERFACE)
-    set_target_properties(glm PROPERTIES INTERFACE_INCLUDE_DIRECTORIES ${arcore-android-sdk_SOURCE_DIR}/libraries/glm)
+    # Link OpenXR loader
+    target_link_libraries(xr PRIVATE openxr_loader AndroidExtensions)
+    target_include_directories(xr PRIVATE ${openxr-sdk_SOURCE_DIR}/include)
 
-    target_link_libraries(xr PRIVATE glm arcore AndroidExtensions)
-elseif (IOS)    
+    # Define that we're using OpenXR
+    target_compile_definitions(xr PRIVATE USE_OPENXR_ANDROID=1)
+elseif (IOS)
     target_link_libraries(xr PRIVATE "-framework ARKit")
 endif()
 
