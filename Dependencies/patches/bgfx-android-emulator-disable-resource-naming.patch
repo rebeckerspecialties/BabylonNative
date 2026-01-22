@@ -1,0 +1,32 @@
+--- a/bgfx/src/renderer_gl.cpp
++++ b/bgfx/src/renderer_gl.cpp
+@@ -3882,11 +3882,29 @@
+ 
+ 		void setMarker(const char* _marker, uint16_t _len) override
+ 		{
++#if BX_PLATFORM_ANDROID
++			if (isAndroidEmulator())
++			{
++				// Disable resource naming on Android emulators.
++				BX_UNUSED(_marker, _len);
++				return;
++			}
++#endif
++
+ 			GL_CHECK(glInsertEventMarker(_len, _marker) );
+ 		}
+ 
+ 		virtual void setName(Handle _handle, const char* _name, uint16_t _len) override
+ 		{
++#if BX_PLATFORM_ANDROID
++			if (isAndroidEmulator())
++			{
++				// Disable resource naming on Android emulators.
++				BX_UNUSED(_handle, _name, _len);
++				return;
++			}
++#endif
++
+ 			uint16_t len = bx::min(_len, m_maxLabelLen);
+ 
+ 			switch (_handle.type)

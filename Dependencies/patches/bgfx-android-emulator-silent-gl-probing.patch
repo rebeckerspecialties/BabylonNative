@@ -1,0 +1,276 @@
+diff --git a/bgfx/src/renderer_gl.cpp b/bgfx/src/renderer_gl.cpp
+index 05b16ce5b..c3ca2a2a4 100644
+--- a/bgfx/src/renderer_gl.cpp
++++ b/bgfx/src/renderer_gl.cpp
+@@ -10,6 +10,9 @@
+ #	include <bx/timer.h>
+ #	include <bx/uint32_t.h>
+ #	include "emscripten.h"
++#	if BX_PLATFORM_ANDROID
++#		include <sys/system_properties.h>
++#	endif
+ 
+ namespace bgfx { namespace gl
+ {
+@@ -1822,6 +1825,233 @@ namespace bgfx { namespace gl
+ 	}
+ #endif // BX_PLATFORM_EMSCRIPTEN
+ 
++#if BX_PLATFORM_ANDROID
++	static bool isAndroidEmulator()
++	{
++		static int32_t cachedResult = -1;
++		if (cachedResult != -1)
++		{
++			return cachedResult != 0;
++		}
++
++		char value[PROP_VALUE_MAX]{};
++		const int length = __system_property_get("ro.kernel.qemu", value);
++		cachedResult = (length > 0 && 0 == bx::strCmp(value, "1")) ? 1 : 0;
++		return cachedResult != 0;
++	}
++
++	static bool isExtensionSupported(const char* name)
++	{
++		for (uint32_t ii = 0; ii < Extension::Count; ++ii)
++		{
++			if (0 == bx::strCmp(name, s_extension[ii].m_name))
++			{
++				return s_extension[ii].m_supported;
++			}
++		}
++		return false;
++	}
++
++	static bool isTextureFormatValidPerSpecAndroid(
++		  TextureFormat::Enum _format
++		, bool _srgb
++		, bool _mipAutogen
++		)
++	{
++		// Avoid creating test textures on Android emulators (Gfxstream logs noisy errors for probing).
++		const int glesVersion = BGFX_CONFIG_RENDERER_OPENGLES / 10;
++
++		switch (_format)
++		{
++			case TextureFormat::A8:
++			case TextureFormat::R8: // Luminance
++			case TextureFormat::B5G6R5:
++			case TextureFormat::R5G6B5:
++			case TextureFormat::BGRA4:
++			case TextureFormat::RGBA4:
++			case TextureFormat::BGR5A1:
++			case TextureFormat::RGB5A1:
++				// GLES2 formats without sRGB.
++				return !_srgb;
++
++			case TextureFormat::D16:
++				// GLES2 formats without sRGB, depth textures do not support mipmaps.
++				return !_srgb && !_mipAutogen;
++
++			case TextureFormat::R16F:
++			case TextureFormat::R32F:
++			case TextureFormat::RG8:
++			case TextureFormat::RG16F:
++			case TextureFormat::RG32F:
++			case TextureFormat::RGB10A2:
++			case TextureFormat::RG11B10F:
++				// GLES3 formats without sRGB.
++				return !_srgb && glesVersion >= 3;
++
++			case TextureFormat::R8I:
++			case TextureFormat::R8U:
++			case TextureFormat::R16I:
++			case TextureFormat::R16U:
++			case TextureFormat::R32I:
++			case TextureFormat::R32U:
++			case TextureFormat::RG8I:
++			case TextureFormat::RG8U:
++			case TextureFormat::RG16I:
++			case TextureFormat::RG16U:
++			case TextureFormat::RG32I:
++			case TextureFormat::RG32U:
++			case TextureFormat::RGB8I:
++			case TextureFormat::RGB8U:
++			case TextureFormat::RGBA8I:
++			case TextureFormat::RGBA8U:
++			case TextureFormat::RGBA16I:
++			case TextureFormat::RGBA16U:
++			case TextureFormat::RGBA32I:
++			case TextureFormat::RGBA32U:
++			case TextureFormat::D32F:
++			case TextureFormat::R8S:
++			case TextureFormat::RG8S:
++			case TextureFormat::RGB8S:
++			case TextureFormat::RGBA8S:
++			case TextureFormat::RGB9E5F:
++				// GLES3 formats without sRGB that are not texture filterable or color renderable.
++				return !_srgb && glesVersion >= 3 && !_mipAutogen;
++
++			case TextureFormat::D24:
++			case TextureFormat::D24S8:
++			case TextureFormat::D32:
++				// GLES3 formats without sRGB, depth textures do not support mipmaps.
++				return !_srgb && !_mipAutogen && (glesVersion >= 3 || isExtensionSupported("WEBGL_depth_texture"));
++
++			case TextureFormat::D16F:
++			case TextureFormat::D24F:
++				// GLES3 depth formats without sRGB, depth textures do not support mipmaps.
++				return !_srgb && !_mipAutogen && glesVersion >= 3;
++
++			case TextureFormat::RGBA16F:
++			case TextureFormat::RGBA32F:
++				// GLES3 formats without sRGB
++				return !_srgb && (glesVersion >= 3 || isExtensionSupported("OES_texture_half_float"));
++
++			case TextureFormat::RGB8:
++			case TextureFormat::RGBA8:
++				// sRGB formats
++				return !_srgb || glesVersion >= 3 || isExtensionSupported("EXT_sRGB");
++
++			// Compressed texture formats are treated as unsupported on Android emulators to avoid
++			// validation noise; applications can still fall back to uncompressed assets.
++			default:
++				break;
++		}
++
++		return false;
++	}
++
++	static bool isFramebufferFormatValidPerSpecAndroid(
++		  TextureFormat::Enum _format
++		, bool _srgb
++		, bool _writeOnly
++		)
++	{
++		// Avoid creating test textures on Android emulators (Gfxstream logs noisy errors for probing).
++		const int glesVersion = BGFX_CONFIG_RENDERER_OPENGLES / 10;
++
++		switch (_format)
++		{
++			// GLES2 textures
++			case TextureFormat::B5G6R5:
++			case TextureFormat::R5G6B5:
++			case TextureFormat::BGRA4:
++			case TextureFormat::RGBA4:
++			case TextureFormat::BGR5A1:
++			case TextureFormat::RGB5A1:
++			case TextureFormat::D16:
++				return !_srgb;
++
++			// GLES2 renderbuffers not a texture in GLES3
++			case TextureFormat::D0S8:
++				return !_srgb && _writeOnly;
++
++			// GLES2 textures that are not renderbuffers
++			case TextureFormat::RGB8:
++			case TextureFormat::RGBA8:
++				return !_srgb && (!_writeOnly || glesVersion >= 3);
++
++			// GLES3 EXT_color_buffer_float renderbuffer formats
++			case TextureFormat::R16F:
++			case TextureFormat::RG16F:
++			case TextureFormat::R32F:
++			case TextureFormat::RG32F:
++			case TextureFormat::RG11B10F:
++				if (_writeOnly)
++				{
++					return isExtensionSupported("EXT_color_buffer_float");
++				}
++
++				return !_srgb && glesVersion >= 3;
++
++			// GLES2 float extension:
++			case TextureFormat::RGBA16F:
++				if (_writeOnly && isExtensionSupported("EXT_color_buffer_half_float"))
++				{
++					return true;
++				}
++				[[fallthrough]];
++
++			case TextureFormat::RGBA32F:
++				if (_writeOnly)
++				{
++					return isExtensionSupported("EXT_color_buffer_float") || isExtensionSupported("WEBGL_color_buffer_float");
++				}
++
++				// GLES3 formats without sRGB
++				return !_srgb && (glesVersion >= 3 || isExtensionSupported("OES_texture_half_float"));
++
++			case TextureFormat::D24:
++			case TextureFormat::D24S8:
++				return !_srgb && (glesVersion >= 3 || (!_writeOnly && isExtensionSupported("WEBGL_depth_texture")));
++
++			case TextureFormat::D32:
++				return !_srgb && !_writeOnly && (glesVersion >= 3 || isExtensionSupported("WEBGL_depth_texture"));
++
++			// GLES3 textures
++			case TextureFormat::R8:
++			case TextureFormat::RG8:
++			case TextureFormat::R8I:
++			case TextureFormat::R8U:
++			case TextureFormat::R16I:
++			case TextureFormat::R16U:
++			case TextureFormat::R32I:
++			case TextureFormat::R32U:
++			case TextureFormat::RG8I:
++			case TextureFormat::RG8U:
++			case TextureFormat::RGBA8I:
++			case TextureFormat::RGBA8U:
++			case TextureFormat::RG16I:
++			case TextureFormat::RG16U:
++			case TextureFormat::RG32I:
++			case TextureFormat::RG32U:
++			case TextureFormat::RGBA16I:
++			case TextureFormat::RGBA16U:
++			case TextureFormat::RGBA32I:
++			case TextureFormat::RGBA32U:
++			case TextureFormat::RGB10A2:
++			case TextureFormat::D16F:
++			case TextureFormat::D24F:
++			case TextureFormat::D32F:
++				return !_srgb && glesVersion >= 3;
++
++			case TextureFormat::BGRA8:
++				return !_srgb && _writeOnly && glesVersion >= 3;
++
++			default:
++				break;
++		}
++
++		return false;
++	}
++#endif // BX_PLATFORM_ANDROID
++
+ 	static bool isTextureFormatValid(
+ 		  TextureFormat::Enum _format
+ 		, bool _srgb = false
+@@ -1836,6 +2066,13 @@ namespace bgfx { namespace gl
+ 		BX_UNUSED(_array, _dim);
+ 		return isTextureFormatValidPerSpec(_format, _srgb, _mipAutogen);
+ #else
++#	if BX_PLATFORM_ANDROID
++		if (isAndroidEmulator())
++		{
++			BX_UNUSED(_array, _dim);
++			return isTextureFormatValidPerSpecAndroid(_format, _srgb, _mipAutogen);
++		}
++#	endif
+ 		// On other platforms probe the supported textures.
+ 		const TextureFormatInfo& tfi = s_textureFormat[_format];
+ 		GLenum internalFmt = _srgb
+@@ -2071,6 +2308,13 @@ namespace bgfx { namespace gl
+ 		BX_UNUSED(_dim);
+ 		return isFramebufferFormatValidPerSpec(_format, _srgb, _writeOnly);
+ #else
++#	if BX_PLATFORM_ANDROID
++		if (isAndroidEmulator())
++		{
++			BX_UNUSED(_dim);
++			return isFramebufferFormatValidPerSpecAndroid(_format, _srgb, _writeOnly);
++		}
++#	endif
+ 		// On other platforms probe the supported textures.
+ 		const TextureFormatInfo& tfi = s_textureFormat[_format];
+ 		GLenum internalFmt = _srgb

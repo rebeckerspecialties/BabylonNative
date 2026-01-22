@@ -1,0 +1,24 @@
+diff --git a/bgfx/src/renderer_gl.cpp b/bgfx/src/renderer_gl.cpp
+index c3ca2a2a4..a4e4e4e4e 100644
+--- a/bgfx/src/renderer_gl.cpp
++++ b/bgfx/src/renderer_gl.cpp
+@@ -3429,6 +3429,17 @@ namespace bgfx { namespace gl
+ 					{
+ 						glObjectLabel = stubObjectLabel;
+ 					}
++
++#if BX_PLATFORM_ANDROID
++					if (isAndroidEmulator())
++					{
++						// Disable debug labels on Android emulators.
++						// Some emulator EGL stacks provide stub implementations that spam:
++						// "libEGL: called unimplemented OpenGL ES API".
++						glInsertEventMarker = stubInsertEventMarker;
++						glObjectLabel       = stubObjectLabel;
++					}
++#endif
+ 
+ 					if (NULL == glInvalidateFramebuffer)
+ 					{
+ 						glInvalidateFramebuffer = stubInvalidateFramebuffer;
+ 					}

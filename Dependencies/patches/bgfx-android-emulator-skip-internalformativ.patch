@@ -1,0 +1,15 @@
+--- a/bgfx/src/renderer_gl.cpp
++++ b/bgfx/src/renderer_gl.cpp
+@@ -3014,7 +3014,11 @@
+ 						: BGFX_CAPS_FORMAT_TEXTURE_NONE
+ 						;
+ 
+-					if (NULL != glGetInternalformativ)
++					bool shouldQueryInternalFormats = NULL != glGetInternalformativ;
++#if BX_PLATFORM_ANDROID
++					shouldQueryInternalFormats = shouldQueryInternalFormats && !isAndroidEmulator();
++#endif
++					if (shouldQueryInternalFormats)
+ 					{
+ 						GLint maxSamples;
+ 						glGetInternalformativ(GL_RENDERBUFFER
