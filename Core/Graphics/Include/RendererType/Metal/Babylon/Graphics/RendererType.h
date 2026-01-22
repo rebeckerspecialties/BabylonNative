@@ -1,6 +1,7 @@
 #pragma once
 
 #include <MetalKit/MetalKit.h>
+#include <Babylon/Graphics/RendererMode.h>
 
 namespace Babylon::Graphics
 {

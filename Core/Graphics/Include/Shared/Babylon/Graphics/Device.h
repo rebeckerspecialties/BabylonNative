@@ -2,6 +2,7 @@
 
 #include <Babylon/JsRuntime.h>
 #include <Babylon/Graphics/Platform.h>
+#include <Babylon/Graphics/RendererMode.h>
 #include <Babylon/Graphics/RendererType.h>
 
 #include <future>
@@ -44,6 +45,9 @@ namespace Babylon::Graphics
 
         // The resolution height.
         size_t Height{};
+
+        // Hint to choose a renderer at runtime when multiple backends are available (e.g., Vulkan vs GLES on Android).
+        RendererMode RequestedRendererMode{RendererMode::Automatic};
 
         // MSAA sample values can be 2, 4, 8 or 16. Other values will disable MSAA.
         uint8_t MSAASamples{};

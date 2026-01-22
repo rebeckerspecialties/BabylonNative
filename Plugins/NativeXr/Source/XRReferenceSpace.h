@@ -42,11 +42,8 @@ namespace Babylon
                     if (info[0].IsString())
                     {
                         // TODO: Actually support the different types of reference spaces.
-                        const auto referenceSpaceType = info[0].As<Napi::String>().Utf8Value();
-                        assert(referenceSpaceType == XRReferenceSpaceType::UNBOUNDED ||
-                               referenceSpaceType == XRReferenceSpaceType::VIEWER);
-                        (void)XRReferenceSpaceType::UNBOUNDED;
-                        (void)XRReferenceSpaceType::VIEWER;
+                        // Babylon.js typically requests "local-floor" for immersive sessions.
+                        (void)info[0].As<Napi::String>().Utf8Value();
                     }
                     else
                     {

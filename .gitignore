@@ -1,3 +1,39 @@
 /build*
 .DS_Store
 .vscode
+
+# Node / JS
+node_modules
+
+# Gradle / Android build artifacts
+**/.gradle/
+**/.cxx/
+
+# UnitTests build output
+Apps/UnitTests/dist/
+
+# CMake FetchContent checkouts (generated)
+Dependencies/base-n/
+Dependencies/bgfx.cmake/
+Dependencies/glslang/
+Dependencies/SPIRV-Cross/
+Dependencies/Vulkan-Headers/
+Dependencies/VulkanOverrides/
+Dependencies/xr/Dependencies/
+
+# Local logs/screenshots (repo root)
+/_*.apk
+/_*.log
+/_*.png
+/_*.txt
+/adb_*.png
+/babylonnative-openxr-android.patch
+/cmake_*.log
+/crash_*.txt
+/emulator*.log
+/logcat*.txt
+/openxr_webxr_comparison*.html
+/tombstone_*.txt
+/verify_*.log
+/verify_*.png
+/verify_*.txt

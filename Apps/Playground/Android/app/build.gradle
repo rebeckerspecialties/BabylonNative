@@ -5,9 +5,8 @@ if (project.hasProperty("jsEngine")) {
     jsEngine = project.property("jsEngine")
 }
 
-def graphics_api = "OpenGL"
-// min 24 for Vulkan
 def platformVersion = 25
+def scriptsOut = "${buildDir}/generated/assets/Scripts"
 
 def unity_build = "false"
 if (project.hasProperty("UNITY_BUILD")) {
@@ -17,14 +16,26 @@ def arcore_libpath = "${buildDir}/arcore-native"
 
 configurations { natives }
 
+// Jetpack XR pulls in androidx.lifecycle 2.8.x which is published as Kotlin multiplatform.
+// Our Java-only build can resolve the non-Android (desktop JVM) variant, which is missing
+// Android-only classes used by ComponentActivity and androidx.startup at runtime.
+configurations.configureEach {
+    resolutionStrategy {
+        force 'androidx.lifecycle:lifecycle-runtime:2.6.2'
+        force 'androidx.lifecycle:lifecycle-process:2.6.2'
+        force 'androidx.lifecycle:lifecycle-viewmodel:2.6.2'
+        force 'androidx.lifecycle:lifecycle-viewmodel-savedstate:2.6.2'
+    }
+}
+
 android {
-    compileSdkVersion 29
+    compileSdkVersion 34
 
     defaultConfig {
         applicationId "com.android.babylonnative.playground"
         minSdkVersion "${platformVersion}"
-        targetSdkVersion 29
-        ndkVersion "23.1.7779620"
+        targetSdkVersion 34
+        ndkVersion "28.2.13676358"
         if (project.hasProperty("NDK_VERSION")) {
             def NDKVersion = project.property("NDK_VERSION")
             ndkVersion  "${NDK_VERSION}"
@@ -48,22 +59,59 @@ android {
         }
     }
 
+    flavorDimensions += ["platform"]
+    productFlavors {
+        mobile {
+            dimension "platform"
+        }
+
+        androidXr {
+            dimension "platform"
+            applicationIdSuffix ".xr"
+            minSdkVersion 34
+        }
+
+        androidXrSimulator {
+            dimension "platform"
+            applicationIdSuffix ".xrsim"
+            minSdkVersion 34
+        }
+    }
+
     namespace 'com.android.babylonnative.playground'
+
+    sourceSets {
+        main {
+            assets.srcDirs = ["${buildDir}/generated/assets"]
+        }
+
+        androidXr {
+            java.srcDirs += ["src/androidXrShared/java"]
+            res.srcDirs += ["src/androidXrShared/res"]
+        }
+
+        androidXrSimulator {
+            java.srcDirs += ["src/androidXrShared/java"]
+            res.srcDirs += ["src/androidXrShared/res"]
+        }
+    }
 }
 
 repositories {
-    // Add flatDir repository
-    flatDir {
-        dirs '../BabylonNative/build/outputs/aar'
-    }
+    // Intentionally empty. Dependencies are provided by project(':BabylonNative') and Maven repositories above.
 }
 
 dependencies {
     implementation project(':BabylonNative')
-    natives 'com.google.ar:core:1.14.0'
+    implementation 'com.google.ar:core:1.45.0'
+    natives 'com.google.ar:core:1.45.0'
 
-    implementation 'com.android.support:appcompat-v7:27.1.1'
-    implementation 'com.android.support:design:27.1.1'
+    implementation 'androidx.appcompat:appcompat:1.6.1'
+    implementation 'com.google.android.material:material:1.12.0'
+
+    // Android XR (Jetpack XR + SceneCore). Needed directly by the app's XR launcher activity.
+    androidXrImplementation 'androidx.xr.scenecore:scenecore:1.0.0-alpha10'
+    androidXrSimulatorImplementation 'androidx.xr.scenecore:scenecore:1.0.0-alpha10'
 }
 
 // Extracts the shared libraries from aars in the natives configuration.
@@ -90,50 +138,26 @@ tasks.configureEach { task ->
 
 preBuild.dependsOn ':BabylonNative:assembleRelease'
 
-task copyFiles {
-    copy
-    {
-        from '../../../node_modules/babylonjs'
-        include "babylon.max.js"
-        into 'src/main/assets/Scripts'
-    }
-    copy
-    {
-        from '../../../node_modules/babylonjs-loaders'
-        include "babylonjs.loaders.js"
-        into 'src/main/assets/Scripts'
-    }
-    copy
-    {
-        from '../../../node_modules/babylonjs-materials'
-        include "babylonjs.materials.js"
-        into 'src/main/assets/Scripts'
-    }
-    copy
-    {
-        from '../../../node_modules/babylonjs-gui'
-        include "babylon.gui.js"
-        into 'src/main/assets/Scripts'
-    }
-    copy
-    {
-        from '../../../node_modules/babylonjs-serializers'
-        include "babylonjs.serializers.js"
-        into 'src/main/assets/Scripts'
-    }
-    copy
-    {
-        from '../../../Dependencies'
-        include "*.js"
-        into 'src/main/assets/Scripts'
-    }
-    copy
-    {
-        from '../../Scripts'
-        include "*.js"
-        into 'src/main/assets/Scripts'
-    }
+def copyFiles = tasks.register("copyFiles", Copy) {
+    description = "Stage JS assets into build output"
+    duplicatesStrategy = DuplicatesStrategy.INCLUDE
+    into scriptsOut
+    from('../../../node_modules/babylonjs') { include "babylon.max.js" }
+    from('../../../node_modules/babylonjs-loaders') { include "babylonjs.loaders.js" }
+    from('../../../node_modules/babylonjs-materials') { include "babylonjs.materials.js" }
+    from('../../../node_modules/babylonjs-gui') { include "babylon.gui.js" }
+    from('../../../node_modules/babylonjs-serializers') { include "babylonjs.serializers.js" }
+    from('../../../Dependencies') { include "*.js" }
+    from('../../Scripts') { include "*.js" }
 }
 
 preBuild.dependsOn(copyFiles)
 
+afterEvaluate {
+    if (tasks.findByName("installDebug") == null) {
+        tasks.register("installDebug") {
+            group = "install"
+            dependsOn("installMobileDebug")
+        }
+    }
+}

@@ -1,3 +1,5 @@
 <resources>
     <string name="playground_activity">Babylon Native Playground</string>
+    <string name="xr_panel_initializing">Initializing XR…</string>
+    <string name="enter_ar">Enter AR</string>
 </resources>

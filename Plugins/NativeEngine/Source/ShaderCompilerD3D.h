@@ -84,7 +84,7 @@ namespace Babylon
         glslang::FinalizeProcess();
     }
 
-    ShaderCompiler::BgfxShaderInfo ShaderCompiler::Compile(std::string_view vertexSource, std::string_view fragmentSource)
+    ShaderCompiler::BgfxShaderInfo ShaderCompiler::Compile(std::string_view vertexSource, std::string_view fragmentSource, bgfx::RendererType::Enum rendererType)
     {
         glslang::TProgram program;
 
@@ -147,6 +147,6 @@ namespace Babylon
             gsl::make_span(static_cast<uint8_t*>(fragmentBlob->GetBufferPointer()), fragmentBlob->GetBufferSize()),
             {}};
 
-        return ShaderCompilerCommon::CreateBgfxShader(std::move(vertexShaderInfo), std::move(fragmentShaderInfo));
+        return ShaderCompilerCommon::CreateBgfxShader(std::move(vertexShaderInfo), std::move(fragmentShaderInfo), rendererType);
     }
 }

@@ -38,6 +38,19 @@ namespace Babylon::Graphics
 
         auto& init = m_state.Bgfx.InitState;
         init.callback = &m_bgfxCallback;
+        bgfx::RendererType::Enum requestedRenderer = s_bgfxRenderType;
+        switch (config.RequestedRendererMode)
+        {
+            case RendererMode::ForceOpenGLES:
+                requestedRenderer = bgfx::RendererType::OpenGLES;
+                break;
+            case RendererMode::ForceVulkan:
+                requestedRenderer = bgfx::RendererType::Vulkan;
+                break;
+            case RendererMode::Automatic:
+            default:
+                break;
+        }
 
         // Use the noop renderer if the configuration has no window and no size.
         if (config.Window == WindowT{} && config.Width == 0 && config.Height == 0)
@@ -46,7 +59,7 @@ namespace Babylon::Graphics
         }
         else
         {
-            init.type = s_bgfxRenderType;
+            init.type = requestedRenderer;
         }
 
         //
@@ -109,7 +122,13 @@ namespace Babylon::Graphics
     void DeviceImpl::UpdateDevice(DeviceT device)
     {
         std::scoped_lock lock{m_state.Mutex};
+#if defined(OPENGL)
+        // For OpenGL the DeviceT is the GL/EGL context itself.
         m_state.Bgfx.InitState.platformData.context = device;
+#else
+        // Vulkan (and other structured DeviceT types) expose a Device member.
+        m_state.Bgfx.InitState.platformData.context = device.Device;
+#endif
         m_state.Bgfx.Dirty = true;
     }
 

@@ -5,6 +5,29 @@
 
 namespace Babylon::Graphics
 {
+    namespace
+    {
+        Rect ApplyViewportTransform(const Rect& transform, const Rect& rect)
+        {
+            return Rect{
+                transform.X + rect.X * transform.Width,
+                transform.Y + rect.Y * transform.Height,
+                rect.Width * transform.Width,
+                rect.Height * transform.Height,
+            };
+        }
+
+        bool IsDefaultViewportTransform(const Rect& transform)
+        {
+            return transform.X == 0.0f && transform.Y == 0.0f && transform.Width == 1.0f && transform.Height == 1.0f;
+        }
+
+        bool IsEmptyRect(const Rect& rect)
+        {
+            return rect.X == 0.0f && rect.Y == 0.0f && rect.Width == 0.0f && rect.Height == 0.0f;
+        }
+    }
+
     FrameBuffer::FrameBuffer(DeviceContext& deviceContext, bgfx::FrameBufferHandle handle, uint16_t width, uint16_t height, bool defaultBackBuffer, bool hasDepth, bool hasStencil, int8_t depthStencilAttachmentIndex)
         : m_deviceContext{deviceContext}
         , m_deviceID{deviceContext.GetDeviceId()}
@@ -78,6 +101,12 @@ namespace Babylon::Graphics
     {
     }
 
+    void FrameBuffer::SetViewportTransform(float x, float y, float width, float height)
+    {
+        m_viewportTransform = {x, y, width, height};
+        m_viewId.reset();
+    }
+
     void FrameBuffer::Clear(bgfx::Encoder& encoder, uint16_t flags, uint32_t rgba, float depth, uint8_t stencil)
     {
         // BGFX requires us to create a new viewID, this will ensure that the view gets cleared.
@@ -95,10 +124,23 @@ namespace Babylon::Graphics
         // the view scissor is set.
         //
         // Note that the view rect and view scissor are reset to the desired dimensions before the encoder is submitted.
-        if (m_desiredScissor.X == 0.0f && m_desiredScissor.Y == 0.0f && m_desiredScissor.Width == 0.0f && m_desiredScissor.Height == 0.0f)
+        if (IsEmptyRect(m_desiredScissor))
         {
-            bgfx::setViewRect(m_viewId.value(), 0, 0, Width(), Height());
-            m_bgfxViewPort = {0, 0, 1, 1};
+            if (IsDefaultViewportTransform(m_viewportTransform))
+            {
+                bgfx::setViewRect(m_viewId.value(), 0, 0, Width(), Height());
+                m_bgfxViewPort = {0, 0, 1, 1};
+            }
+            else
+            {
+                bgfx::setViewRect(
+                    m_viewId.value(),
+                    static_cast<uint16_t>(m_viewportTransform.X * Width()),
+                    static_cast<uint16_t>(m_viewportTransform.Y * Height()),
+                    static_cast<uint16_t>(m_viewportTransform.Width * Width()),
+                    static_cast<uint16_t>(m_viewportTransform.Height * Height()));
+                m_bgfxViewPort = m_viewportTransform;
+            }
         }
         else
         {
@@ -126,7 +168,7 @@ namespace Babylon::Graphics
 
     void FrameBuffer::SetViewPort(bgfx::Encoder& encoder, float x, float y, float width, float height)
     {
-        m_desiredViewPort = {x, y, width, height};
+        m_desiredViewPort = ApplyViewportTransform(m_viewportTransform, {x, y, width, height});
         SetBgfxViewPortAndScissor(encoder, m_desiredViewPort, m_desiredScissor);
     }
 

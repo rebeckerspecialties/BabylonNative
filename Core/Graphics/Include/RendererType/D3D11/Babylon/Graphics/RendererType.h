@@ -1,6 +1,7 @@
 #pragma once
 
 #include <d3d11.h>
+#include <Babylon/Graphics/RendererMode.h>
 
 #define GRAPHICS_BACK_BUFFER_SUPPORT
 

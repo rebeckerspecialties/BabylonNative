@@ -4,8 +4,9 @@ import android.Manifest;
 import android.app.Activity;
 import android.content.pm.PackageManager;
 import android.os.Bundle;
-import android.support.v4.app.ActivityCompat;
-import android.support.v4.content.ContextCompat;
+import androidx.core.app.ActivityCompat;
+import androidx.core.content.ContextCompat;
+import android.widget.FrameLayout;
 import android.view.View;
 
 import com.library.babylonnative.BabylonView;
@@ -17,8 +18,18 @@ public class PlaygroundActivity extends Activity implements BabylonView.ViewDele
     @Override
     protected void onCreate(Bundle icicle) {
         super.onCreate(icicle);
+        setContentView(R.layout.activity_playground);
+
+        FrameLayout container = findViewById(R.id.babylon_container);
         mView = new BabylonView(getApplication(), this);
-        setContentView(mView);
+        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT);
+        container.addView(mView, lp);
+
+        findViewById(R.id.enter_ar_button).setOnClickListener(view -> {
+            mView.eval("if (typeof startImmersiveAR === 'function') { startImmersiveAR(); }", "enter-ar.js");
+        });
     }
 
     @Override

@@ -4,6 +4,7 @@
 #include <functional>
 #include <spirv_cross.hpp>
 #include <spirv_parser.hpp>
+#include <bgfx/bgfx.h>
 
 namespace bgfx
 {
@@ -27,9 +28,9 @@ namespace Babylon
 
             std::vector<uint8_t> FragmentBytes{};
 
-            std::unordered_map<std::string, uint8_t> UniformStages{};
+        std::unordered_map<std::string, uint8_t> UniformStages{};
         };
 
-        BgfxShaderInfo Compile(std::string_view vertexSource, std::string_view fragmentSource);
+        BgfxShaderInfo Compile(std::string_view vertexSource, std::string_view fragmentSource, bgfx::RendererType::Enum rendererType);
     };
 }

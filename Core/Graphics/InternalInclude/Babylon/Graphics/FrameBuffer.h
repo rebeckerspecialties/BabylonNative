@@ -36,6 +36,7 @@ namespace Babylon::Graphics
         void Bind(bgfx::Encoder& encoder);
         void Unbind(bgfx::Encoder& encoder);
 
+        void SetViewportTransform(float x, float y, float width, float height);
         void Clear(bgfx::Encoder& encoder, uint16_t flags, uint32_t rgba, float depth, uint8_t stencil);
         void SetViewPort(bgfx::Encoder& encoder, float x, float y, float width, float height);
         void SetScissor(bgfx::Encoder& encoder, float x, float y, float width, float height);
@@ -64,6 +65,7 @@ namespace Babylon::Graphics
 
         Rect m_bgfxViewPort{0.0f, 0.0f, 1.0f, 1.0f};
         Rect m_desiredViewPort{0.0f, 0.0f, 1.0f, 1.0f};
+        Rect m_viewportTransform{0.0f, 0.0f, 1.0f, 1.0f};
 
         Rect m_bgfxScissor{};
         Rect m_desiredScissor{};

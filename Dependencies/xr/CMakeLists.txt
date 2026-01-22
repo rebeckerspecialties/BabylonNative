@@ -24,15 +24,23 @@ endif()
 
 project(xr)
 
+option(BABYLON_NATIVE_ANDROID_XR "Build the Android XR (SceneCore) backend instead of ARCore." OFF)
+
 set(DYNAMIC_LOADER OFF CACHE BOOL "Build the loader as a .dll library")
 
 set(SOURCES "Include/XR.h"
             "Source/Shared/XRHelpers.h")
 
 if (ANDROID)
-    set(SOURCES ${SOURCES}
-        "Source/ARCore/Include/IXrContextARCore.h"
-        "Source/ARCore/XR.cpp")
+    if (BABYLON_NATIVE_ANDROID_XR)
+        set(SOURCES ${SOURCES}
+            "Source/SceneCore/Include/IXrContextSceneCore.h"
+            "Source/SceneCore/XR.cpp")
+    else()
+        set(SOURCES ${SOURCES}
+            "Source/ARCore/Include/IXrContextARCore.h"
+            "Source/ARCore/XR.cpp")
+    endif()
 elseif(IOS OR BABYLON_NATIVE_BUILD_SOURCETREE)
     set(SOURCES ${SOURCES}
         "Source/ARKit/Include/IXrContextARKit.h"
@@ -52,15 +60,21 @@ if (APPLE)
 endif()
 
 if (ANDROID)
-    add_library(arcore SHARED IMPORTED)
-    set_target_properties(arcore PROPERTIES IMPORTED_LOCATION
-                          ${ARCORE_LIBPATH}/${ANDROID_ABI}/libarcore_sdk_c.so
-                          INTERFACE_INCLUDE_DIRECTORIES ${arcore-android-sdk_SOURCE_DIR}/libraries/include)
+    if (BABYLON_NATIVE_ANDROID_XR)
+        target_link_libraries(xr PRIVATE AndroidExtensions android log)
+    else()
+        FetchContent_Declare(glm_headers
+            GIT_REPOSITORY https://github.com/g-truc/glm.git
+            GIT_TAG 1.0.1)
+        FetchContent_MakeAvailable(glm_headers)
 
-    add_library(glm INTERFACE)
-    set_target_properties(glm PROPERTIES INTERFACE_INCLUDE_DIRECTORIES ${arcore-android-sdk_SOURCE_DIR}/libraries/glm)
+        add_library(arcore SHARED IMPORTED)
+        set_target_properties(arcore PROPERTIES IMPORTED_LOCATION
+                            ${ARCORE_LIBPATH}/${ANDROID_ABI}/libarcore_sdk_c.so
+                            INTERFACE_INCLUDE_DIRECTORIES ${arcore-android-sdk_SOURCE_DIR}/libraries/include)
 
-    target_link_libraries(xr PRIVATE glm arcore AndroidExtensions)
+        target_link_libraries(xr PRIVATE glm arcore AndroidExtensions android)
+    endif()
 elseif (IOS)    
     target_link_libraries(xr PRIVATE "-framework ARKit")
 endif()

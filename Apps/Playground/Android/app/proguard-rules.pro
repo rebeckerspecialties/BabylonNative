@@ -19,3 +19,7 @@
 # If you keep the line number information, uncomment this to
 # hide the original source file name.
 #-renamesourcefileattribute SourceFile
+
+# Android XR system extension APIs are provided by the platform via optional <uses-library>.
+# These classes are intentionally absent from the APK and should not fail R8 when minifying.
+-dontwarn com.android.extensions.xr.**

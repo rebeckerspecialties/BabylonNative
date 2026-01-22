@@ -37,4 +37,8 @@ public class Wrapper {
     public static native void xrSurfaceChanged(Surface surface);
 
     public static native boolean isXRActive();
+
+    public static native void setXrOnly(boolean xrOnly);
+
+    public static native boolean isEngineReady();
 }

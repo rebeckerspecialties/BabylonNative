@@ -27,7 +27,7 @@ FetchContent_Declare(arcana.cpp
     EXCLUDE_FROM_ALL)
 FetchContent_Declare(arcore-android-sdk
     GIT_REPOSITORY https://github.com/google-ar/arcore-android-sdk.git
-    GIT_TAG 98cb803de5482fb2b36effe8be3b5a0d3b726976
+    GIT_TAG 8d888a704afadbd40907951dba461de470a3efbf
     EXCLUDE_FROM_ALL)
 FetchContent_Declare(base-n
     GIT_REPOSITORY https://github.com/azawadzki/base-n.git

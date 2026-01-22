@@ -21,6 +21,10 @@ const imageTracking = false;
 const readPixels = false;
 const logPerf = false;
 
+let xrHelper = null;
+let arAnchorPlaced = false;
+let cube = null;
+
 if (logPerf) {
     BABYLON.Tools.PerformanceLogLevel = BABYLON.Tools.PerformanceConsoleLogLevel;
     BABYLON.Tools.StartPerformanceCounter("test counter");
@@ -28,8 +32,10 @@ if (logPerf) {
 }
 
 function CreateBoxAsync(scene) {
-    BABYLON.Mesh.CreateBox("box1", 0.2, scene);
-    return Promise.resolve();
+    const box = BABYLON.MeshBuilder.CreateBox("box1", { size: 0.6 }, scene);
+    box.alwaysSelectAsActiveMesh = true;
+    BABYLON.Tools.Log(`CreateBoxAsync -> ${box.name} (id=${box.id})`);
+    return Promise.resolve(box);
 }
 
 function CreateSpheresAsync(scene) {
@@ -50,8 +56,31 @@ function CreateSpheresAsync(scene) {
 
 const engine = new BABYLON.NativeEngine();
 const scene = new BABYLON.Scene(engine);
+const log = (...args) => {
+    const message = args.map((value) => {
+        if (typeof value === "string") {
+            return value;
+        }
+        try {
+            return JSON.stringify(value);
+        } catch (e) {
+            return String(value);
+        }
+    }).join(" ");
 
-CreateBoxAsync(scene).then(function () {
+    if (BABYLON && BABYLON.Tools && BABYLON.Tools.Log) {
+        BABYLON.Tools.Log(message);
+        return;
+    }
+
+    if (typeof console !== "undefined" && console.log) {
+        console.log(...args);
+    }
+};
+log("BabylonNative Playground: experience.js starting");
+
+CreateBoxAsync(scene).then(function (createdBox) {
+    cube = createdBox;
 //CreateSpheresAsync(scene).then(function () {
 //BABYLON.AppendSceneAsync("https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Models/master/2.0/Box/glTF/Box.gltf").then(function () {
 //BABYLON.AppendSceneAsync("https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Models/master/2.0/BoxTextured/glTF/BoxTextured.gltf").then(function () {
@@ -71,15 +100,33 @@ CreateBoxAsync(scene).then(function () {
 //BABYLON.AppendSceneAsync("https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Models/master/2.0/ClearCoatTest/glTF/ClearCoatTest.gltf").then(function () {
     BABYLON.Tools.Log("Loaded");
 
-    // This creates and positions a free camera (non-mesh)
+    // Camera + lighting tuned so the cube stays visible on emulator
     scene.createDefaultCamera(true, true, true);
-    scene.activeCamera.alpha += Math.PI;
+    if (scene.activeCamera && scene.activeCamera.setTarget) {
+        scene.activeCamera.setPosition(new BABYLON.Vector3(0, 1.5, -3.5));
+        scene.activeCamera.setTarget(new BABYLON.Vector3(0, 1.5, 0));
+    }
+
+    scene.clearColor = new BABYLON.Color4(0.19, 0.2, 0.28, 1.0);
 
     if (ibl) {
         scene.createDefaultEnvironment({ createGround: false, createSkybox: false });
     }
     else {
         scene.createDefaultLight(true);
+    }
+
+    if (cube) {
+        cube.rotationQuaternion = BABYLON.Quaternion.Identity();
+        cube.position = new BABYLON.Vector3(0, 1.5, -1.5);
+        const cubeMaterial = new BABYLON.StandardMaterial("cubeMat", scene);
+        cubeMaterial.diffuseColor = new BABYLON.Color3(0.9, 0.6, 0.2);
+        cubeMaterial.emissiveColor = new BABYLON.Color3(0.4, 0.25, 0.05);
+        cubeMaterial.specularColor = new BABYLON.Color3(0.1, 0.1, 0.1);
+        cubeMaterial.backFaceCulling = false;
+        cube.material = cubeMaterial;
+        cube.isVisible = true;
+        cube.visibility = 1.0;
     }
 
     if (cameraTexture) {
@@ -203,6 +250,13 @@ CreateBoxAsync(scene).then(function () {
 
         window.setTimeout(logFpsLoop, 3000);
     }
+
+    scene.onAfterRenderObservable.addOnce(() => {
+        BABYLON.Tools.Log(`Scene ready. Mesh count=${scene.meshes.length} activeCamera=${scene.activeCamera ? scene.activeCamera.position.toString() : "none"} cubeVisible=${cube ? cube.isVisible : "null"}`);
+        if (globalThis.BABYLON_NATIVE_AUTO_ENTER_XR) {
+            void autoEnterImmersiveXR();
+        }
+    });
 
     engine.runRenderLoop(function () {
         scene.render();
@@ -419,3 +473,186 @@ CreateBoxAsync(scene).then(function () {
 }, function (ex) {
     console.log(ex.message, ex.stack);
 });
+
+async function isXrSessionSupported(sessionMode) {
+    try {
+        if (BABYLON.WebXRSessionManager && BABYLON.WebXRSessionManager.IsSessionSupportedAsync) {
+            return await BABYLON.WebXRSessionManager.IsSessionSupportedAsync(sessionMode);
+        }
+    } catch (error) {
+        BABYLON.Tools.Log(`IsSessionSupportedAsync(${sessionMode}) failed: ${error}`);
+        return false;
+    }
+
+    if (!navigator.xr || !navigator.xr.isSessionSupported) {
+        return false;
+    }
+
+    try {
+        return await navigator.xr.isSessionSupported(sessionMode);
+    } catch (error) {
+        BABYLON.Tools.Log(`navigator.xr.isSessionSupported(${sessionMode}) failed: ${error}`);
+        return false;
+    }
+}
+
+async function autoEnterImmersiveXR() {
+    if (!navigator.xr) {
+        log("Auto-enter XR skipped (navigator.xr unavailable).");
+        return false;
+    }
+
+    // Prefer immersive-vr for Android XR simulator (SceneCore), fallback to immersive-ar if that's the only supported mode.
+    // Some runtimes report support only after XR services finish initializing; retry briefly to avoid requiring a manual tap.
+    let mode = null;
+    const retryDelayMs = 250;
+    const maxAttempts = 40; // ~10s
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        const vrSupported = await isXrSessionSupported("immersive-vr");
+        const arSupported = !vrSupported && await isXrSessionSupported("immersive-ar");
+        if (vrSupported) {
+            mode = "immersive-vr";
+            break;
+        }
+        if (arSupported) {
+            mode = "immersive-ar";
+            break;
+        }
+        if (attempt < maxAttempts) {
+            await new Promise(resolve => window.setTimeout(resolve, retryDelayMs));
+        }
+    }
+
+    if (!mode) {
+        log("Auto-enter XR skipped (no immersive session supported).");
+        return false;
+    }
+
+    log(`Auto-enter XR: entering ${mode}...`);
+
+    const entered = mode === "immersive-vr" ? await startImmersiveVR() : await startImmersiveAR();
+    if (entered) {
+        log(`Auto-enter XR: entered ${mode}.`);
+    } else {
+        log(`Auto-enter XR: failed to enter ${mode}.`);
+    }
+
+    return entered;
+}
+
+async function startImmersiveAR() {
+    if (xrHelper) {
+        return true;
+    }
+
+    if (!navigator.xr) {
+        BABYLON.Tools.Log("startImmersiveAR skipped (navigator.xr unavailable).");
+        return false;
+    }
+
+    try {
+        const defaultCubePosition = cube ? cube.position.clone() : new BABYLON.Vector3(0, 1.5, -1.5);
+        const defaultCubeRotation = cube && cube.rotationQuaternion ? cube.rotationQuaternion.clone() : null;
+        if (cube && !cube.rotationQuaternion) {
+            cube.rotationQuaternion = BABYLON.Quaternion.Identity();
+        }
+
+        const xr = await scene.createDefaultXRExperienceAsync({
+            disableDefaultUI: true,
+            disableTeleportation: true,
+            sessionMode: "immersive-ar",
+            referenceSpaceType: "local-floor"
+        });
+
+        xrHelper = xr;
+        arAnchorPlaced = false;
+
+        const featureManager = xr.baseExperience.featuresManager;
+        featureManager.enableFeature(BABYLON.WebXRFeatureName.LIGHT_ESTIMATION, "latest", {
+            setSceneEnvironmentTexture: true,
+            setSceneLighting: true
+        });
+
+        const hitTest = featureManager.enableFeature(
+            BABYLON.WebXRFeatureName.HIT_TEST,
+            "latest",
+            { offsetRay: { origin: { x: 0, y: 0, z: 0 }, direction: { x: 0, y: 0, z: -1 } }, entityTypes: ["plane", "mesh"] });
+
+        hitTest.onHitTestResultObservable.add((results) => {
+            if (!cube || !results.length || arAnchorPlaced) {
+                return;
+            }
+            const hit = results[0];
+            cube.position.copyFrom(hit.position);
+            if (hit.rotationQuaternion && cube.rotationQuaternion) {
+                cube.rotationQuaternion.copyFrom(hit.rotationQuaternion);
+            }
+            arAnchorPlaced = true;
+        });
+
+        xr.baseExperience.sessionManager.onXRSessionEnded.add(() => {
+            arAnchorPlaced = false;
+            xrHelper = null;
+            if (cube) {
+                cube.position.copyFrom(defaultCubePosition);
+                if (defaultCubeRotation && cube.rotationQuaternion) {
+                    cube.rotationQuaternion.copyFrom(defaultCubeRotation);
+                }
+            }
+        });
+
+        await xr.baseExperience.enterXRAsync("immersive-ar", "local-floor", xr.renderTarget);
+        return true;
+    } catch (error) {
+        console.error("startImmersiveAR failed", error);
+        return false;
+    }
+}
+
+async function startImmersiveVR() {
+    if (xrHelper) {
+        return true;
+    }
+
+    if (!navigator.xr) {
+        BABYLON.Tools.Log("startImmersiveVR skipped (navigator.xr unavailable).");
+        return false;
+    }
+
+    try {
+        const defaultCubePosition = cube ? cube.position.clone() : null;
+        const defaultCubeRotation = cube && cube.rotationQuaternion ? cube.rotationQuaternion.clone() : null;
+        if (cube && !cube.rotationQuaternion) {
+            cube.rotationQuaternion = BABYLON.Quaternion.Identity();
+        }
+        // Babylon's left-handed coordinate system uses +Z forward. Place the cube in front of the XR camera.
+        if (cube) {
+            cube.position = new BABYLON.Vector3(0, 1.5, 1.5);
+        }
+
+        const xr = await scene.createDefaultXRExperienceAsync({
+            disableDefaultUI: true,
+            disableTeleportation: true,
+            sessionMode: "immersive-vr",
+            referenceSpaceType: "local-floor"
+        });
+
+        xrHelper = xr;
+
+        xr.baseExperience.sessionManager.onXRSessionEnded.add(() => {
+            xrHelper = null;
+            if (cube && defaultCubePosition) {
+                cube.position.copyFrom(defaultCubePosition);
+            }
+            if (cube && defaultCubeRotation && cube.rotationQuaternion) {
+                cube.rotationQuaternion.copyFrom(defaultCubeRotation);
+            }
+        });
+
+        await xr.baseExperience.enterXRAsync("immersive-vr", "local-floor", xr.renderTarget);
+        return true;
+    } catch (error) {
+        console.error("startImmersiveVR failed", error);
+        return false;
+    }
+}

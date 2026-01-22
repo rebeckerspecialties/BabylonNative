@@ -22,6 +22,7 @@ target_link_libraries(BabylonNativeJNI
     android
     EGL
     log
+    bgfx
     -lz
     AndroidExtensions
     AppRuntime

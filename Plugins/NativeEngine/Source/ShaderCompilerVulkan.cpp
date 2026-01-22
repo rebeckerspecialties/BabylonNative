@@ -8,6 +8,7 @@
 #include <spirv_parser.hpp>
 #include <spirv_glsl.hpp>
 #include <bgfx/bgfx.h>
+#include <gsl/gsl>
 
 namespace Babylon
 {
@@ -42,6 +43,28 @@ namespace Babylon
             auto compiler = std::make_unique<spirv_cross::CompilerGLSL>(parser->get_parsed_ir());
             return {std::move(parser), std::move(compiler)};
         }
+
+        std::pair<std::unique_ptr<spirv_cross::Parser>, std::unique_ptr<spirv_cross::CompilerGLSL>> CompileShaderGLSL(glslang::TProgram& program, EShLanguage stage, std::string& glsl)
+        {
+            std::vector<uint32_t> spirv{};
+            spv::SpvBuildLogger logger;
+            glslang::SpvOptions spvOptions;
+            spvOptions.validate = true;
+            spvOptions.disableOptimizer = true;
+            glslang::GlslangToSpv(*program.getIntermediate(stage), spirv, &logger, &spvOptions);
+
+            auto parser = std::make_unique<spirv_cross::Parser>(spirv);
+            parser->parse();
+
+            auto compiler = std::make_unique<spirv_cross::CompilerGLSL>(parser->get_parsed_ir());
+            spirv_cross::CompilerGLSL::Options options = compiler->get_common_options();
+            options.version = 300;
+            options.es = true;
+            compiler->set_common_options(options);
+            glsl = compiler->compile();
+
+            return {std::move(parser), std::move(compiler)};
+        }
     }
 
     ShaderCompiler::ShaderCompiler()
@@ -54,7 +77,7 @@ namespace Babylon
         glslang::FinalizeProcess();
     }
 
-    ShaderCompiler::BgfxShaderInfo ShaderCompiler::Compile(std::string_view vertexSource, std::string_view fragmentSource)
+    ShaderCompiler::BgfxShaderInfo ShaderCompiler::Compile(std::string_view vertexSource, std::string_view fragmentSource, bgfx::RendererType::Enum rendererType)
     {
         glslang::TProgram program;
 
@@ -74,8 +97,26 @@ namespace Babylon
             throw std::exception();
         }
 
+        const bool targetIsOpenGL = rendererType == bgfx::RendererType::OpenGLES || rendererType == bgfx::RendererType::OpenGL;
         ShaderCompilerTraversers::IdGenerator ids{};
         auto cutScope = ShaderCompilerTraversers::ChangeUniformTypes(program, ids);
+        if (targetIsOpenGL)
+        {
+            std::unordered_map<std::string, std::string> vertexAttributeRenaming{};
+            ShaderCompilerTraversers::AssignLocationsAndNamesToVertexVaryingsOpenGL(program, ids, vertexAttributeRenaming);
+
+            std::string vertexGLSL(vertexSource.data(), vertexSource.size());
+            auto [vertexParser, vertexCompiler] = CompileShaderGLSL(program, EShLangVertex, vertexGLSL);
+
+            std::string fragmentGLSL(fragmentSource.data(), fragmentSource.size());
+            auto [fragmentParser, fragmentCompiler] = CompileShaderGLSL(program, EShLangFragment, fragmentGLSL);
+
+            return ShaderCompilerCommon::CreateBgfxShader(
+                {std::move(vertexParser), std::move(vertexCompiler), gsl::make_span(reinterpret_cast<uint8_t*>(vertexGLSL.data()), vertexGLSL.size()), std::move(vertexAttributeRenaming)},
+                {std::move(fragmentParser), std::move(fragmentCompiler), gsl::make_span(reinterpret_cast<uint8_t*>(fragmentGLSL.data()), fragmentGLSL.size()), {}},
+                rendererType);
+        }
+
         auto utstScope = ShaderCompilerTraversers::MoveNonSamplerUniformsIntoStruct(program, ids);
         std::unordered_map<std::string, std::string> vertexAttributeRenaming = {};
         ShaderCompilerTraversers::AssignLocationsAndNamesToVertexVaryingsD3D(program, ids, vertexAttributeRenaming);
@@ -90,6 +131,7 @@ namespace Babylon
 
         return ShaderCompilerCommon::CreateBgfxShader(
             {std::move(vertexParser), std::move(vertexCompiler), gsl::make_span(reinterpret_cast<uint8_t*>(spirvVS.data()), spirvVS.size() * sizeof(uint32_t)), std::move(vertexAttributeRenaming)},
-            {std::move(fragmentParser), std::move(fragmentCompiler), gsl::make_span(reinterpret_cast<uint8_t*>(spirvFS.data()), spirvFS.size() * sizeof(uint32_t)), {}});
+            {std::move(fragmentParser), std::move(fragmentCompiler), gsl::make_span(reinterpret_cast<uint8_t*>(spirvFS.data()), spirvFS.size() * sizeof(uint32_t)), {}},
+            rendererType);
     }
 }

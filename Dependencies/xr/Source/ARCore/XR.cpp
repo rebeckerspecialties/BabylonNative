@@ -5,6 +5,7 @@
 #include <optional>
 #include <sstream>
 #include <chrono>
+#include <algorithm>
 #include <arcana/threading/task.h>
 #include <arcana/threading/dispatcher.h>
 #include <thread>
@@ -20,6 +21,7 @@
 #include <AndroidExtensions/OpenGLHelpers.h>
 #include <AndroidExtensions/Permissions.h>
 #include <android/native_window.h>
+#include <android/hardware_buffer.h>
 #include <android/log.h>
 #include <arcore_c_api.h>
 
@@ -27,10 +29,10 @@
 
 #define GLM_FORCE_RADIANS 1
 #define GLM_ENABLE_EXPERIMENTAL
-#include <glm.hpp>
-#include <gtc/matrix_transform.hpp>
-#include <gtc/type_ptr.hpp>
-#include <gtx/quaternion.hpp>
+#include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/type_ptr.hpp>
+#include <glm/gtx/quaternion.hpp>
 #include <arcana/threading/task_schedulers.h>
 
 #include "Include/IXrContextARCore.h"
@@ -67,9 +69,24 @@ namespace xr
     struct System::Impl
     {
         std::shared_ptr<XrContextARCore> XrContext{std::make_shared<XrContextARCore>()};
+        RuntimeCapabilities Capabilities{};
 
         Impl(const std::string& /*applicationName*/)
         {
+            Capabilities.SupportsImmersiveAR = true;
+            Capabilities.SupportsInline = false;
+            Capabilities.SupportsImmersiveVR = false;
+            Capabilities.SupportsAnchors = true;
+            Capabilities.SupportsPlaneDetection = true;
+            Capabilities.SupportsHitTest = true;
+            Capabilities.SupportsImageTracking = true;
+            Capabilities.SupportsLightEstimation = true;
+            Capabilities.SupportsPassthrough = false; // ARCore passthrough via camera feed
+            Capabilities.SupportsMeshDetection = false;
+            Capabilities.SupportsVulkan = true;
+            Capabilities.SupportsOpenGLES = true;
+            Capabilities.SupportedColorFormats = {TextureFormat::BGRA8_SRGB, TextureFormat::RGBA8_SRGB};
+            Capabilities.SupportedDepthFormats = {TextureFormat::D24S8, TextureFormat::D16};
         }
 
         bool IsInitialized() const
@@ -86,50 +103,6 @@ namespace xr
     {
         constexpr GLfloat VERTEX_POSITIONS[]{ -1.0f, -1.0f, +1.0f, -1.0f, -1.0f, +1.0f, +1.0f, +1.0f };
         constexpr size_t VERTEX_COUNT{ std::size(VERTEX_POSITIONS) / 2 };
-
-        constexpr char CAMERA_VERT_SHADER[]{ R"(#version 300 es
-            precision highp float;
-            uniform vec2 vertexPositions[4];
-            uniform vec2 cameraFrameUVs[4];
-            out vec2 cameraFrameUV;
-            void main() {
-                gl_Position = vec4(vertexPositions[gl_VertexID], 0.0, 1.0);
-                cameraFrameUV = cameraFrameUVs[gl_VertexID];
-            }
-        )"};
-
-        constexpr char BABYLON_VERT_SHADER[]{ R"(#version 300 es
-            precision highp float;
-            uniform vec2 vertexPositions[4];
-            out vec2 babylonUV;
-            void main() {
-                gl_Position = vec4(vertexPositions[gl_VertexID], 0.0, 1.0);
-                babylonUV = vec2(gl_Position.x + 1.0, gl_Position.y + 1.0) * 0.5;
-            }
-        )"};
-
-        constexpr char CAMERA_FRAG_SHADER[]{ R"(#version 300 es
-            #extension GL_OES_EGL_image_external_essl3 : require
-            precision mediump float;
-            in vec2 cameraFrameUV;
-            uniform samplerExternalOES cameraTexture;
-            // Location 0 is GL_COLOR_ATTACHMENT0, which in turn is the babylonTexture
-            layout(location = 0) out vec4 oFragColor;
-            void main() {
-                oFragColor = texture(cameraTexture, cameraFrameUV);
-            }
-        )"};
-
-        constexpr char BABYLON_FRAG_SHADER[]{ R"(#version 300 es
-            #extension GL_OES_EGL_image_external_essl3 : require
-            precision mediump float;
-            in vec2 babylonUV;
-            uniform sampler2D babylonTexture;
-            out vec4 oFragColor;
-            void main() {
-                oFragColor = texture(babylonTexture, babylonUV);
-            }
-        )"};
 
         bool CheckARCoreInstallStatus(bool requestInstall)
         {
@@ -221,6 +194,51 @@ namespace xr
                 }
             }
         }
+
+        inline uint8_t ClampToByte(int32_t value)
+        {
+            return static_cast<uint8_t>(std::min(std::max(value, 0), 255));
+        }
+
+        void ConvertYuv420ToRgba(
+            uint8_t* dst,
+            int32_t width,
+            int32_t height,
+            const uint8_t* yData,
+            int32_t yRowStride,
+            const uint8_t* uData,
+            const uint8_t* vData,
+            int32_t uvRowStride,
+            int32_t uvPixelStride)
+        {
+            for (int32_t y = 0; y < height; ++y)
+            {
+                const int32_t yRow = y * yRowStride;
+                const int32_t uvRow = (y >> 1) * uvRowStride;
+
+                for (int32_t x = 0; x < width; ++x)
+                {
+                    const int32_t yValue = static_cast<int32_t>(yData[yRow + x]) - 16;
+                    const int32_t uvIndex = uvRow + (x >> 1) * uvPixelStride;
+                    const int32_t uValue = static_cast<int32_t>(uData[uvIndex]) - 128;
+                    const int32_t vValue = static_cast<int32_t>(vData[uvIndex]) - 128;
+
+                    const int32_t c = std::max(0, yValue);
+                    const int32_t d = uValue;
+                    const int32_t e = vValue;
+
+                    const int32_t r = (298 * c + 409 * e + 128) >> 8;
+                    const int32_t g = (298 * c - 100 * d - 208 * e + 128) >> 8;
+                    const int32_t b = (298 * c + 516 * d + 128) >> 8;
+
+                    const size_t dstIndex = static_cast<size_t>(y * width + x) * 4;
+                    dst[dstIndex + 0] = ClampToByte(r);
+                    dst[dstIndex + 1] = ClampToByte(g);
+                    dst[dstIndex + 2] = ClampToByte(b);
+                    dst[dstIndex + 3] = 255;
+                }
+            }
+        }
     }
 
     struct System::Session::Impl
@@ -238,6 +256,9 @@ namespace xr
         float DepthFarZ{ DEFAULT_DEPTH_FAR_Z };
         bool PlaneDetectionEnabled{ false };
         bool FeaturePointCloudEnabled{ false };
+        std::vector<uint8_t> CameraImageBuffer{};
+        size_t CameraImageWidth{0};
+        size_t CameraImageHeight{0};
 
         Impl(System::Impl& systemImpl, void* graphicsContext, std::function<void*()> windowProvider)
             : SystemImpl{ systemImpl }
@@ -339,19 +360,6 @@ namespace xr
                 config = *it;
             }
 
-            // Generate a texture id for the camera texture (ARCore will allocate the texture itself)
-            {
-                glGenTextures(1, &cameraTextureId);
-                glBindTexture(GL_TEXTURE_EXTERNAL_OES, cameraTextureId);
-                glTexParameteri(GL_TEXTURE_EXTERNAL_OES, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-                glTexParameteri(GL_TEXTURE_EXTERNAL_OES, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-                glBindTexture(GL_TEXTURE_EXTERNAL_OES, 0);
-            }
-
-            // Create the shader program used for drawing the full screen quad that is the camera frame + Babylon render texture
-            cameraShaderProgramId = android::OpenGLHelpers::CreateShaderProgram(CAMERA_VERT_SHADER, CAMERA_FRAG_SHADER);
-            babylonShaderProgramId = android::OpenGLHelpers::CreateShaderProgram(BABYLON_VERT_SHADER, BABYLON_FRAG_SHADER);
-
             // Create the ARCore ArSession
             {
                 ArStatus status{ ArSession_create(GetEnvForCurrentThread(), GetAppContext(), &xrContext->Session) };
@@ -368,6 +376,7 @@ namespace xr
 
                 // Set Focus Mode Auto
                 ArConfig_setFocusMode(xrContext->Session, arConfig, AR_FOCUS_MODE_AUTO);
+                ArConfig_setTextureUpdateMode(xrContext->Session, arConfig, AR_TEXTURE_UPDATE_MODE_EXPOSE_HARDWARE_BUFFER);
 
                 // Configure the ArSession
                 ArStatus statusConfig { ArSession_configure(xrContext->Session, arConfig) };
@@ -383,9 +392,6 @@ namespace xr
                     throw std::runtime_error{ message.str() };
                 }
             }
-
-            // Create a frame buffer used for clearing the color texture
-            glGenFramebuffers(1, &cameraFrameBufferId);
 
             // Create the ARCore ArFrame (this gets reused each time we query for the latest frame)
             ArFrame_create(xrContext->Session, &xrContext->Frame);
@@ -423,6 +429,7 @@ namespace xr
 
         std::unique_ptr<Session::Frame> GetNextFrame(bool& shouldEndSession, bool& shouldRestartSession, std::function<arcana::task<void, std::exception_ptr>(void*)> deletedTextureAsyncCallback)
         {
+            (void)deletedTextureAsyncCallback;
             if (!xrContext->Initialized)
             {
                 Initialize();
@@ -488,45 +495,17 @@ namespace xr
             // Check whether the dimensions have changed
             if ((ActiveFrameViews[0].ColorTextureSize.Width != width || ActiveFrameViews[0].ColorTextureSize.Height != height) && width && height)
             {
-                DestroyDisplayResources(deletedTextureAsyncCallback);
-
                 int rotation{ GetAppContext().getSystemService<android::view::WindowManager>().getDefaultDisplay().getRotation() };
 
                 // Update the width and height of the display with ARCore (this is used to adjust the UVs for the camera texture so we can draw a portion of the camera frame that matches the size of the UI element displaying it)
                 ArSession_setDisplayGeometry(xrContext->Session, rotation, static_cast<int32_t>(width), static_cast<int32_t>(height));
 
-                // Allocate and store the render texture
-                {
-                    GLuint colorTextureId{};
-                    glGenTextures(1, &colorTextureId);
-                    glBindTexture(GL_TEXTURE_2D, colorTextureId);
-                    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
-                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-                    glBindTexture(GL_TEXTURE_2D, 0);
-                    ActiveFrameViews[0].ColorTexturePointer = reinterpret_cast<void *>(colorTextureId);
-                    ActiveFrameViews[0].ColorTextureFormat = TextureFormat::RGBA8_SRGB;
-                    ActiveFrameViews[0].ColorTextureSize = {width, height};
-                }
-
-                // Allocate and store the depth texture
-                {
-                    GLuint depthTextureId{};
-                    glGenTextures(1, &depthTextureId);
-                    glBindTexture(GL_TEXTURE_2D, depthTextureId);
-                    glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH24_STENCIL8_OES, width, height, 0, GL_DEPTH_STENCIL_OES, GL_UNSIGNED_INT_24_8_OES, nullptr);
-                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-                    glBindTexture(GL_TEXTURE_2D, 0);
-                    ActiveFrameViews[0].DepthTexturePointer = reinterpret_cast<void*>(depthTextureId);
-                    ActiveFrameViews[0].DepthTextureFormat = TextureFormat::D24S8;
-                    ActiveFrameViews[0].DepthTextureSize = {width, height};
-                }
-
-                // Bind the color and depth texture to the camera frame buffer
-                glBindFramebuffer(GL_FRAMEBUFFER, cameraFrameBufferId);
-                glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, static_cast<GLuint>(reinterpret_cast<uintptr_t>(ActiveFrameViews[0].ColorTexturePointer)), 0);
-                glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, static_cast<GLuint>(reinterpret_cast<uintptr_t>(ActiveFrameViews[0].DepthTexturePointer)), 0);
+                ActiveFrameViews[0].ColorTexturePointer = nullptr;
+                ActiveFrameViews[0].ColorTextureFormat = TextureFormat::RGBA8_SRGB;
+                ActiveFrameViews[0].ColorTextureSize = {width, height};
+                ActiveFrameViews[0].DepthTexturePointer = nullptr;
+                ActiveFrameViews[0].DepthTextureFormat = TextureFormat::D24S8;
+                ActiveFrameViews[0].DepthTextureSize = {width, height};
             }
 
             int32_t geometryChanged{0};
@@ -552,59 +531,7 @@ namespace xr
 
             ArCamera_release(camera);
 
-            // Draw the camera texture to the Babylon render texture, but only if the session has started providing AR frames
-            int64_t frameTimestamp{};
-            ArFrame_getTimestamp(xrContext->Session, xrContext->Frame, &frameTimestamp);
-            if (frameTimestamp)
-            {
-                auto stencilMaskTransaction{ GLTransactions::SetStencil(1) };
-
-                // Bind the frame buffer
-                glBindFramebuffer(GL_FRAMEBUFFER, cameraFrameBufferId);
-
-                // Set the viewport to the whole frame buffer
-                glViewport(0, 0, width, height);
-
-                // Disable unnecessary capabilities
-                glDisable(GL_SCISSOR_TEST);
-                glDisable(GL_STENCIL_TEST);
-                glDisable(GL_BLEND);
-                glDisable(GL_DEPTH_TEST);
-                glDisable(GL_CULL_FACE);
-
-                // Clear the depth and stencil
-                glDepthMask(GL_TRUE);
-                glStencilMask(1);
-                glClearDepthf(1.0);
-                glClearStencil(0);
-                glClear(GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
-
-                // Only write colors to blit the background camera texture
-                glDepthMask(GL_FALSE);
-                glStencilMask(0);
-                glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
-
-                // Use the custom shader
-                glUseProgram(cameraShaderProgramId);
-
-                // Configure the quad vertex positions
-                auto vertexPositionsUniformLocation{ glGetUniformLocation(cameraShaderProgramId, "vertexPositions") };
-                glUniform2fv(vertexPositionsUniformLocation, VERTEX_COUNT, VERTEX_POSITIONS);
-
-                // Configure the camera texture
-                auto cameraTextureUniformLocation{ glGetUniformLocation(cameraShaderProgramId, "cameraTexture") };
-                glUniform1i(cameraTextureUniformLocation, GetTextureUnit(GL_TEXTURE0));
-                glActiveTexture(GL_TEXTURE0);
-                glBindTexture(GL_TEXTURE_EXTERNAL_OES, cameraTextureId);
-                glBindSampler(GetTextureUnit(GL_TEXTURE0), 0);
-
-                // Configure the camera frame UVs
-                auto cameraFrameUVsUniformLocation{ glGetUniformLocation(cameraShaderProgramId, "cameraFrameUVs") };
-                glUniform2fv(cameraFrameUVsUniformLocation, VERTEX_COUNT, CameraFrameUVs);
-
-                // Draw the quad
-                glDrawArrays(GL_TRIANGLE_STRIP, 0, VERTEX_COUNT);
-            }
+            UpdateCameraImage();
 
             return std::make_unique<Session::Frame>(*this);
         }
@@ -619,54 +546,7 @@ namespace xr
 
         void DrawFrame()
         {
-            // Draw the Babylon render texture to the display, but only if the session has started providing AR frames.
-            int64_t frameTimestamp{};
-            ArFrame_getTimestamp(xrContext->Session, xrContext->Frame, &frameTimestamp);
-            if (frameTimestamp && surface.get())
-            {
-                auto surfaceTransaction{ GLTransactions::MakeCurrent(eglGetDisplay(EGL_DEFAULT_DISPLAY), surface.get(), surface.get(), context) };
-
-                // Bind the frame buffer
-                glBindFramebuffer(GL_FRAMEBUFFER, 0);
-
-                // Set the viewport to the whole surface
-                glViewport(0, 0, ActiveFrameViews[0].ColorTextureSize.Width, ActiveFrameViews[0].ColorTextureSize.Height);
-
-                // Disable unnecessary capabilities
-                glDisable(GL_SCISSOR_TEST);
-                glDisable(GL_STENCIL_TEST);
-                glDisable(GL_BLEND);
-                glDisable(GL_DEPTH_TEST);
-                glDisable(GL_CULL_FACE);
-
-                // Only write colors to blit to the screen
-                glDepthMask(GL_FALSE);
-                auto stencilMaskTransaction{ GLTransactions::SetStencil(0) };
-                glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
-
-                // Use the custom shader
-                glUseProgram(babylonShaderProgramId);
-
-                // Configure the quad vertex positions
-                auto vertexPositionsUniformLocation{ glGetUniformLocation(babylonShaderProgramId, "vertexPositions") };
-                glUniform2fv(vertexPositionsUniformLocation, VERTEX_COUNT, VERTEX_POSITIONS);
-
-                // Configure the babylon render texture
-                auto babylonTextureUniformLocation{ glGetUniformLocation(babylonShaderProgramId, "babylonTexture") };
-                glUniform1i(babylonTextureUniformLocation, GetTextureUnit(GL_TEXTURE0));
-                glActiveTexture(GL_TEXTURE0);
-                auto babylonTextureId{ static_cast<GLuint>(reinterpret_cast<uintptr_t>(ActiveFrameViews[0].ColorTexturePointer)) };
-                glBindTexture(GL_TEXTURE_2D, babylonTextureId);
-                glBindSampler(GetTextureUnit(GL_TEXTURE0), 0);
-
-                // Draw the quad
-                glDrawArrays(GL_TRIANGLE_STRIP, 0, VERTEX_COUNT);
-
-                // Present to the screen
-                // NOTE: For a yet to be determined reason, bgfx is also doing an eglSwapBuffers when running in the Babylon Native and Babylon React Native Playground apps.
-                //       The "double" eglSwapBuffers causes rendering issues, so until we figure out this issue, comment out this line while testing in the BN/BRN playground apps.
-                eglSwapBuffers(eglGetCurrentDisplay(), eglGetCurrentSurface(EGL_DRAW));
-            }
+            // Rendering to the display is handled by bgfx; no GL blit required for Vulkan path.
         }
 
         void GetHitTestResults(std::vector<HitResult>& filteredResults, xr::Ray offsetRay, xr::HitTestTrackableType validHitTestTypes)
@@ -1311,6 +1191,74 @@ namespace xr
             ActiveFrameViews[0] = {};
         }
 
+        void UpdateCameraImage()
+        {
+            CameraImageBuffer.clear();
+            CameraImageWidth = 0;
+            CameraImageHeight = 0;
+
+            ArImage* image{};
+            if (ArFrame_acquireCameraImage(xrContext->Session, xrContext->Frame, &image) != AR_SUCCESS || image == nullptr)
+            {
+                return;
+            }
+
+            ArImageFormat format{};
+            ArImage_getFormat(xrContext->Session, image, &format);
+            if (format != AR_IMAGE_FORMAT_YUV_420_888)
+            {
+                ArImage_release(image);
+                return;
+            }
+
+            int32_t width{};
+            int32_t height{};
+            ArImage_getWidth(xrContext->Session, image, &width);
+            ArImage_getHeight(xrContext->Session, image, &height);
+
+            const uint8_t* yData{};
+            const uint8_t* uData{};
+            const uint8_t* vData{};
+            int32_t yLen{};
+            int32_t uLen{};
+            int32_t vLen{};
+            int32_t yRowStride{};
+            int32_t uRowStride{};
+            int32_t vRowStride{};
+            int32_t uvPixelStride{};
+
+            ArImage_getPlaneData(xrContext->Session, image, 0, &yData, &yLen);
+            ArImage_getPlaneData(xrContext->Session, image, 1, &uData, &uLen);
+            ArImage_getPlaneData(xrContext->Session, image, 2, &vData, &vLen);
+            ArImage_getPlaneRowStride(xrContext->Session, image, 0, &yRowStride);
+            ArImage_getPlaneRowStride(xrContext->Session, image, 1, &uRowStride);
+            ArImage_getPlaneRowStride(xrContext->Session, image, 2, &vRowStride);
+            ArImage_getPlanePixelStride(xrContext->Session, image, 1, &uvPixelStride);
+
+            if (uData == nullptr || vData == nullptr || yData == nullptr || uvPixelStride <= 0)
+            {
+                ArImage_release(image);
+                return;
+            }
+
+            CameraImageWidth = static_cast<size_t>(width);
+            CameraImageHeight = static_cast<size_t>(height);
+            CameraImageBuffer.resize(CameraImageWidth * CameraImageHeight * 4);
+
+            ConvertYuv420ToRgba(
+                CameraImageBuffer.data(),
+                width,
+                height,
+                yData,
+                yRowStride,
+                uData,
+                vData,
+                uRowStride,
+                uvPixelStride);
+
+            ArImage_release(image);
+        }
+
         void PoseToRaw(float rawPose[], const Pose& pose)
         {
             rawPose[0] = pose.Orientation.X;
@@ -1414,6 +1362,9 @@ namespace xr
         , UpdatedMeshes{}
         , RemovedMeshes{}
         , UpdatedImageTrackingResults{}
+        , CameraImageRGBA{ sessionImpl.CameraImageBuffer }
+        , CameraImageWidth{ sessionImpl.CameraImageWidth }
+        , CameraImageHeight{ sessionImpl.CameraImageHeight }
         , IsTracking{sessionImpl.IsTracking()}
         , m_impl{ std::make_unique<Session::Frame::Impl>(sessionImpl) }
     {
@@ -1551,6 +1502,11 @@ namespace xr
     std::string System::GetNativeXrContextType()
     {
         return "ARCore";
+    }
+
+    const RuntimeCapabilities& System::GetCapabilities() const
+    {
+        return m_impl->Capabilities;
     }
 
     arcana::task<std::shared_ptr<System::Session>, std::exception_ptr> System::Session::CreateAsync(System& system, void* graphicsDevice, void* commandQueue, std::function<void*()> windowProvider)

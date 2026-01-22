@@ -5,6 +5,7 @@ import android.content.Context;
 import android.graphics.Canvas;
 import android.util.Log;
 import android.view.MotionEvent;
+import android.view.Choreographer;
 import android.view.SurfaceHolder;
 import android.view.SurfaceView;
 import android.view.View;
@@ -16,9 +17,38 @@ public class BabylonView extends FrameLayout implements SurfaceHolder.Callback2,
     private boolean mViewReady = false;
     private final ViewDelegate mViewDelegate;
     private Activity mCurrentActivity;
+    private final boolean mXrOnly;
     private final SurfaceView primarySurfaceView;
     private final SurfaceView xrSurfaceView;
     private final float pixelDensityScale = getResources().getDisplayMetrics().density;
+    private boolean mXrRenderLoopRunning = false;
+    private boolean mXrViewReadyCheckScheduled = false;
+    private final Choreographer.FrameCallback mXrFrameCallback = new Choreographer.FrameCallback() {
+        @Override
+        public void doFrame(long frameTimeNanos) {
+            if (!mXrRenderLoopRunning) {
+                return;
+            }
+            Wrapper.renderFrame();
+            Choreographer.getInstance().postFrameCallback(this);
+        }
+    };
+    private final Runnable mXrViewReadyCheckRunnable = new Runnable() {
+        @Override
+        public void run() {
+            if (!mXrOnly || mViewReady) {
+                return;
+            }
+
+            if (Wrapper.isEngineReady()) {
+                mViewDelegate.onViewReady();
+                mViewReady = true;
+                return;
+            }
+
+            postDelayed(this, 16);
+        }
+    };
     public BabylonView(Context context, ViewDelegate viewDelegate) {
         this(context, viewDelegate, (Activity)viewDelegate);
     }
@@ -26,41 +56,54 @@ public class BabylonView extends FrameLayout implements SurfaceHolder.Callback2,
     public BabylonView(Context context, ViewDelegate viewDelegate, Activity currentActivity) {
         super(context);
 
+        this.mCurrentActivity = currentActivity;
+        this.mViewDelegate = viewDelegate;
+        setOnTouchListener(this);
+
+        mXrOnly = getResources().getBoolean(R.bool.babylon_native_xr_only);
+        Wrapper.setXrOnly(mXrOnly);
+
         this.primarySurfaceView = new SurfaceView(context);
         this.primarySurfaceView.setLayoutParams(BabylonView.childViewLayoutParams);
         this.primarySurfaceView.getHolder().addCallback(this);
+        if (mXrOnly) {
+            this.primarySurfaceView.setVisibility(View.INVISIBLE);
+        }
         this.addView(this.primarySurfaceView);
 
-        this.mCurrentActivity = currentActivity;
-        SurfaceHolder holder = this.primarySurfaceView.getHolder();
-        holder.addCallback(this);
-        setOnTouchListener(this);
-        this.mViewDelegate = viewDelegate;
+        if (mXrOnly) {
+            this.xrSurfaceView = null;
+        } else {
+            this.xrSurfaceView = new SurfaceView(context);
+            this.xrSurfaceView.setLayoutParams(childViewLayoutParams);
+            this.xrSurfaceView.getHolder().addCallback(new SurfaceHolder.Callback() {
+                @Override
+                public void surfaceCreated(SurfaceHolder holder) {
+                    // surfaceChanged is also called when the surface is created, so just do all the handling there
+                }
 
-        this.xrSurfaceView = new SurfaceView(context);
-        this.xrSurfaceView.setLayoutParams(childViewLayoutParams);
-        this.xrSurfaceView.getHolder().addCallback(new SurfaceHolder.Callback() {
-            @Override
-            public void surfaceCreated(SurfaceHolder holder) {
-                // surfaceChanged is also called when the surface is created, so just do all the handling there
-            }
+                @Override
+                public void surfaceChanged(SurfaceHolder holder, int format, int width, int height) {
+                    Wrapper.xrSurfaceChanged(holder.getSurface());
+                }
 
-            @Override
-            public void surfaceChanged(SurfaceHolder holder, int format, int width, int height) {
-                Wrapper.xrSurfaceChanged(holder.getSurface());
-            }
-
-            @Override
-            public void surfaceDestroyed(SurfaceHolder holder) {
-                Wrapper.xrSurfaceChanged(null);
-            }
-        });
-        this.xrSurfaceView.setVisibility(View.INVISIBLE);
-        this.addView(this.xrSurfaceView);
+                @Override
+                public void surfaceDestroyed(SurfaceHolder holder) {
+                    Wrapper.xrSurfaceChanged(null);
+                }
+            });
+            this.xrSurfaceView.setVisibility(View.INVISIBLE);
+            this.addView(this.xrSurfaceView);
+        }
 
         setWillNotDraw(false);
 
         Wrapper.initEngine();
+
+        if (mXrOnly) {
+            startXrRenderLoop();
+            scheduleXrViewReadyCheck();
+        }
     }
 
     public void setCurrentActivity(Activity currentActivity)
@@ -81,11 +124,13 @@ public class BabylonView extends FrameLayout implements SurfaceHolder.Callback2,
 
     public void onPause() {
         setVisibility(View.GONE);
+        stopXrRenderLoop();
         Wrapper.activityOnPause();
     }
 
     public void onResume() {
         Wrapper.activityOnResume();
+        startXrRenderLoop();
     }
 
     public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] results) {
@@ -163,13 +208,56 @@ public class BabylonView extends FrameLayout implements SurfaceHolder.Callback2,
 
     @Override
     protected void onDraw(Canvas canvas) {
-        if (Wrapper.isXRActive()) {
-            this.xrSurfaceView.setVisibility(View.VISIBLE);
-        } else {
-            this.xrSurfaceView.setVisibility(View.INVISIBLE);
-        }
+        if (!mXrOnly) {
+            if (this.xrSurfaceView != null) {
+                final int desiredXrVisibility = Wrapper.isXRActive() ? View.VISIBLE : View.INVISIBLE;
+                if (this.xrSurfaceView.getVisibility() != desiredXrVisibility) {
+                    this.xrSurfaceView.setVisibility(desiredXrVisibility);
+                }
+            }
 
-        Wrapper.renderFrame();
-        invalidate();
+            Wrapper.renderFrame();
+            invalidate();
+        }
+    }
+
+    @Override
+    protected void onAttachedToWindow() {
+        super.onAttachedToWindow();
+        if (mXrOnly) {
+            startXrRenderLoop();
+            scheduleXrViewReadyCheck();
+        }
+    }
+
+    @Override
+    protected void onDetachedFromWindow() {
+        stopXrRenderLoop();
+        removeCallbacks(mXrViewReadyCheckRunnable);
+        super.onDetachedFromWindow();
+    }
+
+    private void startXrRenderLoop() {
+        if (!mXrOnly || mXrRenderLoopRunning) {
+            return;
+        }
+        mXrRenderLoopRunning = true;
+        Choreographer.getInstance().postFrameCallback(mXrFrameCallback);
+    }
+
+    private void stopXrRenderLoop() {
+        if (!mXrRenderLoopRunning) {
+            return;
+        }
+        mXrRenderLoopRunning = false;
+        Choreographer.getInstance().removeFrameCallback(mXrFrameCallback);
+    }
+
+    private void scheduleXrViewReadyCheck() {
+        if (!mXrOnly || mXrViewReadyCheckScheduled) {
+            return;
+        }
+        mXrViewReadyCheckScheduled = true;
+        post(mXrViewReadyCheckRunnable);
     }
 }

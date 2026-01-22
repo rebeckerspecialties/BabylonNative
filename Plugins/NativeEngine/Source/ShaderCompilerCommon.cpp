@@ -46,8 +46,9 @@ namespace Babylon::ShaderCompilerCommon
         }
     }
 
-    void AppendSamplers(std::vector<uint8_t>& bytes, const spirv_cross::Compiler& compiler, const spirv_cross::SmallVector<spirv_cross::Resource>& samplers, std::unordered_map<std::string, uint8_t>& stages)
+    void AppendSamplers(std::vector<uint8_t>& bytes, const spirv_cross::Compiler& compiler, const spirv_cross::SmallVector<spirv_cross::Resource>& samplers, std::unordered_map<std::string, uint8_t>& stages, bgfx::RendererType::Enum rendererType)
     {
+        const bool isOpenGL = rendererType == bgfx::RendererType::OpenGLES;
         for (const spirv_cross::Resource& sampler : samplers)
         {
             AppendBytes(bytes, static_cast<uint8_t>(sampler.name.size()));
@@ -59,13 +60,16 @@ namespace Babylon::ShaderCompilerCommon
             AppendBytes(bytes, static_cast<uint16_t>(0));
             AppendBytes(bytes, static_cast<uint16_t>(0));
 
-#if OPENGL
-            BX_UNUSED(compiler);
-            const auto stage{static_cast<uint8_t>(stages.size())};
-            stages[sampler.name] = stage;
-#else
-            stages[sampler.name] = static_cast<uint8_t>(compiler.get_decoration(sampler.id, spv::DecorationBinding));
-#endif
+            if (isOpenGL)
+            {
+                const auto stage{static_cast<uint8_t>(stages.size())};
+                stages[sampler.name] = stage;
+            }
+            else
+            {
+                const uint32_t binding = compiler.get_decoration(sampler.id, spv::DecorationBinding); // SPIR-V binding indices are small; bgfx stage ids are uint8_t.
+                stages[sampler.name] = static_cast<uint8_t>(binding);
+            }
         }
     }
 
@@ -173,9 +177,10 @@ namespace Babylon::ShaderCompilerCommon
         return info;
     }
 
-    ShaderCompiler::BgfxShaderInfo CreateBgfxShader(ShaderInfo vertexShaderInfo, ShaderInfo fragmentShaderInfo)
+    ShaderCompiler::BgfxShaderInfo CreateBgfxShader(ShaderInfo vertexShaderInfo, ShaderInfo fragmentShaderInfo, bgfx::RendererType::Enum rendererType)
     {
         ShaderCompiler::BgfxShaderInfo bgfxShaderInfo{};
+        const bool isOpenGL = rendererType == bgfx::RendererType::OpenGLES;
 
         constexpr uint8_t BGFX_SHADER_BIN_VERSION{6};
 
@@ -195,10 +200,8 @@ namespace Babylon::ShaderCompilerCommon
 #if __APPLE__
             // with metal, we bind images and not samplers
             const spirv_cross::SmallVector<spirv_cross::Resource>& samplers{resources.separate_images};
-#elif OPENGL
-            const spirv_cross::SmallVector<spirv_cross::Resource>& samplers = resources.sampled_images;
 #else
-            const spirv_cross::SmallVector<spirv_cross::Resource>& samplers = resources.separate_samplers;
+            const spirv_cross::SmallVector<spirv_cross::Resource>& samplers = isOpenGL ? resources.sampled_images : resources.separate_samplers;
 #endif
             size_t numUniforms{uniformsInfo.Uniforms.size() + samplers.size()};
 
@@ -208,7 +211,7 @@ namespace Babylon::ShaderCompilerCommon
 
             AppendBytes(vertexBytes, static_cast<uint16_t>(numUniforms));
             AppendUniformBuffer(vertexBytes, uniformsInfo, false);
-            AppendSamplers(vertexBytes, compiler, samplers, bgfxShaderInfo.UniformStages);
+            AppendSamplers(vertexBytes, compiler, samplers, bgfxShaderInfo.UniformStages, rendererType);
 
             AppendBytes(vertexBytes, static_cast<uint32_t>(vertexShaderInfo.Bytes.size()));
             AppendBytes(vertexBytes, vertexShaderInfo.Bytes);
@@ -236,10 +239,8 @@ namespace Babylon::ShaderCompilerCommon
             const auto uniformsInfo = CollectNonSamplerUniforms(*fragmentShaderInfo.Parser, compiler);
 #if __APPLE__
             const spirv_cross::SmallVector<spirv_cross::Resource>& samplers = resources.separate_images;
-#elif OPENGL
-            const spirv_cross::SmallVector<spirv_cross::Resource>& samplers = resources.sampled_images;
 #else
-            const spirv_cross::SmallVector<spirv_cross::Resource>& samplers = resources.separate_samplers;
+            const spirv_cross::SmallVector<spirv_cross::Resource>& samplers = isOpenGL ? resources.sampled_images : resources.separate_samplers;
 #endif
             size_t numUniforms = uniformsInfo.Uniforms.size() + samplers.size();
 
@@ -249,7 +250,7 @@ namespace Babylon::ShaderCompilerCommon
 
             AppendBytes(fragmentBytes, static_cast<uint16_t>(numUniforms));
             AppendUniformBuffer(fragmentBytes, uniformsInfo, true);
-            AppendSamplers(fragmentBytes, compiler, samplers, bgfxShaderInfo.UniformStages);
+            AppendSamplers(fragmentBytes, compiler, samplers, bgfxShaderInfo.UniformStages, rendererType);
 
             AppendBytes(fragmentBytes, static_cast<uint32_t>(fragmentShaderInfo.Bytes.size()));
             AppendBytes(fragmentBytes, fragmentShaderInfo.Bytes);

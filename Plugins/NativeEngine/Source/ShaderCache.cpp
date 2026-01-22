@@ -23,7 +23,7 @@ namespace
 
 namespace Babylon
 {
-    static const uint32_t CACHE_VERSION = 1;
+    static const uint32_t CACHE_VERSION = 2;
 
     uint32_t ShaderCacheImpl::Serialize(std::ofstream& stream)
     {
@@ -114,11 +114,12 @@ namespace Babylon
         return cacheSize;
     }
 
-    const ShaderCompiler::BgfxShaderInfo* ShaderCacheImpl::GetShader(std::string_view vertexSource, std::string_view fragmentSource)
+    const ShaderCompiler::BgfxShaderInfo* ShaderCacheImpl::GetShader(std::string_view vertexSource, std::string_view fragmentSource, bgfx::RendererType::Enum rendererType)
     {
         const ShaderHash hash{
             std::hash<std::string_view>{}(vertexSource),
-            std::hash<std::string_view>{}(fragmentSource)};
+            std::hash<std::string_view>{}(fragmentSource),
+            static_cast<uint16_t>(rendererType)};
         const auto iter{Cache.find(hash)};
         if (iter == Cache.end())
         {
@@ -127,11 +128,12 @@ namespace Babylon
         return &iter->second;
     }
 
-    void ShaderCacheImpl::AddShader(std::string_view vertexSource, std::string_view fragmentSource, ShaderCompiler::BgfxShaderInfo shaderInfo)
+    void ShaderCacheImpl::AddShader(std::string_view vertexSource, std::string_view fragmentSource, bgfx::RendererType::Enum rendererType, ShaderCompiler::BgfxShaderInfo shaderInfo)
     {
         const ShaderHash hash{
             std::hash<std::string_view>{}(vertexSource),
-            std::hash<std::string_view>{}(fragmentSource)};
+            std::hash<std::string_view>{}(fragmentSource),
+            static_cast<uint16_t>(rendererType)};
         const auto iter{Cache.find(hash)};
         if (iter == Cache.end())
         {

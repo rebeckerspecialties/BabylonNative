@@ -1,7 +1,10 @@
 #pragma once
 
+namespace xr { struct RuntimeCapabilities; }
+
 namespace Babylon
 {
+
     namespace Plugins
     {
         class NativeXr::Impl final : public std::enable_shared_from_this<NativeXr::Impl>
@@ -105,6 +108,8 @@ namespace Babylon
                 std::vector<Graphics::FrameBuffer*> FrameBuffers{};
                 std::map<Graphics::FrameBuffer*, Napi::ObjectReference> JsTextures{};
                 bool Initialized{false};
+                bgfx::TextureHandle ColorTexture{bgfx::kInvalidHandle};
+                bgfx::TextureHandle DepthTexture{bgfx::kInvalidHandle};
             };
 
             struct SessionState final
@@ -121,17 +126,19 @@ namespace Babylon
                 Napi::FunctionReference DestroyRenderTexture{};
                 std::vector<ViewConfiguration*> ActiveViewConfigurations{};
                 std::unordered_map<ViewConfiguration*, uint32_t> ViewConfigurationStartViewIdx{};
-                std::unordered_map<void*, ViewConfiguration> TextureToViewConfigurationMap{};
+                std::unordered_map<size_t, ViewConfiguration> TextureToViewConfigurationMap{};
                 std::shared_ptr<xr::System::Session> Session{};
                 std::shared_ptr<xr::System::Session::Frame> Frame{};
                 arcana::cancellation_source CancellationSource{};
                 bool FrameScheduled{false};
                 std::vector<std::function<void(const std::shared_ptr<const xr::System::Session::Frame>&)>> ScheduleFrameCallbacks{};
                 arcana::task<void, std::exception_ptr> FrameTask{arcana::task_from_result<std::exception_ptr>()};
+                xr::RuntimeCapabilities Capabilities{};
             };
 
             std::unique_ptr<SessionState> m_sessionState{};
             xr::System m_system{};
+            xr::RuntimeCapabilities m_capabilities{};
 
             void BeginFrame();
             void BeginUpdate();

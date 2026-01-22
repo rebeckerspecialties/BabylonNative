@@ -663,8 +663,24 @@ namespace xr {
     struct System::Impl {
     public:
         std::unique_ptr<XrContextARKit> XrContext{std::make_unique<XrContextARKit>()};
+        RuntimeCapabilities Capabilities{};
 
-        Impl(const std::string&) {}
+        Impl(const std::string&) {
+            Capabilities.SupportsImmersiveAR = true;
+            Capabilities.SupportsImmersiveVR = false;
+            Capabilities.SupportsInline = false;
+            Capabilities.SupportsAnchors = true;
+            Capabilities.SupportsPlaneDetection = true;
+            Capabilities.SupportsHitTest = true;
+            Capabilities.SupportsImageTracking = true;
+            Capabilities.SupportsLightEstimation = true;
+            Capabilities.SupportsMeshDetection = true;
+            Capabilities.SupportsPassthrough = true;
+            Capabilities.SupportsVulkan = false;
+            Capabilities.SupportsOpenGLES = false;
+            Capabilities.SupportedColorFormats = {TextureFormat::BGRA8_SRGB, TextureFormat::RGBA8_SRGB};
+            Capabilities.SupportedDepthFormats = {TextureFormat::D24S8, TextureFormat::D16};
+        }
 
         bool IsInitialized() const {
             return XrContext->IsInitialized();
@@ -1805,6 +1821,11 @@ namespace xr {
     std::string System::GetNativeXrContextType()
     {
         return "ARKit";
+    }
+
+    const RuntimeCapabilities& System::GetCapabilities() const
+    {
+        return m_impl->Capabilities;
     }
 
     arcana::task<std::shared_ptr<System::Session>, std::exception_ptr> System::Session::CreateAsync(System& system, void* graphicsDevice, void* commandQueue, std::function<void*()> windowProvider) {

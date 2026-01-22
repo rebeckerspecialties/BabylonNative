@@ -1004,15 +1004,15 @@ namespace Babylon
         ShaderCompiler::BgfxShaderInfo bgfxShaderInfo{};
         if (ShaderCacheImpl::GetImpl())
         {
-            shaderInfo = ShaderCacheImpl::GetImpl()->GetShader(vertexSource, fragmentSource);
+            shaderInfo = ShaderCacheImpl::GetImpl()->GetShader(vertexSource, fragmentSource, bgfx::getRendererType());
         }
 
         if (!shaderInfo)
         {
-            bgfxShaderInfo = m_shaderCompiler.Compile(ProcessShaderCoordinates(vertexSource), ProcessSamplerFlip(fragmentSource));
+            bgfxShaderInfo = m_shaderCompiler.Compile(ProcessShaderCoordinates(vertexSource), ProcessSamplerFlip(fragmentSource), bgfx::getRendererType());
             if (ShaderCacheImpl::GetImpl())
             {
-                ShaderCacheImpl::GetImpl()->AddShader(vertexSource, fragmentSource, bgfxShaderInfo);
+                ShaderCacheImpl::GetImpl()->AddShader(vertexSource, fragmentSource, bgfx::getRendererType(), bgfxShaderInfo);
             } 
             shaderInfo = &bgfxShaderInfo;
         }

@@ -1,6 +1,7 @@
 set(SOURCES
     "Include/Platform/${BABYLON_NATIVE_PLATFORM}/Babylon/Graphics/Platform.h"
     "Include/RendererType/${GRAPHICS_API}/Babylon/Graphics/RendererType.h"
+    "Include/Shared/Babylon/Graphics/RendererMode.h"
     "Include/Shared/Babylon/Graphics/Device.h"
     "InternalInclude/Babylon/Graphics/BgfxCallback.h"
     "InternalInclude/Babylon/Graphics/continuation_scheduler.h"

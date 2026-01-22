@@ -51,6 +51,29 @@ namespace xr
         EMULATED,
     };
 
+    struct RuntimeCapabilities
+    {
+        // Session support
+        bool SupportsImmersiveVR{false};
+        bool SupportsImmersiveAR{false};
+        bool SupportsInline{false};
+
+        // Graphics backends and swapchain formats
+        bool SupportsVulkan{false};
+        bool SupportsOpenGLES{false};
+        std::vector<TextureFormat> SupportedColorFormats{};
+        std::vector<TextureFormat> SupportedDepthFormats{};
+
+        // XR features
+        bool SupportsAnchors{false};
+        bool SupportsPlaneDetection{false};
+        bool SupportsMeshDetection{false};
+        bool SupportsHitTest{false};
+        bool SupportsImageTracking{false};
+        bool SupportsLightEstimation{false};
+        bool SupportsPassthrough{false};
+    };
+
     constexpr enum HitTestTrackableType operator |(const enum HitTestTrackableType selfValue, const enum HitTestTrackableType inValue)
     {
         return static_cast<const enum HitTestTrackableType>(std::underlying_type_t<HitTestTrackableType>(selfValue) | std::underlying_type_t<HitTestTrackableType>(inValue));
@@ -347,6 +370,9 @@ namespace xr
                 std::vector<Mesh::Identifier> UpdatedMeshes;
                 std::vector<Mesh::Identifier> RemovedMeshes;
                 std::vector<ImageTrackingResult::Identifier> UpdatedImageTrackingResults;
+                std::vector<uint8_t> CameraImageRGBA;
+                size_t CameraImageWidth{0};
+                size_t CameraImageHeight{0};
 
                 bool IsTracking;
 
@@ -397,6 +423,7 @@ namespace xr
         bool IsInitialized() const;
         bool TryInitialize();
         static arcana::task<bool, std::exception_ptr> IsSessionSupportedAsync(SessionType);
+        const RuntimeCapabilities& GetCapabilities() const;
 
         uintptr_t GetNativeXrContext();
         std::string GetNativeXrContextType();

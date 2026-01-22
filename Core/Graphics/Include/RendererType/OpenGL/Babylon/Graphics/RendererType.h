@@ -1,6 +1,7 @@
 #pragma once
 
 #include <EGL/egl.h>
+#include <Babylon/Graphics/RendererMode.h>
 
 namespace Babylon::Graphics
 {
