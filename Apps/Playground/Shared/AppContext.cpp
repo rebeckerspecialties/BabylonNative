@@ -4,32 +4,16 @@
 #include <Babylon/AppRuntime.h>
 #include <Babylon/DebugTrace.h>
 #include <Babylon/Graphics/Device.h>
-#include <Babylon/PerfTrace.h>
 #include <Babylon/ScriptLoader.h>
 
-#include <Babylon/Plugins/NativeCamera.h>
-#include <Babylon/Plugins/NativeCapture.h>
-#include <Babylon/Plugins/NativeEncoding.h>
-#include <Babylon/Plugins/NativeEngine.h>
-#include <Babylon/Plugins/NativeInput.h>
-#include <Babylon/Plugins/NativeOptimizations.h>
-#include <Babylon/Plugins/NativeTracing.h>
-#include <Babylon/Plugins/ShaderCache.h>
-#include <Babylon/Plugins/TestUtils.h>
+#include <Babylon/Plugins/NativeWebGPU.h>
 
-#include <Babylon/Polyfills/AbortController.h>
 #include <Babylon/Polyfills/Blob.h>
-#include <Babylon/Polyfills/Canvas.h>
 #include <Babylon/Polyfills/Console.h>
-#include <Babylon/Polyfills/Fetch.h>
-#include <Babylon/Polyfills/File.h>
-#include <Babylon/Polyfills/Performance.h>
-#include <Babylon/Polyfills/TextDecoder.h>
-#include <Babylon/Polyfills/TextEncoder.h>
+#include <Babylon/Polyfills/URL.h>
 #include <Babylon/Polyfills/Window.h>
 #include <Babylon/Polyfills/XMLHttpRequest.h>
 
-#include <iostream>
 #include <sstream>
 
 namespace
@@ -61,21 +45,6 @@ AppContext::AppContext(
     Babylon::DebugTrace::EnableDebugTrace(playgroundOptions.DebugTrace.value_or(true));
     Babylon::DebugTrace::SetTraceOutput(debugLog);
 
-    Babylon::PerfTrace::Level perfLevel{Babylon::PerfTrace::Level::Mark};
-    if (playgroundOptions.PerfTrace.has_value())
-    {
-        const auto& v = *playgroundOptions.PerfTrace;
-        if (v == "None" || v == "none")
-        {
-            perfLevel = Babylon::PerfTrace::Level::None;
-        }
-        else if (v == "Log" || v == "log" || v == "Detail" || v == "detail")
-        {
-            perfLevel = Babylon::PerfTrace::Level::Log;
-        }
-    }
-    Babylon::PerfTrace::SetLevel(perfLevel);
-
     Babylon::Graphics::Configuration graphicsConfig{};
     graphicsConfig.Window = window;
     graphicsConfig.Width = width;
@@ -83,44 +52,23 @@ AppContext::AppContext(
     graphicsConfig.MSAASamples = 4;
 
     m_device.emplace(graphicsConfig);
-
-    // Mirror bgfx trace output (BgfxCallback::traceVargs) to debugLog so it
-    // reaches stdout in headless mode, not just OutputDebugString.
-    m_device->SetDiagnosticOutput(debugLog);
-
-    Babylon::Plugins::ShaderCache::Enable();
+    m_deviceUpdate.emplace(m_device->GetUpdate("update"));
 
     m_device->StartRenderingCurrentFrame();
+    m_deviceUpdate->Start();
 
     Babylon::AppRuntime::Options options{};
-
     options.EnableDebugger = true;
-
     options.UnhandledExceptionHandler = [debugLog](const Napi::Error& error) {
-        // Bx-style banner with native + JS callstack, then keep the legacy
-        // "[Uncaught Error] ..." one-liner for log scrapers.
-        const std::string js = Napi::GetErrorString(error);
-
-        Diagnostics::DumpFailure(
-            "UNCAUGHT JS ERROR",
-            nullptr,
-            0,
-            0,
-            "%s",
-            js.c_str());
-
         std::ostringstream ss{};
-        ss << "[Uncaught Error] " << js;
+        ss << "[Uncaught Error] " << Napi::GetErrorString(error);
         debugLog(ss.str().data());
-
-        Diagnostics::SetExitCode(1);
-        Diagnostics::PrintFinishLine();
         std::quick_exit(1);
     };
 
     m_runtime.emplace(options);
 
-    m_runtime->Dispatch([this, window, debugLog, additionalInit = std::move(additionalInit), playgroundOptions = std::move(playgroundOptions)](Napi::Env env) {
+    m_runtime->Dispatch([this, debugLog, additionalInit = std::move(additionalInit)](Napi::Env env) {
         m_device->AddToJavaScript(env);
 
         {
@@ -158,7 +106,6 @@ AppContext::AppContext(
         }
 
         Babylon::Polyfills::Blob::Initialize(env);
-        Babylon::Polyfills::File::Initialize(env);
 
         Babylon::Polyfills::Console::Initialize(env, [env, debugLog](const char* message, Babylon::Polyfills::Console::LogLevel logLevel) {
             std::ostringstream ss{};
@@ -185,32 +132,10 @@ AppContext::AppContext(
         Babylon::Polyfills::Performance::Initialize(env);
 
         Babylon::Polyfills::Window::Initialize(env);
-
-        Babylon::Polyfills::AbortController::Initialize(env);
-
-        Babylon::Polyfills::TextDecoder::Initialize(env);
-
-        Babylon::Polyfills::TextEncoder::Initialize(env);
-
+        Babylon::Polyfills::URL::Initialize(env);
         Babylon::Polyfills::XMLHttpRequest::Initialize(env);
-        Babylon::Polyfills::Fetch::Initialize(env);
-        m_canvas.emplace(Babylon::Polyfills::Canvas::Initialize(env));
 
-        Babylon::Plugins::NativeTracing::Initialize(env);
-
-        Babylon::Plugins::NativeEncoding::Initialize(env);
-
-        Babylon::Plugins::NativeEngine::Initialize(env);
-
-        Babylon::Plugins::NativeOptimizations::Initialize(env);
-
-        Babylon::Plugins::NativeCapture::Initialize(env);
-
-        Babylon::Plugins::NativeCamera::Initialize(env);
-
-        m_input = &Babylon::Plugins::NativeInput::CreateForJavaScript(env);
-
-        Babylon::Plugins::TestUtils::Initialize(env, window);
+        Babylon::Plugins::NativeWebGPU::Initialize(env);
 
         if (additionalInit)
         {
@@ -220,10 +145,7 @@ AppContext::AppContext(
 
     m_scriptLoader.emplace(*m_runtime);
     m_scriptLoader->LoadScript("app:///Scripts/ammo.js");
-    // Commenting out recast.js for now because v8jsi is incompatible with asm.js.
-    // m_scriptLoader->LoadScript("app:///Scripts/recast.js");
     m_scriptLoader->LoadScript("app:///Scripts/babylon.max.js");
-    m_scriptLoader->LoadScript("app:///Scripts/babylonjs.addons.js");
     m_scriptLoader->LoadScript("app:///Scripts/babylonjs.loaders.js");
     m_scriptLoader->LoadScript("app:///Scripts/babylonjs.materials.js");
     m_scriptLoader->LoadScript("app:///Scripts/babylon.gui.js");
@@ -235,14 +157,15 @@ AppContext::~AppContext()
 {
     if (m_device)
     {
+        m_deviceUpdate->Finish();
         m_device->FinishRenderingCurrentFrame();
     }
 
     Babylon::Plugins::ShaderCache::Disable();
 
     m_scriptLoader.reset();
-    m_canvas.reset();
     m_input = {};
     m_runtime.reset();
+    m_deviceUpdate.reset();
     m_device.reset();
 }

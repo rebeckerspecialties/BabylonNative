@@ -1,7 +1,6 @@
 FILE(GLOB REFERENCE_IMAGES RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}" "ReferenceImages/*")
 
 set(BABYLON_SCRIPTS
-    "../node_modules/babylonjs-addons/babylonjs.addons.js"
     "../node_modules/babylonjs-loaders/babylonjs.loaders.js"
     "../node_modules/babylonjs/babylon.max.js"
     "../node_modules/babylonjs-materials/babylonjs.materials.js"
@@ -17,6 +16,7 @@ set(SCRIPTS
     "Scripts/experience.js"
     "Scripts/playground_runner.js"
     "Scripts/validation_native.js"
+    "Scripts/webgpu_smoke.js"
     "Scripts/config.json")
 
 set(SOURCES
@@ -134,32 +134,29 @@ endif()
 
 target_include_directories(Playground PRIVATE ".")
 
+set(PLAYGROUND_PLATFORM_LIBRARIES)
+if(APPLE AND NOT IOS AND NOT VISIONOS)
+    list(APPEND PLAYGROUND_PLATFORM_LIBRARIES
+        "-framework Cocoa"
+        "-framework Foundation"
+        "-framework CoreFoundation"
+        "-framework Metal"
+        "-framework MetalKit"
+        "-framework QuartzCore"
+        "-lobjc")
+endif()
+
 target_link_libraries(Playground
-    PRIVATE AbortController
     PRIVATE AppRuntime
     PRIVATE Blob
-    PRIVATE bx
-    PRIVATE Canvas
     PRIVATE Console
-    PRIVATE ExternalTexture
-    PRIVATE File
     PRIVATE GraphicsDevice
-    PRIVATE NativeCamera
-    PRIVATE NativeCapture
-    PRIVATE NativeEncoding
-    PRIVATE NativeEngine
-    PRIVATE NativeInput
-    PRIVATE NativeOptimizations
-    PRIVATE NativeTracing
-    PRIVATE Performance
+    PRIVATE NativeWebGPU
     PRIVATE ScriptLoader
-    PRIVATE ShaderCache
-    PRIVATE TestUtils
-    PRIVATE TextDecoder
-    PRIVATE TextEncoder
+    PRIVATE URL
     PRIVATE Window
     PRIVATE XMLHttpRequest
-    PRIVATE Fetch
+    ${PLAYGROUND_PLATFORM_LIBRARIES}
     ${ADDITIONAL_LIBRARIES}
     ${BABYLON_NATIVE_PLAYGROUND_EXTENSION_LIBRARIES})
 
@@ -168,12 +165,17 @@ target_link_libraries(Playground
 add_custom_command(TARGET Playground POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E $<IF:$<BOOL:$<TARGET_RUNTIME_DLLS:Playground>>,copy,true> $<TARGET_RUNTIME_DLLS:Playground> $<TARGET_FILE_DIR:Playground> COMMAND_EXPAND_LISTS)
 
-if(ANGLE_LIBEGL)
+if(APPLE)
     add_custom_command(TARGET Playground POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${ANGLE_LIBEGL}" "$<TARGET_FILE_DIR:Playground>"
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${ANGLE_LIBGLESV2}" "$<TARGET_FILE_DIR:Playground>"
-        COMMENT "Copying ANGLE libraries to Playground output directory"
-    )
+        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:Playground>/../Resources/Scripts")
+
+    foreach(SCRIPT_PATH ${SCRIPTS} ${BABYLON_SCRIPTS} ${DEPENDENCIES})
+        get_filename_component(SCRIPT_NAME "${SCRIPT_PATH}" NAME)
+        add_custom_command(TARGET Playground POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${CMAKE_CURRENT_SOURCE_DIR}/${SCRIPT_PATH}"
+                "$<TARGET_FILE_DIR:Playground>/../Resources/Scripts/${SCRIPT_NAME}")
+    endforeach()
 endif()
 
 if (UNIX AND NOT APPLE AND NOT ANDROID)
@@ -252,9 +254,17 @@ if(WINDOWS_STORE)
 else()
     foreach(SCRIPT ${SCRIPTS} ${BABYLON_SCRIPTS} ${DEPENDENCIES})
         get_filename_component(SCRIPT_NAME "${SCRIPT}" NAME)
+        if(APPLE)
+            set(SCRIPT_OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/Playground.app/Contents/Resources/Scripts")
+            set(SCRIPT_OUTPUT_PATH "${CMAKE_CURRENT_BINARY_DIR}/Playground.app/Contents/Resources/Scripts/${SCRIPT_NAME}")
+        else()
+            set(SCRIPT_OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/${CMAKE_CFG_INTDIR}/Scripts")
+            set(SCRIPT_OUTPUT_PATH "${CMAKE_CURRENT_BINARY_DIR}/${CMAKE_CFG_INTDIR}/Scripts/${SCRIPT_NAME}")
+        endif()
         add_custom_command(
-            OUTPUT "${CMAKE_CFG_INTDIR}/Scripts/${SCRIPT_NAME}"
-            COMMAND "${CMAKE_COMMAND}" -E copy "${CMAKE_CURRENT_SOURCE_DIR}/${SCRIPT}" "${CMAKE_CURRENT_BINARY_DIR}/${CMAKE_CFG_INTDIR}/Scripts/${SCRIPT_NAME}"
+            OUTPUT "${SCRIPT_OUTPUT_PATH}"
+            COMMAND "${CMAKE_COMMAND}" -E make_directory "${SCRIPT_OUTPUT_DIR}"
+            COMMAND "${CMAKE_COMMAND}" -E copy "${CMAKE_CURRENT_SOURCE_DIR}/${SCRIPT}" "${SCRIPT_OUTPUT_PATH}"
             COMMENT "Copying ${SCRIPT_NAME}"
             MAIN_DEPENDENCY "${CMAKE_CURRENT_SOURCE_DIR}/${SCRIPT}")
     endforeach()
