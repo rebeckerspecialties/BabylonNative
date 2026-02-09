@@ -112,6 +112,11 @@ if(BABYLON_NATIVE_PLUGIN_NATIVEOPTIMIZATIONS)
     target_link_libraries(Embedding PRIVATE NativeOptimizations)
 endif()
 
+if(BABYLON_NATIVE_PLUGIN_NATIVEWEBGPU)
+    target_compile_definitions(Embedding PUBLIC BABYLON_NATIVE_PLUGIN_NATIVEWEBGPU=1)
+    target_link_libraries(Embedding PRIVATE NativeWebGPU)
+endif()
+
 if(BABYLON_NATIVE_PLUGIN_NATIVETRACING)
     target_compile_definitions(Embedding PUBLIC BABYLON_NATIVE_PLUGIN_NATIVETRACING=1)
     target_link_libraries(Embedding PRIVATE NativeTracing)

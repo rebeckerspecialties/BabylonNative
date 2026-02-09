@@ -55,13 +55,9 @@ FetchContent_Declare(libwebp
     GIT_REPOSITORY https://github.com/webmproject/libwebp.git
     GIT_TAG 57e324e2eb99be46df46d77b65705e34a7ae616c
     EXCLUDE_FROM_ALL)
-FetchContent_Declare(metal-cpp
-    GIT_REPOSITORY https://github.com/bkaradzic/metal-cpp.git
-    GIT_TAG metal-cpp_26
-    EXCLUDE_FROM_ALL)
-FetchContent_Declare(SPIRV-Cross
-    GIT_REPOSITORY https://github.com/BabylonJS/SPIRV-Cross.git
-    GIT_TAG a512817ddbcd879a3929aef7d1d762871bdf8635
+FetchContent_Declare(wgpu_native
+    GIT_REPOSITORY https://github.com/gfx-rs/wgpu-native.git
+    GIT_TAG ba4deb5d935652f40c7e051b15cbb5d097219941
     EXCLUDE_FROM_ALL)
 
 # --------------------------------------------------
@@ -89,6 +85,16 @@ if(VISIONOS)
 elseif(IOS)
     set(PLATFORM "OS64COMBINED" CACHE STRING "")
     set(DEPLOYMENT_TARGET "13" CACHE STRING "")
+endif()
+
+# Keep deployment targeting consistent across all generated Xcode targets.
+# Without this, transitive static libraries may default to the host SDK version
+# and become unloadable on older simulator runtimes.
+if(IOS)
+    set(CMAKE_OSX_DEPLOYMENT_TARGET "${DEPLOYMENT_TARGET}" CACHE STRING "" FORCE)
+    set(CMAKE_XCODE_ATTRIBUTE_IPHONEOS_DEPLOYMENT_TARGET "${DEPLOYMENT_TARGET}")
+elseif(VISIONOS)
+    set(CMAKE_OSX_DEPLOYMENT_TARGET "${DEPLOYMENT_TARGET}" CACHE STRING "" FORCE)
 endif()
 
 project(BabylonNative)
@@ -135,10 +141,13 @@ option(BABYLON_NATIVE_PLUGIN_SHADERCACHE "Include Babylon Native Plugin ShaderCa
 option(BABYLON_NATIVE_PLUGIN_SHADERCOMPILER "Include Babylon Native Plugin ShaderCompiler." ON)
 option(BABYLON_NATIVE_PLUGIN_SHADERTOOL "Include Babylon Native Plugin ShaderTool." ON)
 option(BABYLON_NATIVE_PLUGIN_TESTUTILS "Include Babylon Native Plugin TestUtils." ON)
+option(BABYLON_NATIVE_WGPU_USE_UPSTREAM_NATIVE "Use upstream wgpu-native as the Rust backend base (experimental)." OFF)
+option(BABYLON_NATIVE_BUILD_WEBGPU_TESTS "Build NativeWebGPU async bridge gtests on desktop hosts." OFF)
 
 # Polyfills
 option(BABYLON_NATIVE_POLYFILL_ABORTCONTROLLER "Include Babylon Native Polyfill AbortController." ON)
 option(BABYLON_NATIVE_POLYFILL_CANVAS "Include Babylon Native Polyfill Canvas." OFF)
+option(BABYLON_NATIVE_POLYFILL_CANVAS_WGPU "Use the wgpu/femtovg Canvas backend when Canvas polyfill is enabled." OFF)
 option(BABYLON_NATIVE_POLYFILL_SCHEDULING "Include Babylon Native Polyfill Scheduling." ON)
 option(BABYLON_NATIVE_POLYFILL_URL "Include Babylon Native Polyfill URL." ON)
 option(BABYLON_NATIVE_POLYFILL_WEBSOCKET "Include Babylon Native Polyfill WebSocket." ON)
@@ -186,6 +195,9 @@ if(ENABLE_SANITIZERS)
     endif()
 endif()
 
+if(BABYLON_NATIVE_WGPU_USE_UPSTREAM_NATIVE)
+    FetchContent_MakeAvailable_With_Message(wgpu_native)
+endif()
 # --------------------------------------------------
 
 if(ANDROID)
@@ -210,21 +222,17 @@ if(APPLE)
     set(GRAPHICS_API Metal)
 elseif(UNIX)
     if(NOT GRAPHICS_API)
-        set(GRAPHICS_API OpenGL)
+        set(GRAPHICS_API Vulkan)
     else()
-        if(NOT GRAPHICS_API STREQUAL Vulkan AND NOT GRAPHICS_API STREQUAL OpenGL)
+        if(NOT GRAPHICS_API STREQUAL Vulkan)
             message(FATAL_ERROR "Unrecognized/Unsupported render API: ${GRAPHICS_API}")
         endif()
     endif()
 elseif(WIN32)
     if(NOT GRAPHICS_API)
-        set(GRAPHICS_API D3D11)
-    elseif(GRAPHICS_API STREQUAL "OpenGLWindowsDevOnly")
-        # OpenGLES via ANGLE from a Chromium-based browser (dev-only).
-        set(GRAPHICS_API OpenGL)
-        set(BABYLON_NATIVE_OPENGLES_FROM_BROWSER ON)
+        set(GRAPHICS_API D3D12)
     else()
-        if(NOT GRAPHICS_API STREQUAL Vulkan AND NOT GRAPHICS_API STREQUAL D3D11 AND NOT GRAPHICS_API STREQUAL D3D12)
+        if(NOT GRAPHICS_API STREQUAL Vulkan AND NOT GRAPHICS_API STREQUAL D3D12)
             message(FATAL_ERROR "Unrecognized/Unsupported render API: ${GRAPHICS_API}")
         endif()
     endif()

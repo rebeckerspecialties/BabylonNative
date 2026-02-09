@@ -7,13 +7,18 @@ if (project.hasProperty("jsEngine")) {
     jsEngine = project.property("jsEngine")
 }
 
-def graphics_api = "OpenGL"
-def platformVersion = 21
+def graphics_api = "Vulkan"
+def platformVersion = 24 // minimal version to get Vulkan
 if (project.hasProperty("GRAPHICS_API")) {
     graphics_api = project.property("GRAPHICS_API")
     if ("${graphics_api}" == "Vulkan" ) {
         platformVersion = 24 // minimal version to get Vulkan
     }
+}
+
+def unity_build = "false"
+if (project.hasProperty("UNITY_BUILD")) {
+    unity_build = project.property("UNITY_BUILD")
 }
 
 def arcore_libpath = layout.buildDirectory.dir("arcore-native").get().asFile.absolutePath
@@ -25,6 +30,9 @@ def cmakeArguments = [
     "-DARCORE_LIBPATH=${arcore_libpath}/jni",
     "-DNAPI_JAVASCRIPT_ENGINE=${jsEngine}",
     "-DBABYLON_NATIVE_BUILD_APPS=ON",
+    "-DBABYLON_NATIVE_POLYFILL_CANVAS=ON",
+    "-DBABYLON_NATIVE_POLYFILL_CANVAS_WGPU=ON",
+    "-DCMAKE_UNITY_BUILD=${unity_build}",
     "-DBABYLON_DEBUG_TRACE=ON"
 ]
 // Hermes for Android needs HOST hermesc/shermes (they emit bytecode at build

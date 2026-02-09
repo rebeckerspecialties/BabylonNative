@@ -159,6 +159,11 @@ target_link_libraries(Playground
     ${ADDITIONAL_LIBRARIES}
     ${BABYLON_NATIVE_PLAYGROUND_EXTENSION_LIBRARIES})
 
+if(TARGET Canvas)
+    target_link_libraries(Playground PRIVATE Canvas)
+    target_compile_definitions(Playground PRIVATE BABYLON_NATIVE_PLAYGROUND_HAS_CANVAS=1)
+endif()
+
 # See https://gitlab.kitware.com/cmake/cmake/-/issues/23543
 # If we can set minimum required to 3.26+, then we can use the `copy -t` syntax instead.
 add_custom_command(TARGET Playground POST_BUILD
@@ -182,6 +187,12 @@ endif()
 
 if(APPLE)
     if(IOS)
+        if(PLATFORM MATCHES "SIMULATOR")
+            set(PLAYGROUND_IOS_SDKROOT "iphonesimulator")
+        else()
+            set(PLAYGROUND_IOS_SDKROOT "iphoneos")
+        endif()
+
         set_target_properties(Playground PROPERTIES
             MACOSX_BUNDLE true
             MACOSX_BUNDLE_INFO_PLIST "${PLIST_FILE}"
@@ -194,6 +205,9 @@ if(APPLE)
             XCODE_ATTRIBUTE_SWIFT_OBJC_BRIDGING_HEADER "${CMAKE_CURRENT_LIST_DIR}/iOS/Playground-Bridging-Header.h"
             XCODE_ATTRIBUTE_LD_RUNPATH_SEARCH_PATHS "@executable_path/Frameworks"
             XCODE_ATTRIBUTE_FRAMEWORK_SEARCH_PATHS "$(inherited) $(SDKROOT)$(SYSTEM_LIBRARY_DIR)/Frameworks"
+            XCODE_ATTRIBUTE_LIBRARY_SEARCH_PATHS "$(inherited) $(SDKROOT)/usr/lib $(SDKROOT)/usr/lib/swift"
+            XCODE_ATTRIBUTE_SUPPORTED_PLATFORMS "iphoneos iphonesimulator"
+            XCODE_ATTRIBUTE_SDKROOT "${PLAYGROUND_IOS_SDKROOT}"
             XCODE_ATTRIBUTE_ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES YES
 
             # CMake seems to add a custom flag "-Wno-unknown-pragmas" to the Swift compiler. That flag is used for Clang,

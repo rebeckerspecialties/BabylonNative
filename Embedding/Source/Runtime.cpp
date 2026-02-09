@@ -17,6 +17,9 @@
 #if BABYLON_NATIVE_PLUGIN_NATIVEOPTIMIZATIONS
 #include <Babylon/Plugins/NativeOptimizations.h>
 #endif
+#if BABYLON_NATIVE_PLUGIN_NATIVEWEBGPU
+#include <Babylon/Plugins/NativeWebGPU.h>
+#endif
 #if BABYLON_NATIVE_PLUGIN_NATIVETRACING
 #include <Babylon/Plugins/NativeTracing.h>
 #endif
@@ -269,6 +272,9 @@ namespace Babylon::Embedding
 #endif
 #if BABYLON_NATIVE_PLUGIN_NATIVEENGINE
             Babylon::Plugins::NativeEngine::Initialize(env);
+#endif
+#if BABYLON_NATIVE_PLUGIN_NATIVEWEBGPU
+            Babylon::Plugins::NativeWebGPU::Initialize(env);
 #endif
 #if BABYLON_NATIVE_PLUGIN_NATIVEOPTIMIZATIONS
             Babylon::Plugins::NativeOptimizations::Initialize(env);
