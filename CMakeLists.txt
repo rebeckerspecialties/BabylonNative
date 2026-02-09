@@ -33,10 +33,6 @@ FetchContent_Declare(base-n
     GIT_REPOSITORY https://github.com/azawadzki/base-n.git
     GIT_TAG 7573e77c0b9b0e8a5fb63d96dbde212c921993b4
     EXCLUDE_FROM_ALL)
-FetchContent_Declare(bgfx.cmake
-    GIT_REPOSITORY https://github.com/BabylonJS/bgfx.cmake.git
-    GIT_TAG e5f3f31c1ec8a376dde75f8b20366e2696810ea0
-    EXCLUDE_FROM_ALL)
 FetchContent_Declare(CMakeExtensions
     GIT_REPOSITORY https://github.com/BabylonJS/CMakeExtensions.git
     GIT_TAG 631780e42886e5f12bfd1a5568c7395f1d657f43
@@ -44,9 +40,6 @@ FetchContent_Declare(CMakeExtensions
 FetchContent_Declare(glslang
     GIT_REPOSITORY https://github.com/BabylonJS/glslang.git
     GIT_TAG 284e4301e5a6b44b279635276588db7cdd942624
-    EXCLUDE_FROM_ALL)
-FetchContent_Declare(googletest
-    URL "https://github.com/google/googletest/archive/refs/tags/v1.17.0.tar.gz"
     EXCLUDE_FROM_ALL)
 FetchContent_Declare(ios-cmake
     GIT_REPOSITORY https://github.com/leetal/ios-cmake.git
@@ -77,7 +70,7 @@ FetchContent_MakeAvailable(CMakeExtensions)
 # which makes all dependencies to be fetched and packaged.
 # At build time, cmake is run again on BabylonNative root but FETCHCONTENT_FULLY_DISCONNECTED is ON
 # and FetchContent_MakeAvailable_With_Message will use provided local folder provided to cmake command line
-# like '-DFETCHCONTENT_SOURCE_DIR_BGFX.CMAKE=../shared/Babylon/....'
+# like '-DFETCHCONTENT_SOURCE_DIR_JSRUNTIMEHOST=../shared/Babylon/....'
 
 if(VISIONOS OR IOS OR BABYLON_NATIVE_BUILD_SOURCETREE)
     FetchContent_MakeAvailable_With_Message(ios-cmake)
@@ -118,30 +111,11 @@ option(BABYLON_DEBUG_TRACE "Enable debug trace." OFF)
 option(BABYLON_NATIVE_CHECK_THREAD_AFFINITY "Checks thread safety in the graphics device calls. It can be removed if hosting application ensures thread coherence." ON)
 
 # Plugins
-option(BABYLON_NATIVE_PLUGIN_EXTERNALTEXTURE "Include Babylon Native Plugin ExternalTexture." ON)
-option(BABYLON_NATIVE_PLUGIN_NATIVECAMERA "Include Babylon Native Plugin NativeCamera." ON)
-option(BABYLON_NATIVE_PLUGIN_NATIVECAPTURE "Include Babylon Native Plugin NativeCapture." ON)
-option(BABYLON_NATIVE_PLUGIN_NATIVEENCODING "Include Babylon Native Plugin NativeEncoding." ON)
-option(BABYLON_NATIVE_PLUGIN_NATIVEENGINE "Include Babylon Native Plugin NativeEngine." ON)
-option(BABYLON_NATIVE_PLUGIN_NATIVEENGINE_WEBP "Include Babylon Native Plugin NativeEngine - WebP." ON)
-option(BABYLON_NATIVE_PLUGIN_NATIVEENGINE_LOAD_IMAGES "Enable image loading in NativeEngine (LoadTexture, image bitmap, bimg, WebP)." ON)
-if(NOT BABYLON_NATIVE_PLUGIN_NATIVEENGINE_LOAD_IMAGES)
-    # WebP support relies on image loading code paths; force it off when image loading is disabled.
-    set(BABYLON_NATIVE_PLUGIN_NATIVEENGINE_WEBP OFF CACHE BOOL "Include Babylon Native Plugin NativeEngine - WebP." FORCE)
-endif()
-option(BABYLON_NATIVE_PLUGIN_NATIVEENGINE_COMPILESHADERS "Include Babylon Native Plugin NativeEngine - Compile Shaders." ON)
-option(BABYLON_NATIVE_PLUGIN_NATIVEINPUT "Include Babylon Native Plugin NativeInput." ON)
-option(BABYLON_NATIVE_PLUGIN_NATIVEOPTIMIZATIONS "Include Babylon Native Plugin NativeOptimizations." ON)
-option(BABYLON_NATIVE_PLUGIN_NATIVETRACING "Include Babylon Native Plugin NativeTracing." ON)
-option(BABYLON_NATIVE_PLUGIN_NATIVEXR "Include Babylon Native Plugin XR." ON)
-option(BABYLON_NATIVE_PLUGIN_SHADERCACHE "Include Babylon Native Plugin ShaderCache." ON)
-option(BABYLON_NATIVE_PLUGIN_SHADERCOMPILER "Include Babylon Native Plugin ShaderCompiler." ON)
-option(BABYLON_NATIVE_PLUGIN_SHADERTOOL "Include Babylon Native Plugin ShaderTool." ON)
-option(BABYLON_NATIVE_PLUGIN_TESTUTILS "Include Babylon Native Plugin TestUtils." ON)
+option(BABYLON_NATIVE_PLUGIN_NATIVEWEBGPU "Include Babylon Native Plugin NativeWebGPU." ON)
 
 # Polyfills
 option(BABYLON_NATIVE_POLYFILL_WINDOW "Include Babylon Native Polyfill Window." ON)
-option(BABYLON_NATIVE_POLYFILL_CANVAS "Include Babylon Native Polyfill Canvas." ON)
+option(BABYLON_NATIVE_POLYFILL_CANVAS "Include Babylon Native Polyfill Canvas." OFF)
 
 # Sanitizers
 option(ENABLE_SANITIZERS "Enable AddressSanitizer and UBSan" OFF)
@@ -176,6 +150,11 @@ if(ENABLE_SANITIZERS)
         message(FATAL_ERROR "Sanitizers not supported on this compiler.")
     endif()
 endif()
+
+set(BABYLON_NATIVE_INSTALL OFF CACHE BOOL "Include the install target." FORCE)
+set(BABYLON_NATIVE_PLUGIN_NATIVEWEBGPU ON CACHE BOOL "Include Babylon Native Plugin NativeWebGPU." FORCE)
+set(BABYLON_NATIVE_POLYFILL_WINDOW ON CACHE BOOL "Include Babylon Native Polyfill Window." FORCE)
+set(BABYLON_NATIVE_POLYFILL_CANVAS OFF CACHE BOOL "Include Babylon Native Polyfill Canvas." FORCE)
 
 # --------------------------------------------------
 
@@ -287,6 +266,16 @@ if(MSVC)
 endif()
 
 if(APPLE)
+    set(ENABLE_ARC ON CACHE STRING "Enables or disables ARC support." FORCE)
+    if(NOT CMAKE_GENERATOR MATCHES "Xcode")
+        # Some fetched dependencies gate ARC behind Xcode-only attributes.
+        # Apply ARC explicitly for non-Xcode generators (Makefiles/Ninja).
+        add_compile_options(-fobjc-arc)
+    endif()
+
+    # Without this option on azure pipelines, there is a mismatch with math.h giving a lot of undefined functions on macOS.
+    # Only enabled for Apple as there is no issue for Windows.
+    set(CMAKE_NO_SYSTEM_FROM_IMPORTED TRUE)
     # Create scheme for installation and other targets
     set(CMAKE_XCODE_GENERATE_SCHEME TRUE)
 endif()
