@@ -19,30 +19,21 @@ target_include_directories(BabylonNativeJNI
     PRIVATE ${PLAYGROUND_DIR})
 
 target_link_libraries(BabylonNativeJNI
-    PRIVATE GLESv3
-    PRIVATE android
-    PRIVATE bx
-    PRIVATE EGL
-    PRIVATE log
-    PRIVATE -lz
-    PRIVATE AndroidExtensions
-    PRIVATE AppRuntime
-    PRIVATE Blob
-    PRIVATE Canvas
-    PRIVATE Console
-    PRIVATE GraphicsDevice
-    PRIVATE NativeCamera
-    PRIVATE NativeCapture
-    PRIVATE NativeEncoding
-    PRIVATE NativeEngine
-    PRIVATE NativeInput
-    PRIVATE NativeOptimizations
-    PRIVATE NativeTracing
-    PRIVATE NativeXr
-    PRIVATE Performance
-    PRIVATE ScriptLoader
-    PRIVATE ShaderCache
-    PRIVATE TestUtils
-    PRIVATE TextDecoder
-    PRIVATE Window
-    PRIVATE XMLHttpRequest)
+    android
+    log
+    -lz
+    AndroidExtensions
+    AppRuntime
+    Blob
+    Canvas
+    Console
+    GraphicsDevice
+    NativeInput
+    NativeWebGPU
+    ScriptLoader
+    URL
+    Window
+    XMLHttpRequest)
+
+target_compile_definitions(BabylonNativeJNI
+    PRIVATE BABYLON_NATIVE_PLAYGROUND_HAS_CANVAS=1)
