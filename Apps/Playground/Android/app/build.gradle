@@ -7,7 +7,7 @@ if (project.hasProperty("jsEngine")) {
     jsEngine = project.property("jsEngine")
 }
 
-def graphics_api = "OpenGL"
+def graphics_api = "Vulkan"
 // min 24 for Vulkan
 def platformVersion = 25
 
@@ -19,10 +19,10 @@ android {
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "com.android.babylonnative.playground"
-        minSdk = platformVersion
-        targetSdk = 33
-        ndkVersion = "29.0.14206865"
+        applicationId "com.android.babylonnative.playground"
+        minSdkVersion "${platformVersion}"
+        targetSdkVersion 29
+        ndkVersion "28.2.13676358"
         if (project.hasProperty("NDK_VERSION")) {
             ndkVersion = project.property("NDK_VERSION")
         }
@@ -120,5 +120,4 @@ tasks.register('copyFiles') {
     }
 }
 
-tasks.named('preBuild').configure { dependsOn 'copyFiles' }
-
+preBuild.dependsOn(copyFiles)

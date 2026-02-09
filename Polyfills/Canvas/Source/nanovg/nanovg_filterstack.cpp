@@ -9,8 +9,9 @@
 std::regex blurRegex(R"(blur\((\d*\.?\d+)(px|rem)?\)|blur\(\))");
 std::regex noneRegex(R"(^\s*none\s*$)");
 
-#include "Shaders/dxbc/vs_fspass.h"
-#include "Shaders/dxil/vs_fspass.h"
+// bgfx names the HLSL shader profile family as "dx11" even when running
+// through the D3D12 renderer backend, so these blobs are shared by both.
+#include "Shaders/dx11/vs_fspass.h"
 #include "Shaders/metal/vs_fspass.h"
 #include "Shaders/glsl/vs_fspass.h"
 #include "Shaders/essl/vs_fspass.h"

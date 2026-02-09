@@ -7,6 +7,7 @@
 #include <Babylon/ScriptLoader.h>
 
 #include <Babylon/Plugins/NativeWebGPU.h>
+#include <Babylon/Plugins/NativeInput.h>
 
 #include <Babylon/Polyfills/Blob.h>
 #include <Babylon/Polyfills/Console.h>
@@ -14,6 +15,7 @@
 #include <Babylon/Polyfills/Window.h>
 #include <Babylon/Polyfills/XMLHttpRequest.h>
 
+#include <cstdlib>
 #include <sstream>
 
 namespace
@@ -63,7 +65,7 @@ AppContext::AppContext(
         std::ostringstream ss{};
         ss << "[Uncaught Error] " << Napi::GetErrorString(error);
         debugLog(ss.str().data());
-        std::quick_exit(1);
+        std::abort();
     };
 
     m_runtime.emplace(options);
@@ -106,6 +108,9 @@ AppContext::AppContext(
         }
 
         Babylon::Polyfills::Blob::Initialize(env);
+#if defined(BABYLON_NATIVE_PLAYGROUND_HAS_CANVAS)
+        m_canvas.emplace(Babylon::Polyfills::Canvas::Initialize(env));
+#endif
 
         Babylon::Polyfills::Console::Initialize(env, [env, debugLog](const char* message, Babylon::Polyfills::Console::LogLevel logLevel) {
             std::ostringstream ss{};
@@ -134,6 +139,8 @@ AppContext::AppContext(
         Babylon::Polyfills::Window::Initialize(env);
         Babylon::Polyfills::URL::Initialize(env);
         Babylon::Polyfills::XMLHttpRequest::Initialize(env);
+
+        m_input = &Babylon::Plugins::NativeInput::CreateForJavaScript(env);
 
         Babylon::Plugins::NativeWebGPU::Initialize(env);
 
