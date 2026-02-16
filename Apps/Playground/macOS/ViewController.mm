@@ -48,7 +48,15 @@
     NSArray* arguments = [[NSProcessInfo processInfo] arguments];
     if (arguments.count == 1)
     {
-        [_runtime loadScript:@"app:///Scripts/experience.js"];
+        [_runtime eval:@"(function(){"
+                       @"globalThis.createScene=undefined;"
+                       @"globalThis.__babylonPlaygroundSceneFactoryReady=undefined;"
+                       @"globalThis.__babylonPlaygroundWebGpuSmokeReady=undefined;"
+                       @"globalThis.__webgpuSmokeDispose=undefined;"
+                       @"})();"
+                sourceUrl:@"app:///Scripts/playground_bootstrap_reset.js"];
+        [_runtime loadScript:@"app:///Scripts/webgpu_smoke.js"];
+        [_runtime loadScript:@"app:///Scripts/playground_runner.js"];
     }
     else
     {

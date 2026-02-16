@@ -34,11 +34,21 @@ public class PlaygroundActivity extends Activity {
         runtimeOptions.enableDebugTrace = true;
         mRuntimeHandle = BabylonNative.runtimeCreate(runtimeOptions);
 
-        // Queue the bootstrap scripts + experience script. They run after
-        // the first View attach completes engine init on the JS thread, in
-        // submission order.
+        // Queue the Babylon.js bootstrap scripts, then the WebGPU smoke scene.
+        // They run after the first View attach completes engine init on the JS
+        // thread, in submission order.
         loadBootstrapScripts(mRuntimeHandle);
-        BabylonNative.runtimeLoadScript(mRuntimeHandle, "app:///Scripts/experience.js");
+        BabylonNative.runtimeEval(
+                mRuntimeHandle,
+                "(function(){"
+                        + "globalThis.createScene=undefined;"
+                        + "globalThis.__babylonPlaygroundSceneFactoryReady=undefined;"
+                        + "globalThis.__babylonPlaygroundWebGpuSmokeReady=undefined;"
+                        + "globalThis.__webgpuSmokeDispose=undefined;"
+                        + "})();",
+                "app:///Scripts/playground_bootstrap_reset.js");
+        BabylonNative.runtimeLoadScript(mRuntimeHandle, "app:///Scripts/webgpu_smoke.js");
+        BabylonNative.runtimeLoadScript(mRuntimeHandle, "app:///Scripts/playground_runner.js");
 
         mView = new BabylonView(getApplication(), mRuntimeHandle);
         setContentView(mView);

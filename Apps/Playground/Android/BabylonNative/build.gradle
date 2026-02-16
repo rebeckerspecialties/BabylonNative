@@ -32,9 +32,12 @@ def cmakeArguments = [
     "-DBABYLON_NATIVE_BUILD_APPS=ON",
     "-DBABYLON_NATIVE_POLYFILL_CANVAS=ON",
     "-DBABYLON_NATIVE_POLYFILL_CANVAS_WGPU=ON",
-    "-DCMAKE_UNITY_BUILD=${unity_build}",
-    "-DBABYLON_DEBUG_TRACE=ON"
+    "-DCMAKE_UNITY_BUILD=${unity_build}"
 ]
+if (project.hasProperty("ENABLE_SANITIZERS")) {
+    cmakeArguments.add("-DENABLE_SANITIZERS=${project.property('ENABLE_SANITIZERS')}")
+}
+
 // Hermes for Android needs HOST hermesc/shermes (they emit bytecode at build
 // time and can't run as NDK-cross-compiled binaries). JsRuntimeHost's CMake
 // bootstraps these host compilers automatically when cross-compiling, so no
@@ -62,7 +65,11 @@ android {
         }
         externalNativeBuild {
             cmake {
-                abiFilters "arm64-v8a", "armeabi-v7a", "x86", "x86_64"
+                if (project.hasProperty("ARM64Only")) {
+                    abiFilters "arm64-v8a"
+                } else {
+                    abiFilters "arm64-v8a", "armeabi-v7a", "x86", "x86_64"
+                }
                 arguments(*cmakeArguments)
                 cppFlags += ["-Wno-deprecated-literal-operator"]
             }
@@ -71,7 +78,7 @@ android {
             if (project.hasProperty("ARM64Only")) {
                 abiFilters "arm64-v8a"
             } else {
-                abiFilters "arm64-v8a", "armeabi-v7a", "x86"
+                abiFilters "arm64-v8a", "armeabi-v7a", "x86", "x86_64"
             }
         }
         packaging {
@@ -93,9 +100,25 @@ android {
     }
 
     buildTypes {
+        debug {
+            externalNativeBuild {
+                cmake {
+                    arguments "-DBABYLON_DEBUG_TRACE=ON"
+                }
+            }
+        }
         release {
             minifyEnabled = false
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            ndk {
+                debugSymbolLevel 'NONE'
+                abiFilters "arm64-v8a"
+            }
+            externalNativeBuild {
+                cmake {
+                    arguments "-DBABYLON_DEBUG_TRACE=OFF", "-DCMAKE_BUILD_TYPE=Release", "-DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON"
+                }
+            }
         }
     }
     compileOptions {
