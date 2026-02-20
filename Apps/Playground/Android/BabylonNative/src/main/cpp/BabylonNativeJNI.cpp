@@ -13,6 +13,7 @@
 
 namespace
 {
+    JavaVM* gJavaVM{};
     std::optional<AppContext> appContext{};
     std::optional<Babylon::Plugins::NativeXr> nativeXr{};
     bool isXrActive{};
@@ -20,6 +21,13 @@ namespace
 
 extern "C"
 {
+    JNIEXPORT jint JNICALL
+    JNI_OnLoad(JavaVM* vm, void* /*reserved*/)
+    {
+        gJavaVM = vm;
+        return JNI_VERSION_1_6;
+    }
+
     JNIEXPORT void JNICALL
     Java_com_library_babylonnative_Wrapper_initEngine(JNIEnv* env, jclass clazz)
     {
@@ -42,7 +50,16 @@ extern "C"
             JavaVM* javaVM{};
             if (env->GetJavaVM(&javaVM) != JNI_OK)
             {
-                throw std::runtime_error("Failed to get Java VM");
+                if (gJavaVM)
+                {
+                    __android_log_write(ANDROID_LOG_WARN, "BabylonNative", "GetJavaVM failed, using cached JavaVM from JNI_OnLoad");
+                    javaVM = gJavaVM;
+                }
+                else
+                {
+                    __android_log_write(ANDROID_LOG_ERROR, "BabylonNative", "GetJavaVM failed and no cached JavaVM available");
+                    throw std::runtime_error("Failed to get Java VM");
+                }
             }
 
             android::global::Initialize(javaVM, jniContext);
@@ -129,7 +146,9 @@ extern "C"
     {
         if (appContext)
         {
-            appContext->ScriptLoader().LoadScript(env->GetStringUTFChars(path, nullptr));
+            const char* utfPath = env->GetStringUTFChars(path, nullptr);
+            appContext->ScriptLoader().LoadScript(utfPath);
+            env->ReleaseStringUTFChars(path, utfPath);
         }
     }
 
@@ -138,8 +157,12 @@ extern "C"
     {
         if (appContext)
         {
-            std::string url = env->GetStringUTFChars(sourceURL, nullptr);
-            std::string src = env->GetStringUTFChars(source, nullptr);
+            const char* utfSource = env->GetStringUTFChars(source, nullptr);
+            const char* utfSourceURL = env->GetStringUTFChars(sourceURL, nullptr);
+            std::string src = utfSource;
+            std::string url = utfSourceURL;
+            env->ReleaseStringUTFChars(source, utfSource);
+            env->ReleaseStringUTFChars(sourceURL, utfSourceURL);
             appContext->ScriptLoader().Eval(std::move(src), std::move(url));
         }
     }
