@@ -95,6 +95,11 @@ elseif(IOS)
     set(DEPLOYMENT_TARGET "13" CACHE STRING "")
 endif()
 
+# Force deployment target for iOS/visionOS so CMake propagates it correctly
+if(IOS OR VISIONOS)
+    set(CMAKE_OSX_DEPLOYMENT_TARGET "${DEPLOYMENT_TARGET}" CACHE STRING "" FORCE)
+endif()
+
 project(BabylonNative)
 
 set_property(GLOBAL PROPERTY USE_FOLDERS ON)

@@ -148,6 +148,11 @@ if(WIN32)
     set_property(TARGET UrlLib PROPERTY UNITY_BUILD false)
 endif()
 
+if(APPLE AND TARGET UrlLib)
+    # UrlLib uses Objective-C on Apple and requires ARC
+    enable_objc_arc(UrlLib)
+endif()
+
 # --------------------------------------------------
 # metal-cpp
 # --------------------------------------------------
