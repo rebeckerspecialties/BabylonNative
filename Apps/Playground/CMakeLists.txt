@@ -50,8 +50,7 @@ if(APPLE)
         set_source_files_properties(${REFERENCE_IMAGES} PROPERTIES MACOSX_PACKAGE_LOCATION "ReferenceImages")
     else()
         set(PLIST_FILE "${CMAKE_CURRENT_LIST_DIR}/macOS/Info.plist")
-        set(STORYBOARD "${CMAKE_CURRENT_LIST_DIR}/macOS/Base.lproj/Main.storyboard")
-        set(RESOURCE_FILES ${STORYBOARD})
+        set(RESOURCE_FILES "")
         set(SOURCES ${SOURCES}
             "macOS/main.mm"
             "macOS/AppDelegate.m"
@@ -62,7 +61,6 @@ if(APPLE)
         set_source_files_properties(${REFERENCE_IMAGES} PROPERTIES MACOSX_PACKAGE_LOCATION "Resources/ReferenceImages")
     endif()
     set(ADDITIONAL_LIBRARIES ${ADDITIONAL_LIBRARIES} PRIVATE ${JAVASCRIPTCORE_LIBRARY})
-    set(RESOURCE_FILES ${STORYBOARD})
 
     # Remove -Wall and -Werror from the debug flags to make simulators work.
     string(REPLACE "-Wall" "" CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG}")
@@ -213,6 +211,23 @@ if(APPLE)
     enable_objc_arc(Playground)
     set_property(TARGET Playground PROPERTY UNITY_BUILD false)
     set_property(TARGET Playground PROPERTY XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED YES)
+
+    # Copy scripts to app bundle using copy_if_different for incremental builds
+    if(NOT CMAKE_GENERATOR MATCHES "Xcode")
+        if(IOS)
+            set(SCRIPTS_DEST "$<TARGET_BUNDLE_DIR:Playground>/Scripts")
+        else()
+            set(SCRIPTS_DEST "$<TARGET_BUNDLE_DIR:Playground>/Contents/Resources/Scripts")
+        endif()
+        foreach(SCRIPT ${SCRIPTS} ${BABYLON_SCRIPTS} ${DEPENDENCIES})
+            get_filename_component(SCRIPT_NAME "${SCRIPT}" NAME)
+            add_custom_command(TARGET Playground POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E make_directory "${SCRIPTS_DEST}"
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${CMAKE_CURRENT_SOURCE_DIR}/${SCRIPT}" "${SCRIPTS_DEST}/${SCRIPT_NAME}"
+                COMMENT "Copying ${SCRIPT_NAME} to bundle")
+        endforeach()
+    endif()
 endif()
 
 if(WINDOWS_STORE)
