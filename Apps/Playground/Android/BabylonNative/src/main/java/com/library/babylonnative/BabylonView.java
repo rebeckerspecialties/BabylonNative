@@ -13,7 +13,6 @@ import android.widget.FrameLayout;
 public class BabylonView extends FrameLayout implements SurfaceHolder.Callback2, View.OnTouchListener {
     private static final FrameLayout.LayoutParams childViewLayoutParams = new FrameLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT);
     private static final String TAG = "BabylonView";
-    private boolean mViewReady = false;
     private final ViewDelegate mViewDelegate;
     private Activity mCurrentActivity;
     private final SurfaceView primarySurfaceView;
@@ -32,8 +31,6 @@ public class BabylonView extends FrameLayout implements SurfaceHolder.Callback2,
         this.addView(this.primarySurfaceView);
 
         this.mCurrentActivity = currentActivity;
-        SurfaceHolder holder = this.primarySurfaceView.getHolder();
-        holder.addCallback(this);
         setOnTouchListener(this);
         this.mViewDelegate = viewDelegate;
 
@@ -85,6 +82,8 @@ public class BabylonView extends FrameLayout implements SurfaceHolder.Callback2,
     }
 
     public void onResume() {
+        setVisibility(View.VISIBLE);
+        invalidate();
         Wrapper.activityOnResume();
     }
 
@@ -99,10 +98,7 @@ public class BabylonView extends FrameLayout implements SurfaceHolder.Callback2,
     public void surfaceCreated(SurfaceHolder holder) {
         Wrapper.surfaceCreated(holder.getSurface(), this.getContext());
         Wrapper.setCurrentActivity(this.mCurrentActivity);
-        if (!this.mViewReady) {
-            this.mViewDelegate.onViewReady();
-            this.mViewReady = true;
-        }
+        this.mViewDelegate.onViewReady();
     }
 
     /**
