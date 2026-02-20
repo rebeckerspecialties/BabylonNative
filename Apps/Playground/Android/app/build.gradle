@@ -24,7 +24,7 @@ android {
         applicationId "com.android.babylonnative.playground"
         minSdkVersion "${platformVersion}"
         targetSdkVersion 29
-        ndkVersion "23.1.7779620"
+        ndkVersion "28.0.12674087"
         if (project.hasProperty("NDK_VERSION")) {
             def NDKVersion = project.property("NDK_VERSION")
             ndkVersion  "${NDK_VERSION}"
@@ -43,8 +43,12 @@ android {
             // see https://reactnative.dev/docs/signed-apk-android.
             signingConfig signingConfigs.debug
             minifyEnabled true
+            shrinkResources true
             proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro"
-            debuggable true
+            debuggable false
+            ndk {
+                abiFilters "arm64-v8a"
+            }
         }
     }
 
@@ -125,15 +129,36 @@ task copyFiles {
     {
         from '../../../Dependencies'
         include "*.js"
+        include "*.json"
+        include "*.ttf"
         into 'src/main/assets/Scripts'
     }
     copy
     {
         from '../../Scripts'
         include "*.js"
+        include "*.json"
         into 'src/main/assets/Scripts'
     }
 }
 
 preBuild.dependsOn(copyFiles)
+
+// Stage sanitizer runtime libraries so they get packaged into the APK
+if (project.hasProperty('ENABLE_SANITIZERS')) {
+    task stageSanitizerRuntimes {
+        doLast {
+            def ndkDir = android.ndkDirectory
+            def clangLibDir = fileTree(dir: ndkDir, include: '**/lib/linux/*/libclang_rt.asan-*-android.so')
+            clangLibDir.each { File f ->
+                def abi = f.parentFile.name
+                copy {
+                    from f
+                    into "src/main/jniLibs/${abi}"
+                }
+            }
+        }
+    }
+    preBuild.dependsOn(stageSanitizerRuntimes)
+}
 

@@ -33,7 +33,7 @@ android {
 
         testInstrumentationRunner "android.support.test.runner.AndroidJUnitRunner"
         consumerProguardFiles "consumer-rules.pro"
-        ndkVersion "23.1.7779620"
+        ndkVersion "28.0.12674087"
         if (project.hasProperty("NDK_VERSION")) {
             def NDKVersion = project.property("NDK_VERSION")
             ndkVersion  "${NDK_VERSION}"
@@ -48,7 +48,8 @@ android {
                     "-DNAPI_JAVASCRIPT_ENGINE=${jsEngine}",
                     "-DBABYLON_NATIVE_BUILD_APPS=ON",
                     "-DCMAKE_UNITY_BUILD=${unity_build}",
-                    "-DBABYLON_DEBUG_TRACE=ON"
+                    "-DBABYLON_DEBUG_TRACE=ON",
+                    "-DENABLE_SANITIZERS=${project.hasProperty('ENABLE_SANITIZERS') ? 'ON' : 'OFF'}"
             }
         }
         ndk {
@@ -65,7 +66,7 @@ android {
 
     externalNativeBuild {
         cmake {
-            version '3.19.6+'
+            version '3.31.6'
             path 'CMakeLists.txt'
             buildStagingDirectory "../../../../Build/Android"
         }
@@ -77,9 +78,18 @@ android {
     }
 
     buildTypes {
+        debug {
+            debuggable true
+            jniDebuggable true
+        }
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            externalNativeBuild {
+                cmake {
+                    arguments "-DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON"
+                }
+            }
         }
     }
     compileOptions {
