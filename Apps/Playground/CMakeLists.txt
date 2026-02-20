@@ -27,10 +27,7 @@ if(APPLE)
     if(IOS)
         set(PLIST_FILE
             "${CMAKE_CURRENT_LIST_DIR}/iOS/Info.plist")
-        set(STORYBOARD
-            "${CMAKE_CURRENT_LIST_DIR}/iOS/Base.lproj/Main.storyboard"
-            "${CMAKE_CURRENT_LIST_DIR}/iOS/Base.lproj/LaunchScreen.storyboard")
-        set(RESOURCE_FILES ${STORYBOARD} ${SCRIPTS})
+        set(RESOURCE_FILES ${SCRIPTS})
         set(ADDITIONAL_LIBRARIES PRIVATE z NativeXr)
         set(SOURCES ${SOURCES}
             "iOS/AppDelegate.swift"
@@ -163,6 +160,7 @@ if(APPLE)
             RESOURCE "${RESOURCE_FILES}"
 
             XCODE_ATTRIBUTE_IPHONEOS_DEPLOYMENT_TARGET ${DEPLOYMENT_TARGET}
+            XCODE_ATTRIBUTE_SDKROOT "iphoneos"
             XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER "com.BabylonNative.Playground.iOS"
 
             XCODE_ATTRIBUTE_SWIFT_VERSION "4.0"
