@@ -9,6 +9,7 @@ import android.support.v4.content.ContextCompat;
 import android.view.View;
 
 import com.library.babylonnative.BabylonView;
+import com.library.babylonnative.Wrapper;
 
 public class PlaygroundActivity extends Activity implements BabylonView.ViewDelegate {
     BabylonView mView;
@@ -31,6 +32,12 @@ public class PlaygroundActivity extends Activity implements BabylonView.ViewDele
     protected void onResume() {
         super.onResume();
         mView.onResume();
+    }
+
+    @Override
+    protected void onDestroy() {
+        Wrapper.finishEngine();
+        super.onDestroy();
     }
 
     @Override
