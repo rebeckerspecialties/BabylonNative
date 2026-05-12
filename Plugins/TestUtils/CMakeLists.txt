@@ -1,15 +1,8 @@
-if(APPLE)
-    set(PLATFORM Apple)
-else()
-    set(PLATFORM ${BABYLON_NATIVE_PLATFORM})
-endif()
-
 set(SOURCES
     "Include/Babylon/Plugins/TestUtils.h"
     "Source/TestUtils.h"
     "Source/TestUtils.cpp"
-    "Source/TestUtilsImplData.h"
-    "Source/${PLATFORM}/TestUtilsImpl.${BABYLON_NATIVE_PLATFORM_IMPL_EXT}")
+    "Source/TestUtils_${BABYLON_NATIVE_PLATFORM}.${BABYLON_NATIVE_PLATFORM_IMPL_EXT}")
 
 add_library(TestUtils ${SOURCES})
 warnings_as_errors(TestUtils)
@@ -23,7 +16,20 @@ target_link_libraries(TestUtils
     PRIVATE GraphicsDevice
     PRIVATE GraphicsDeviceContext)
 
+if(BABYLON_NATIVE_PLUGIN_NATIVEENGINE_LOAD_IMAGES)
+    target_compile_definitions(TestUtils
+        PRIVATE BABYLON_NATIVE_PLUGIN_NATIVEENGINE_LOAD_IMAGES)
+    target_link_libraries(TestUtils
+        PRIVATE bimg
+        PRIVATE bimg_encode
+        PRIVATE bimg_decode)
+endif()
+
 target_compile_definitions(TestUtils PRIVATE GRAPHICS_API=${GRAPHICS_API})
+
+if(APPLE)
+    enable_objc_arc(TestUtils)
+endif()
 
 set_property(TARGET TestUtils PROPERTY FOLDER Plugins)
 source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${SOURCES})

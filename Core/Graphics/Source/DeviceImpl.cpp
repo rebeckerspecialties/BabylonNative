@@ -206,9 +206,11 @@ namespace Babylon::Graphics
             bgfx::renderFrame();
 
             // Initialize bgfx.
-            auto& init{m_state.Bgfx.InitState};
-            bgfx::setPlatformData(init.platformData);
-            bgfx::init(init);
+            const auto& init{m_state.Bgfx.InitState};
+            if (!bgfx::init(init))
+            {
+                throw std::runtime_error{"Failed to initialize bgfx."};
+            }
 
             m_state.Bgfx.Initialized = true;
             m_state.Bgfx.Dirty = false;
@@ -371,6 +373,11 @@ namespace Babylon::Graphics
         m_screenShotCallbacks.push(std::move(callback));
     }
 
+    void DeviceImpl::RequestCaptureNextFrame()
+    {
+        m_captureNextFrame.store(true);
+    }
+
     arcana::task<void, std::exception_ptr> DeviceImpl::ReadTextureAsync(bgfx::TextureHandle handle, gsl::span<uint8_t> data, uint8_t mipLevel)
     {
         arcana::task_completion_source<void, std::exception_ptr> completionSource{};
@@ -403,6 +410,11 @@ namespace Babylon::Graphics
         return viewId;
     }
 
+    bgfx::ViewId DeviceImpl::PeekNextViewId() const
+    {
+        return m_nextViewId.load();
+    }
+
     void DeviceImpl::UpdateBgfxState()
     {
         std::scoped_lock lock{m_state.Mutex};
@@ -410,8 +422,8 @@ namespace Babylon::Graphics
         {
             bgfx::setPlatformData(m_state.Bgfx.InitState.platformData);
 
-            // Ensure bgfx rebinds all texture information.
-            bgfx::discard();
+            // Discard the whole frame.
+            bgfx::frame(BGFX_FRAME_DISCARD);
 
             auto& res = m_state.Bgfx.InitState.resolution;
             bgfx::reset(res.width, res.height, res.reset);
@@ -460,7 +472,8 @@ namespace Babylon::Graphics
         RequestScreenShots();
 
         // Advance frame and render!
-        uint32_t frameNumber{bgfx::frame()};
+        const uint8_t frameFlags = m_captureNextFrame.exchange(false) ? BGFX_FRAME_DEBUG_CAPTURE : 0;
+        uint32_t frameNumber{bgfx::frame(frameFlags)};
 
         // Process read texture requests.
         while (!m_readTextureRequests.empty() && m_readTextureRequests.front().first <= frameNumber)

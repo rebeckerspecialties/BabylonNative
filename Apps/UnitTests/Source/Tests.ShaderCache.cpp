@@ -8,7 +8,11 @@
 #include <Babylon/Plugins/ShaderCache.h>
 #include <Babylon/ScriptLoader.h>
 
+#include "App.h"
+
 #include <chrono>
+#include <cstdlib>
+#include <filesystem>
 #include <optional>
 #include <future>
 #include <iostream>
@@ -28,25 +32,23 @@ TEST(ShaderCache, SaveAndLoad)
     device.StartRenderingCurrentFrame();
     update.Start();
 
-    std::promise<void> scriptIsDone{};
-    std::promise<void> sceneIsReady{};
-
     Babylon::AppRuntime::Options options{};
 
-    options.UnhandledExceptionHandler = [&scriptIsDone](const Napi::Error& error) {
+    options.UnhandledExceptionHandler = [](const Napi::Error& error) {
         std::cerr << "[Uncaught Error] " << Napi::GetErrorString(error) << std::endl;
-        std::cerr.flush();
-
-        scriptIsDone.set_exception(std::make_exception_ptr(std::exception{}));
+        std::quick_exit(1);
     };
 
     Babylon::AppRuntime runtime{options};
+
+    std::promise<void> scriptIsDone{};
+    std::promise<void> sceneIsReady{};
+
     runtime.Dispatch([&device, &sceneIsReady](Napi::Env env) {
         device.AddToJavaScript(env);
 
         Babylon::Polyfills::Console::Initialize(env, [](const char* message, auto) {
             std::cout << message << std::endl;
-            std::cout.flush();
         });
         Babylon::Polyfills::Window::Initialize(env);
         Babylon::Plugins::NativeEngine::Initialize(env);
@@ -77,18 +79,25 @@ TEST(ShaderCache, SaveAndLoad)
         update.Start();
     }
 
-    static const char* shaderCacheFileName = "shaderCache.bin";
+    const auto shaderCachePath = GetExecutableDirectory() / "shaderCache.bin";
+
     uint32_t shaderCount{};
     {
-        std::ofstream stream(shaderCacheFileName, std::ios::binary);
+        std::ofstream stream(shaderCachePath, std::ios::binary);
+        ASSERT_TRUE(stream.is_open()) << "Failed to open for write: " << shaderCachePath;
         shaderCount = Babylon::Plugins::ShaderCache::Save(stream);
         EXPECT_EQ(shaderCount, 1);
     }
     {
-        std::ifstream stream(shaderCacheFileName, std::ios::binary);
+        std::ifstream stream(shaderCachePath, std::ios::binary);
+        ASSERT_TRUE(stream.is_open()) << "Failed to open for read: " << shaderCachePath;
         auto deserializedCount = Babylon::Plugins::ShaderCache::Load(stream);
         EXPECT_EQ(deserializedCount, shaderCount);
     }
+    std::error_code ec;
+    const auto removed = std::filesystem::remove(shaderCachePath, ec);
+    EXPECT_FALSE(ec) << "Failed to remove " << shaderCachePath << ": " << ec.message();
+    EXPECT_TRUE(removed) << "Expected shader cache file to be removed: " << shaderCachePath;
 
     update.Finish();
     device.FinishRenderingCurrentFrame();

@@ -14,16 +14,18 @@
 
 #include <bgfx/bgfx.h>
 
+#ifdef BABYLON_NATIVE_PLUGIN_NATIVEENGINE_LOAD_IMAGES
 #include <bimg/bimg.h>
 #include <bimg/decode.h>
 #include <bimg/encode.h>
 
 #include <stb/stb_image_resize.h>
 #include <bx/math.h>
+#endif
 
 #include <cmath>
 
-#ifdef WEBP
+#if defined(BABYLON_NATIVE_PLUGIN_NATIVEENGINE_LOAD_IMAGES) && defined(WEBP)
 #include <webp/decode.h>
 #endif
 
@@ -73,6 +75,23 @@ namespace Babylon
             constexpr uint64_t SCREENMODE = BGFX_STATE_BLEND_FUNC_SEPARATE(BGFX_STATE_BLEND_ONE, BGFX_STATE_BLEND_INV_SRC_COLOR, BGFX_STATE_BLEND_ONE, BGFX_STATE_BLEND_INV_SRC_ALPHA);
         }
 
+        void FlipImage(gsl::span<uint8_t> image, uint32_t height)
+        {
+            const size_t rowPitch{image.size() / height};
+
+            std::vector<uint8_t> buffer(rowPitch);
+            for (size_t row = 0; row < height / 2; row++)
+            {
+                uint8_t* frontPtr{image.data() + (row * rowPitch)};
+                uint8_t* backPtr{image.data() + ((height - row - 1) * rowPitch)};
+
+                std::memcpy(buffer.data(), frontPtr, rowPitch);
+                std::memcpy(frontPtr, backPtr, rowPitch);
+                std::memcpy(backPtr, buffer.data(), rowPitch);
+            }
+        }
+
+#ifdef BABYLON_NATIVE_PLUGIN_NATIVEENGINE_LOAD_IMAGES
         static_assert(static_cast<bgfx::TextureFormat::Enum>(bimg::TextureFormat::Count) == bgfx::TextureFormat::Count);
         static_assert(static_cast<bgfx::TextureFormat::Enum>(bimg::TextureFormat::RGBA8) == bgfx::TextureFormat::RGBA8);
         static_assert(static_cast<bgfx::TextureFormat::Enum>(bimg::TextureFormat::RGB8) == bgfx::TextureFormat::RGB8);
@@ -98,22 +117,6 @@ namespace Babylon
                 transformFn(srcData, dstData);
                 srcData += srcBytesPerPixel;
                 dstData += dstBytesPerPixel;
-            }
-        }
-
-        void FlipImage(gsl::span<uint8_t> image, uint32_t height)
-        {
-            const size_t rowPitch{image.size() / height};
-
-            std::vector<uint8_t> buffer(rowPitch);
-            for (size_t row = 0; row < height / 2; row++)
-            {
-                uint8_t* frontPtr{image.data() + (row * rowPitch)};
-                uint8_t* backPtr{image.data() + ((height - row - 1) * rowPitch)};
-
-                std::memcpy(buffer.data(), frontPtr, rowPitch);
-                std::memcpy(frontPtr, backPtr, rowPitch);
-                std::memcpy(backPtr, buffer.data(), rowPitch);
             }
         }
 
@@ -251,13 +254,16 @@ namespace Babylon
         bimg::ImageContainer* PrepareImage(bx::AllocatorI& allocator, bimg::ImageContainer* image, bool invertY, bool srgb, bool generateMips)
         {
             assert(
+                image->m_format == bimg::TextureFormat::R8 ||
                 image->m_format == bimg::TextureFormat::R16 ||
                 image->m_format == bimg::TextureFormat::RGB8 ||
                 image->m_format == bimg::TextureFormat::RGBA8 ||
                 image->m_format == bimg::TextureFormat::RGBA16 ||
                 image->m_format == bimg::TextureFormat::RGBA16F ||
                 image->m_format == bimg::TextureFormat::RG16F ||
-                image->m_format == bimg::TextureFormat::RGBA32F);
+                image->m_format == bimg::TextureFormat::RG32F ||
+                image->m_format == bimg::TextureFormat::RGBA32F ||
+                image->m_format == bimg::TextureFormat::RGBA32U);
 
             assert(image->m_depth == 1);
             assert(image->m_numLayers == 1);
@@ -317,7 +323,7 @@ namespace Babylon
                 texture->Create2D(static_cast<uint16_t>(image->m_width), static_cast<uint16_t>(image->m_height), (image->m_numMips > 1), 1, Cast(image->m_format), flags);
             }
 
-            for (uint8_t mip = 0; mip < image->m_numMips; ++mip)
+            for (uint8_t mip = 0, numMips = image->m_numMips; mip < numMips; ++mip)
             {
                 bimg::ImageMip imageMip{};
                 if (bimg::imageGetRawData(*image, 0, mip, image->m_data, image->m_size, imageMip))
@@ -386,7 +392,7 @@ namespace Babylon
                 for (uint8_t side = 0; side < 6; ++side)
                 {
                     bimg::ImageContainer* image{images[side]};
-                    for (uint8_t mip = 0; mip < image->m_numMips; ++mip)
+                    for (uint8_t mip = 0, numMips = image->m_numMips; mip < numMips; ++mip)
                     {
                         bimg::ImageMip imageMip{};
                         if (bimg::imageGetRawData(*image, 0, mip, image->m_data, image->m_size, imageMip))
@@ -411,6 +417,7 @@ namespace Babylon
                 }
             }
         }
+#endif // BABYLON_NATIVE_PLUGIN_NATIVEENGINE_LOAD_IMAGES
 
         auto RenderTargetSamplesToBgfxMsaaFlag(uint32_t renderTargetSamples)
         {
@@ -1114,8 +1121,8 @@ namespace Babylon
     void NativeEngine::SetInt(NativeDataStream::Reader& data)
     {
         const auto& uniformInfo{*data.ReadPointer<UniformInfo>()};
-        const auto value{static_cast<float>(data.ReadInt32())};
-        m_currentProgram->SetUniform(uniformInfo.Handle, gsl::make_span(&value, 1));
+        const float values[] = {static_cast<float>(data.ReadInt32()), 0.f, 0.f, 0.f};
+        m_currentProgram->SetUniform(uniformInfo.Handle, values);
     }
 
     template<int size, typename arrayType>
@@ -1310,6 +1317,9 @@ namespace Babylon
 
     void NativeEngine::LoadTexture(const Napi::CallbackInfo& info)
     {
+#ifndef BABYLON_NATIVE_PLUGIN_NATIVEENGINE_LOAD_IMAGES
+        throw Napi::Error::New(info.Env(), "Image loading is disabled in this build (BABYLON_NATIVE_PLUGIN_NATIVEENGINE_LOAD_IMAGES=OFF).");
+#else
         const auto texture = info[0].As<Napi::Pointer<Graphics::Texture>>().Get();
         const auto data = info[1].As<Napi::TypedArray>();
         const auto generateMips = info[2].As<Napi::Boolean>().Value();
@@ -1337,6 +1347,7 @@ namespace Babylon
                     onSuccessRef.Call({});
                 }
             });
+#endif
     }
 
     void NativeEngine::CopyTexture(NativeDataStream::Reader& data)
@@ -1346,11 +1357,15 @@ namespace Babylon
         const auto textureSource = data.ReadPointer<Graphics::Texture>();
         const auto textureDestination = data.ReadPointer<Graphics::Texture>();
 
-        GetBoundFrameBuffer(*encoder).Blit(*encoder, textureDestination->Handle(), 0, 0, textureSource->Handle());
+        const bgfx::ViewId blitView = m_deviceContext.PeekNextViewId();
+        encoder->blit(blitView, textureDestination->Handle(), 0, 0, textureSource->Handle());
     }
 
     void NativeEngine::LoadRawTexture(const Napi::CallbackInfo& info)
     {
+#ifndef BABYLON_NATIVE_PLUGIN_NATIVEENGINE_LOAD_IMAGES
+        throw Napi::Error::New(info.Env(), "Image loading is disabled in this build (BABYLON_NATIVE_PLUGIN_NATIVEENGINE_LOAD_IMAGES=OFF).");
+#else
         const auto texture{info[0].As<Napi::Pointer<Graphics::Texture>>().Get()};
         const auto data{info[1].As<Napi::TypedArray>()};
         const auto width{static_cast<uint16_t>(info[2].As<Napi::Number>().Uint32Value())};
@@ -1368,10 +1383,14 @@ namespace Babylon
         bimg::ImageContainer* image{bimg::imageAlloc(&Graphics::DeviceContext::GetDefaultAllocator(), format, width, height, 1, 1, false, false, bytes)};
         image = PrepareImage(Graphics::DeviceContext::GetDefaultAllocator(), image, invertY, false, generateMips);
         LoadTextureFromImage(texture, image, false);
+#endif
     }
 
     void NativeEngine::LoadRawTexture2DArray(const Napi::CallbackInfo& info)
     {
+#ifndef BABYLON_NATIVE_PLUGIN_NATIVEENGINE_LOAD_IMAGES
+        throw Napi::Error::New(info.Env(), "Image loading is disabled in this build (BABYLON_NATIVE_PLUGIN_NATIVEENGINE_LOAD_IMAGES=OFF).");
+#else
         const auto texture{info[0].As<Napi::Pointer<Graphics::Texture>>().Get()};
         const auto data = info[1].As<Napi::TypedArray>();
         const auto width{static_cast<uint16_t>(info[2].As<Napi::Number>().Uint32Value())};
@@ -1413,10 +1432,14 @@ namespace Babylon
                 texture->Update2D(i, 0, 0, 0, width, height, dataCopy);
             }
         }
+#endif
     }
 
     void NativeEngine::LoadCubeTexture(const Napi::CallbackInfo& info)
     {
+#ifndef BABYLON_NATIVE_PLUGIN_NATIVEENGINE_LOAD_IMAGES
+        throw Napi::Error::New(info.Env(), "Image loading is disabled in this build (BABYLON_NATIVE_PLUGIN_NATIVEENGINE_LOAD_IMAGES=OFF).");
+#else
         const auto texture = info[0].As<Napi::Pointer<Graphics::Texture>>().Get();
         const auto data{info[1].As<Napi::Array>()};
         const auto generateMips{info[2].As<Napi::Boolean>().Value()};
@@ -1453,10 +1476,14 @@ namespace Babylon
                     onSuccessRef.Call({});
                 }
             });
+#endif
     }
 
     void NativeEngine::LoadCubeTextureWithMips(const Napi::CallbackInfo& info)
     {
+#ifndef BABYLON_NATIVE_PLUGIN_NATIVEENGINE_LOAD_IMAGES
+        throw Napi::Error::New(info.Env(), "Image loading is disabled in this build (BABYLON_NATIVE_PLUGIN_NATIVEENGINE_LOAD_IMAGES=OFF).");
+#else
         const auto texture = info[0].As<Napi::Pointer<Graphics::Texture>>().Get();
         const auto data{info[1].As<Napi::Array>()};
         const auto invertY{info[2].As<Napi::Boolean>().Value()};
@@ -1497,6 +1524,7 @@ namespace Babylon
                     onSuccessRef.Call({});
                 }
             });
+#endif
     }
 
     Napi::Value NativeEngine::GetTextureWidth(const Napi::CallbackInfo& info)
@@ -1672,12 +1700,16 @@ namespace Babylon
                     // If the source texture format does not match the target texture format, convert it.
                     if (targetTextureInfo.format != sourceTextureInfo.format)
                     {
+#ifndef BABYLON_NATIVE_PLUGIN_NATIVEENGINE_LOAD_IMAGES
+                        throw std::runtime_error{"Texture format conversion is disabled in this build (BABYLON_NATIVE_PLUGIN_NATIVEENGINE_LOAD_IMAGES=OFF)."};
+#else
                         std::vector<uint8_t> convertedTextureBuffer(targetTextureInfo.storageSize);
                         if (!bimg::imageConvert(&Graphics::DeviceContext::GetDefaultAllocator(), convertedTextureBuffer.data(), bimg::TextureFormat::Enum(targetTextureInfo.format), textureBuffer.data(), bimg::TextureFormat::Enum(sourceTextureInfo.format), sourceTextureInfo.width, sourceTextureInfo.height, /*depth*/ 1))
                         {
-                            throw std::runtime_error{"Texture conversion to RBGA8 failed."};
+                            throw std::runtime_error{"Texture conversion to RGBA8 failed."};
                         }
                         textureBuffer = convertedTextureBuffer;
+#endif
                     }
 
                     // Ensure the final texture buffer has the expected size.
@@ -1741,7 +1773,13 @@ namespace Babylon
 
         if (texture != nullptr)
         {
-            attachments[numAttachments++].init(texture->Handle());
+            const bgfx::Caps* caps = bgfx::getCaps();
+            // bgfx validation now asserts when trying to use BGFX_RESOLVE_AUTO_GEN_MIPS with a texture that doesn't have the BGFX_CAPS_FORMAT_TEXTURE_MIP_AUTOGEN flag,
+            // but before it would just ignore the flag and not generate mips without any warning. This prevents validation assert, but rendering might be broken if autogen
+            // mips were expected. Basically this change preserves previous behavior.
+            attachments[numAttachments++].init(texture->Handle(), bgfx::Access::Write, 0, 1, 0
+                , 0 != (caps->formats[texture->Format()] & BGFX_CAPS_FORMAT_TEXTURE_MIP_AUTOGEN) ? BGFX_RESOLVE_AUTO_GEN_MIPS : BGFX_RESOLVE_NONE
+                );
         }
 
         bgfx::TextureHandle depthStencilTextureHandle = BGFX_INVALID_HANDLE;
@@ -1771,7 +1809,7 @@ namespace Babylon
             // only allows mipmaps resolve step when mipmapping is asked and for the color texture, not the depth.
             // https://github.com/bkaradzic/bgfx/blob/2c21f68998595fa388e25cb6527e82254d0e9bff/src/renderer_d3d11.cpp#L4525
             depthStencilAttachmentIndex = numAttachments;
-            attachments[numAttachments++].init(depthStencilTextureHandle);
+            attachments[numAttachments++].init(depthStencilTextureHandle, bgfx::Access::Write, 0, 1, 0, BGFX_RESOLVE_NONE);
         }
 
         bgfx::FrameBufferHandle frameBufferHandle = bgfx::createFrameBuffer(numAttachments, attachments.data());
@@ -1956,6 +1994,9 @@ namespace Babylon
 
     Napi::Value NativeEngine::CreateImageBitmap(const Napi::CallbackInfo& info)
     {
+#ifndef BABYLON_NATIVE_PLUGIN_NATIVEENGINE_LOAD_IMAGES
+        throw Napi::Error::New(info.Env(), "Image loading is disabled in this build (BABYLON_NATIVE_PLUGIN_NATIVEENGINE_LOAD_IMAGES=OFF).");
+#else
         const Napi::Env env{info.Env()};
         bimg::ImageContainer* image{nullptr};
         bool allocatedImage{false};
@@ -2011,10 +2052,14 @@ namespace Babylon
         }
 
         return imageBitmap;
+#endif
     }
 
     Napi::Value NativeEngine::ResizeImageBitmap(const Napi::CallbackInfo& info)
     {
+#ifndef BABYLON_NATIVE_PLUGIN_NATIVEENGINE_LOAD_IMAGES
+        throw Napi::Error::New(info.Env(), "Image loading is disabled in this build (BABYLON_NATIVE_PLUGIN_NATIVEENGINE_LOAD_IMAGES=OFF).");
+#else
         const auto imageBitmap = info[0].As<Napi::Object>();
         const auto bufferWidth = info[1].As<Napi::Number>().Uint32Value();
         const auto bufferHeight = info[2].As<Napi::Number>().Uint32Value();
@@ -2059,6 +2104,7 @@ namespace Babylon
         }
         bimg::imageFree(image);
         return Napi::Value::From(env, outputData);
+#endif
     }
 
     void NativeEngine::SetRenderResetCallback(const Napi::CallbackInfo& info)

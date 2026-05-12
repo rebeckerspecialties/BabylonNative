@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.18)
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 project(BabylonNative)
@@ -18,21 +18,23 @@ target_include_directories(BabylonNativeJNI
     PRIVATE ${PLAYGROUND_DIR})
 
 target_link_libraries(BabylonNativeJNI
-    android
-    log
-    -lz
-    AndroidExtensions
-    AppRuntime
-    Blob
-    Canvas
-    Console
-    GraphicsDevice
-    NativeInput
-    NativeWebGPU
-    ScriptLoader
-    URL
-    Window
-    XMLHttpRequest)
+    PRIVATE android
+    PRIVATE log
+    PRIVATE -lz
+    PRIVATE AndroidExtensions
+    PRIVATE AppRuntime
+    PRIVATE Blob
+    PRIVATE Canvas
+    PRIVATE Console
+    PRIVATE GraphicsDevice
+    PRIVATE NativeInput
+    PRIVATE NativeWebGPU
+    PRIVATE Performance
+    PRIVATE ScriptLoader
+    PRIVATE TextDecoder
+    PRIVATE URL
+    PRIVATE Window
+    PRIVATE XMLHttpRequest)
 
 target_compile_definitions(BabylonNativeJNI
     PRIVATE BABYLON_NATIVE_PLAYGROUND_HAS_CANVAS=1)

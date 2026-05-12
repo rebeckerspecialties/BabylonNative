@@ -56,7 +56,7 @@ if(APPLE)
         set(STORYBOARD "${CMAKE_CURRENT_LIST_DIR}/macOS/Base.lproj/Main.storyboard")
         set(RESOURCE_FILES ${STORYBOARD})
         set(SOURCES ${SOURCES}
-            "macOS/main.m"
+            "macOS/main.mm"
             "macOS/AppDelegate.m"
             "macOS/AppDelegate.h"
             "macOS/ViewController.mm"
@@ -114,8 +114,7 @@ target_compile_definitions(Playground PRIVATE UNICODE)
 target_compile_definitions(Playground PRIVATE _UNICODE)
 
 if(WINDOWS_STORE)
-    target_compile_options(Playground PRIVATE /ZW)
-    target_compile_options(Playground PRIVATE /await)
+    target_link_libraries(Playground PRIVATE windowsapp)
 endif()
 
 target_include_directories(Playground PRIVATE ".")
@@ -139,7 +138,9 @@ target_link_libraries(Playground
     PRIVATE GraphicsDevice
     PRIVATE NativeInput
     PRIVATE NativeWebGPU
+    PRIVATE Performance
     PRIVATE ScriptLoader
+    PRIVATE TextDecoder
     PRIVATE URL
     PRIVATE Window
     PRIVATE XMLHttpRequest
@@ -170,6 +171,14 @@ if(APPLE)
     endforeach()
 endif()
 
+if(ANGLE_LIBEGL)
+    add_custom_command(TARGET Playground POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${ANGLE_LIBEGL}" "$<TARGET_FILE_DIR:Playground>"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${ANGLE_LIBGLESV2}" "$<TARGET_FILE_DIR:Playground>"
+        COMMENT "Copying ANGLE libraries to Playground output directory"
+    )
+endif()
+
 if (UNIX AND NOT APPLE AND NOT ANDROID)
     # Ubuntu mixes old experimental header and new runtime libraries
     # Resulting in crash at runtime for std::filesystem
@@ -189,7 +198,6 @@ if(APPLE)
         set_target_properties(Playground PROPERTIES
             MACOSX_BUNDLE true
             MACOSX_BUNDLE_INFO_PLIST "${PLIST_FILE}"
-            XCODE_ATTRIBUTE_CLANG_ENABLE_OBJC_ARC YES
             RESOURCE "${RESOURCE_FILES}"
 
             XCODE_ATTRIBUTE_IPHONEOS_DEPLOYMENT_TARGET ${DEPLOYMENT_TARGET}
@@ -216,7 +224,6 @@ if(APPLE)
         set_target_properties(Playground PROPERTIES
             MACOSX_BUNDLE true
             MACOSX_BUNDLE_INFO_PLIST "${PLIST_FILE}"
-            XCODE_ATTRIBUTE_CLANG_ENABLE_OBJC_ARC YES
             RESOURCE "${RESOURCE_FILES}"
 
             XCODE_ATTRIBUTE_XROS_DEPLOYMENT_TARGET ${DEPLOYMENT_TARGET}
@@ -243,11 +250,10 @@ if(APPLE)
         set_target_properties(Playground PROPERTIES
             MACOSX_BUNDLE true
             MACOSX_BUNDLE_INFO_PLIST "${PLIST_FILE}"
-            XCODE_ATTRIBUTE_CLANG_ENABLE_OBJC_ARC YES
             RESOURCE "${RESOURCE_FILES}"
             FOLDER "Playground")
     endif()
-    set_property(TARGET Playground PROPERTY UNITY_BUILD false)
+    enable_objc_arc(Playground)
     set_property(TARGET Playground PROPERTY XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED YES)
 endif()
 
@@ -289,5 +295,3 @@ source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${REFERENCE_IMAGES})
 source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${SCRIPTS})
 source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${SOURCES})
 set_property(DIRECTORY ${CMAKE_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT Playground)
-
-set_property(TARGET Playground PROPERTY XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED YES)

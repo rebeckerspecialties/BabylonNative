@@ -35,8 +35,7 @@ if(ANDROID)
 elseif(APPLE)
     set(ADDITIONAL_LIBRARIES
         PRIVATE "-framework CoreMedia -framework AVFoundation")
-    set_target_properties(NativeCamera PROPERTIES
-        XCODE_ATTRIBUTE_CLANG_ENABLE_OBJC_ARC YES)
+    enable_objc_arc(NativeCamera)
 endif()
 
 target_link_libraries(NativeCamera

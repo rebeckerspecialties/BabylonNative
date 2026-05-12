@@ -35,7 +35,7 @@ namespace
     {
         char url[1024];
         DWORD length = ARRAYSIZE(url);
-        HRESULT hr = UrlCreateFromPathA(path.u8string().data(), url, &length, 0);
+        HRESULT hr = UrlCreateFromPathA(reinterpret_cast<const char*>(path.u8string().data()), url, &length, 0);
         if (FAILED(hr))
         {
             throw std::exception("Failed to create url from path", hr);
@@ -332,7 +332,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         case WM_DESTROY:
         {
             Uninitialize();
-            PostQuitMessage(Babylon::Plugins::TestUtils::errorCode);
+            PostQuitMessage(0);
             break;
         }
         case WM_KEYDOWN:

@@ -3,13 +3,16 @@
 #include <Babylon/AppRuntime.h>
 #include <Babylon/DebugTrace.h>
 #include <Babylon/Graphics/Device.h>
+#include <Babylon/PerfTrace.h>
 #include <Babylon/ScriptLoader.h>
 
-#include <Babylon/Plugins/NativeWebGPU.h>
 #include <Babylon/Plugins/NativeInput.h>
+#include <Babylon/Plugins/NativeWebGPU.h>
 
 #include <Babylon/Polyfills/Blob.h>
 #include <Babylon/Polyfills/Console.h>
+#include <Babylon/Polyfills/Performance.h>
+#include <Babylon/Polyfills/TextDecoder.h>
 #include <Babylon/Polyfills/URL.h>
 #include <Babylon/Polyfills/Window.h>
 #include <Babylon/Polyfills/XMLHttpRequest.h>
@@ -44,6 +47,7 @@ AppContext::AppContext(
 {
     Babylon::DebugTrace::EnableDebugTrace(true);
     Babylon::DebugTrace::SetTraceOutput(debugLog);
+    Babylon::PerfTrace::SetLevel(Babylon::PerfTrace::Level::Mark);
 
     Babylon::Graphics::Configuration graphicsConfig{};
     graphicsConfig.Window = window;
@@ -71,13 +75,9 @@ AppContext::AppContext(
     // Initialization ordering guarantee: AppRuntime::Dispatch uses a FIFO
     // WorkQueue. This callback runs on the JS thread before any ScriptLoader
     // work because ScriptLoader also dispatches through the same WorkQueue,
-    // and it is constructed after this Dispatch call (line 99). This means
-    // navigator.gpu, _native.Canvas, and all other N-API modules are fully
-    // available before any user JavaScript executes.
-    //
-    // Embedders do NOT need defensive polling loops or readiness promises to
-    // wait for these APIs. Simply call Initialize() in the Dispatch callback,
-    // then load scripts via ScriptLoader — the ordering is guaranteed.
+    // and it is constructed after this Dispatch call. This means navigator.gpu,
+    // _native.Canvas, and all other N-API modules are fully available before any
+    // user JavaScript executes.
     m_runtime->Dispatch([this, debugLog, additionalInit = std::move(additionalInit)](Napi::Env env) {
         m_device->AddToJavaScript(env);
 
@@ -92,12 +92,13 @@ AppContext::AppContext(
             debugLog(ss.str().data());
         });
 
+        Babylon::Polyfills::Performance::Initialize(env);
         Babylon::Polyfills::Window::Initialize(env);
+        Babylon::Polyfills::TextDecoder::Initialize(env);
         Babylon::Polyfills::URL::Initialize(env);
         Babylon::Polyfills::XMLHttpRequest::Initialize(env);
 
         m_input = &Babylon::Plugins::NativeInput::CreateForJavaScript(env);
-
         Babylon::Plugins::NativeWebGPU::Initialize(env);
 
         if (additionalInit)
@@ -108,6 +109,8 @@ AppContext::AppContext(
 
     m_scriptLoader.emplace(*m_runtime);
     m_scriptLoader->LoadScript("app:///Scripts/ammo.js");
+    // Commenting out recast.js for now because v8jsi is incompatible with asm.js.
+    // m_scriptLoader->LoadScript("app:///Scripts/recast.js");
     m_scriptLoader->LoadScript("app:///Scripts/babylon.max.js");
     m_scriptLoader->LoadScript("app:///Scripts/babylonjs.loaders.js");
     m_scriptLoader->LoadScript("app:///Scripts/babylonjs.materials.js");
@@ -125,6 +128,9 @@ AppContext::~AppContext()
     }
 
     m_scriptLoader.reset();
+#if defined(BABYLON_NATIVE_PLAYGROUND_HAS_CANVAS)
+    m_canvas.reset();
+#endif
     m_input = {};
     m_runtime.reset();
     m_deviceUpdate.reset();

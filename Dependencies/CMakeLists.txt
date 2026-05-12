@@ -42,7 +42,14 @@ set(ENABLE_HLSL OFF)
 set(ENABLE_OPT OFF)
 set(ENABLE_CTEST OFF)
 set(SKIP_GLSLANG_INSTALL ON)
-set(ENABLE_GLSLANG_WEBMIN ON)
+# BABYLON_NATIVE_DISABLE_WEBMIN is used to disable WebMin in both glslang and SPIRV-Cross.
+# This flag should be removed when the code coverage in these library corresponds to exactly what we use in Babylon.js
+# and webGL2 glsl.
+if(BABYLON_NATIVE_DISABLE_WEBMIN)
+    set(ENABLE_GLSLANG_WEBMIN OFF)
+else()
+    set(ENABLE_GLSLANG_WEBMIN ON)
+endif()
 set(ENABLE_GLSLANG_WEBMIN_DEVEL OFF)
 
 if(NOT TARGET glslang)
@@ -89,9 +96,50 @@ if(TARGET AppRuntime)
     set_property(TARGET AppRuntime PROPERTY UNITY_BUILD false)
 endif()
 
-if(WIN32)
-    # UrlLib does not support unity build on win32
-    set_property(TARGET UrlLib PROPERTY UNITY_BUILD false)
+# --------------------------------------------------
+# metal-cpp
+# --------------------------------------------------
+if(APPLE OR BABYLON_NATIVE_BUILD_SOURCETREE)
+    FetchContent_MakeAvailable_With_Message(metal-cpp)
+endif()
+
+if(APPLE)
+    # Generate a single header.
+    find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    set(METAL_CPP_GENERATED_DIR "${CMAKE_BINARY_DIR}/metal-cpp")
+    execute_process(
+        COMMAND ${Python3_EXECUTABLE}
+            "${metal-cpp_SOURCE_DIR}/SingleHeader/MakeSingleHeader.py"
+            "${metal-cpp_SOURCE_DIR}/Foundation/Foundation.hpp"
+            "${metal-cpp_SOURCE_DIR}/Metal/Metal.hpp"
+            "${metal-cpp_SOURCE_DIR}/QuartzCore/QuartzCore.hpp"
+            -o "${METAL_CPP_GENERATED_DIR}/Include/Metal/Metal.hpp"
+        RESULT_VARIABLE METAL_CPP_RESULT)
+    if(NOT METAL_CPP_RESULT EQUAL 0)
+        message(FATAL_ERROR "Failed to generate metal-cpp single header")
+    endif()
+
+    # Generate source that includes the single header with the necessary implementation defines.
+    file(WRITE "${METAL_CPP_GENERATED_DIR}/Source/Metal.cpp"
+        "#define NS_PRIVATE_IMPLEMENTATION\n"
+        "#define MTL_PRIVATE_IMPLEMENTATION\n"
+        "#define CA_PRIVATE_IMPLEMENTATION\n"
+        "#include <Metal/Metal.hpp>\n")
+
+    set(SOURCES
+        "${METAL_CPP_GENERATED_DIR}/Include/Metal/Metal.hpp"
+        "${METAL_CPP_GENERATED_DIR}/Source/Metal.cpp")
+
+    add_library(metal-cpp ${SOURCES})
+    target_include_directories(metal-cpp SYSTEM PUBLIC "${METAL_CPP_GENERATED_DIR}/Include")
+    target_link_libraries(metal-cpp
+        PRIVATE "-framework Foundation"
+        PRIVATE "-framework Metal"
+        PRIVATE "-framework QuartzCore")
+
+    source_group(TREE "${metal-cpp_SOURCE_DIR}" FILES ${METAL_CPP_HEADERS})
+    source_group(TREE "${METAL_CPP_GENERATED_DIR}" FILES ${SOURCES})
+    set_property(TARGET metal-cpp PROPERTY FOLDER Dependencies)
 endif()
 
 # --------------------------------------------------
@@ -104,7 +152,12 @@ set(SPIRV_CROSS_ENABLE_REFLECT OFF)
 set(SPIRV_CROSS_ENABLE_C_API OFF)
 set(SPIRV_CROSS_ENABLE_UTIL OFF)
 set(SPIRV_CROSS_SKIP_INSTALL ON)
-set(SPIRV_CROSS_ENABLE_WEBMIN ON)
+# BABYLON_NATIVE_DISABLE_WEBMIN : see comment in section above.
+if(BABYLON_NATIVE_DISABLE_WEBMIN)
+    set(SPIRV_CROSS_ENABLE_WEBMIN OFF)
+else()
+    set(SPIRV_CROSS_ENABLE_WEBMIN ON)
+endif()
 if(NOT GRAPHICS_API STREQUAL "OpenGL")
     set(SPIRV_CROSS_ENABLE_GLSL OFF)
 endif()
@@ -144,8 +197,46 @@ if(TARGET MachineIndependent)
 endif()
 
 # --------------------------------------------------
+# WebP
+# --------------------------------------------------
+if(BABYLON_NATIVE_PLUGIN_NATIVEENGINE_WEBP)
+    set(WEBP_BUILD_ANIM_UTILS OFF)
+    set(WEBP_BUILD_CWEBP OFF)
+    set(WEBP_BUILD_DWEBP OFF)
+    set(WEBP_BUILD_GIF2WEBP OFF)
+    set(WEBP_BUILD_IMG2WEBP OFF)
+    set(WEBP_BUILD_VWEBP OFF)
+    set(WEBP_BUILD_WEBPINFO OFF)
+    set(WEBP_BUILD_LIBWEBPMUX OFF)
+    set(WEBP_BUILD_WEBPMUX OFF)
+    set(WEBP_BUILD_EXTRAS OFF)
+    FetchContent_MakeAvailable_With_Message(libwebp)
+
+    set_property(TARGET sharpyuv PROPERTY FOLDER Dependencies/libwebp)
+    set_property(TARGET webp PROPERTY FOLDER Dependencies/libwebp)
+    set_property(TARGET webpdecode PROPERTY FOLDER Dependencies/libwebp)
+    set_property(TARGET webpdecoder PROPERTY FOLDER Dependencies/libwebp)
+    set_property(TARGET webpdemux PROPERTY FOLDER Dependencies/libwebp)
+    set_property(TARGET webpdsp PROPERTY FOLDER Dependencies/libwebp)
+    set_property(TARGET webpdspdecode PROPERTY FOLDER Dependencies/libwebp)
+    set_property(TARGET webpencode PROPERTY FOLDER Dependencies/libwebp)
+    set_property(TARGET webputils PROPERTY FOLDER Dependencies/libwebp)
+    set_property(TARGET webputilsdecode PROPERTY FOLDER Dependencies/libwebp)
+endif()
+
+# --------------------------------------------------
 # WindowsAppSDK
 # --------------------------------------------------
 if(WINDOWS_STORE)
     add_subdirectory(WindowsAppSDK)
+endif()
+
+# --------------------------------------------------
+# xr
+# --------------------------------------------------
+# Currently supported on Android via ARCore, and iOS via ARKit.
+if((BABYLON_NATIVE_PLUGIN_NATIVEXR AND (ANDROID OR IOS)) OR BABYLON_NATIVE_BUILD_SOURCETREE)
+    add_subdirectory(xr)
+    set_property(TARGET xr PROPERTY FOLDER Dependencies/xr)
+    warnings_as_errors(xr)
 endif()

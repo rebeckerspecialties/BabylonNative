@@ -2,13 +2,20 @@
 
 #include <bgfx/bgfx.h>
 #include <bgfx/platform.h>
+#ifdef BABYLON_NATIVE_PLUGIN_NATIVEENGINE_LOAD_IMAGES
 #include <bimg/decode.h>
 #include <bimg/encode.h>
+#endif
 #include <bx/file.h>
-#include <functional>
-#include <sstream>
+
 #include <Babylon/JsRuntime.h>
 #include <Babylon/Graphics/DeviceContext.h>
+#include <Babylon/Graphics/Platform.h>
+
+#include <functional>
+#include <gsl/span>
+#include <memory>
+#include <sstream>
 
 #define STRINGIZEX(x) #x
 #define STRINGIZE(x) STRINGIZEX(x)
@@ -22,6 +29,9 @@ namespace Babylon::Plugins::Internal
 
     void TestUtils::WritePNG(const Napi::CallbackInfo& info)
     {
+#ifndef BABYLON_NATIVE_PLUGIN_NATIVEENGINE_LOAD_IMAGES
+        throw Napi::Error::New(info.Env(), "Image loading is disabled in this build (BABYLON_NATIVE_PLUGIN_NATIVEENGINE_LOAD_IMAGES=OFF).");
+#else
         const auto buffer = info[0].As<Napi::Uint8Array>();
         const auto width = info[1].As<Napi::Number>().Uint32Value();
         const auto height = info[2].As<Napi::Number>().Uint32Value();
@@ -43,10 +53,14 @@ namespace Babylon::Plugins::Internal
             bimg::imageWritePng(&writer, width, height, width * 4, buffer.Data(), bimg::TextureFormat::RGBA8, false);
             writer.close();
         }
+#endif
     }
 
     Napi::Value TestUtils::DecodeImage(const Napi::CallbackInfo& info)
     {
+#ifndef BABYLON_NATIVE_PLUGIN_NATIVEENGINE_LOAD_IMAGES
+        throw Napi::Error::New(info.Env(), "Image loading is disabled in this build (BABYLON_NATIVE_PLUGIN_NATIVEENGINE_LOAD_IMAGES=OFF).");
+#else
         Image* image = new Image;
         const auto buffer = info[0].As<Napi::ArrayBuffer>();
 
@@ -54,10 +68,14 @@ namespace Babylon::Plugins::Internal
 
         auto finalizer = [](Napi::Env, Image* image) { delete image; };
         return Napi::External<Image>::New(info.Env(), image, std::move(finalizer));
+#endif
     }
 
     Napi::Value TestUtils::GetImageData(const Napi::CallbackInfo& info)
     {
+#ifndef BABYLON_NATIVE_PLUGIN_NATIVEENGINE_LOAD_IMAGES
+        throw Napi::Error::New(info.Env(), "Image loading is disabled in this build (BABYLON_NATIVE_PLUGIN_NATIVEENGINE_LOAD_IMAGES=OFF).");
+#else
         const auto imageData = info[0].As<Napi::External<Image>>().Data();
 
         if (!imageData || !imageData->m_Image || !imageData->m_Image->m_size)
@@ -70,6 +88,7 @@ namespace Babylon::Plugins::Internal
         memcpy(data.Data(), ptr, imageData->m_Image->m_size);
 
         return Napi::Value::From(info.Env(), data);
+#endif
     }
 
     void TestUtils::GetFrameBufferData(const Napi::CallbackInfo& info)
@@ -78,11 +97,25 @@ namespace Babylon::Plugins::Internal
 
         auto callbackPtr{ std::make_shared<Napi::FunctionReference>(Napi::Persistent(callback)) };
         m_deviceContext.RequestScreenShot([this, callbackPtr{ std::move(callbackPtr) }](std::vector<uint8_t> array) {
-            m_runtime.Dispatch([callbackPtr{ std::move(callbackPtr) }, array{ std::move(array) }](Napi::Env env) {
-                auto arrayBuffer{ Napi::ArrayBuffer::New(env, const_cast<uint8_t*>(array.data()), array.size()) };
-                auto typedArray{ Napi::Uint8Array::New(env, array.size(), arrayBuffer, 0) };
+            m_runtime.Dispatch([callbackPtr{ std::move(callbackPtr) }, array{ std::move(array) }](Napi::Env env) mutable {
+                auto span = gsl::span<uint8_t>{array};
+                auto arrayBuffer{ Napi::ArrayBuffer::New(env, span.data(), span.size(), [array = std::move(array)](Napi::Env, void*) {}) };
+                auto typedArray{ Napi::Uint8Array::New(env, span.size(), arrayBuffer, 0) };
                 callbackPtr->Value().Call({ typedArray });
-                });
             });
+        });
+    }
+
+    void TestUtils::CaptureNextFrame(const Napi::CallbackInfo& /*info*/)
+    {
+        m_deviceContext.RequestCaptureNextFrame();
+    }
+}
+
+namespace Babylon::Plugins::TestUtils
+{
+    void BABYLON_API Initialize(Napi::Env env, Graphics::WindowT window)
+    {
+        Internal::TestUtils::CreateInstance(env, window);
     }
 }

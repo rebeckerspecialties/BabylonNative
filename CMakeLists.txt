@@ -19,11 +19,11 @@ include(FetchContent)
 
 FetchContent_Declare(AndroidExtensions
     GIT_REPOSITORY https://github.com/BabylonJS/AndroidExtensions.git
-    GIT_TAG 2d5af72259cc73e5f249d3c99bee2010be9cb042
+    GIT_TAG 2e85a8d43b89246c460112c9e5546ad54b6e87b4
     EXCLUDE_FROM_ALL)
 FetchContent_Declare(arcana.cpp
     GIT_REPOSITORY https://github.com/microsoft/arcana.cpp.git
-    GIT_TAG c02527c32d51b6b3ffeda36f8cf140d2e1c60bb9
+    GIT_TAG b9bf9d85fce37d5fc9dbfc4a4dc5e1531bee215a
     EXCLUDE_FROM_ALL)
 FetchContent_Declare(arcore-android-sdk
     GIT_REPOSITORY https://github.com/google-ar/arcore-android-sdk.git
@@ -35,11 +35,11 @@ FetchContent_Declare(base-n
     EXCLUDE_FROM_ALL)
 FetchContent_Declare(CMakeExtensions
     GIT_REPOSITORY https://github.com/BabylonJS/CMakeExtensions.git
-    GIT_TAG ea28b7689530bfdc4905806f27ecf7e8ed4b5419
+    GIT_TAG 631780e42886e5f12bfd1a5568c7395f1d657f43
     EXCLUDE_FROM_ALL)
 FetchContent_Declare(glslang
     GIT_REPOSITORY https://github.com/BabylonJS/glslang.git
-    GIT_TAG 39a80699a315cb7f66c4ab3180edd4e2910fab28
+    GIT_TAG 284e4301e5a6b44b279635276588db7cdd942624
     EXCLUDE_FROM_ALL)
 FetchContent_Declare(ios-cmake
     GIT_REPOSITORY https://github.com/leetal/ios-cmake.git
@@ -47,22 +47,26 @@ FetchContent_Declare(ios-cmake
     EXCLUDE_FROM_ALL)
 FetchContent_Declare(JsRuntimeHost
     GIT_REPOSITORY https://github.com/BabylonJS/JsRuntimeHost.git
-    GIT_TAG 06d4420e92f9555b5356071444cd13767d3e4eb8)
-FetchContent_Declare(SPIRV-Cross
-    GIT_REPOSITORY https://github.com/BabylonJS/SPIRV-Cross.git
-    GIT_TAG 6277baf62877f6b1a66a5801da94f0c9276991dc
-    EXCLUDE_FROM_ALL)
+    GIT_TAG 808601482588b7f806d91231288310b94766dc84)
 FetchContent_Declare(libwebp
     GIT_REPOSITORY https://github.com/webmproject/libwebp.git
     GIT_TAG 57e324e2eb99be46df46d77b65705e34a7ae616c
     EXCLUDE_FROM_ALL)
 FetchContent_Declare(webgpu_headers
     GIT_REPOSITORY https://github.com/webgpu-native/webgpu-headers.git
-    GIT_TAG bac520839ff5ed2e2b648ed540bd9ec45edbccbc
+    GIT_TAG 673658bc2bd70ec39fc55ebe6bb0173cf6d0a603
     EXCLUDE_FROM_ALL)
 FetchContent_Declare(wgpu_native
     GIT_REPOSITORY https://github.com/gfx-rs/wgpu-native.git
-    GIT_TAG ba4deb5d935652f40c7e051b15cbb5d097219941
+    GIT_TAG f16f716698899ebfcc3f703722fabd85543318a7 # v27.0.4.1
+    EXCLUDE_FROM_ALL)
+FetchContent_Declare(metal-cpp
+    GIT_REPOSITORY https://github.com/bkaradzic/metal-cpp.git
+    GIT_TAG metal-cpp_26
+    EXCLUDE_FROM_ALL)
+FetchContent_Declare(SPIRV-Cross
+    GIT_REPOSITORY https://github.com/BabylonJS/SPIRV-Cross.git
+    GIT_TAG 0e1654748e9e54b5469fb0fbc1c715b96fa06f8f
     EXCLUDE_FROM_ALL)
 
 # --------------------------------------------------
@@ -106,8 +110,11 @@ project(BabylonNative)
 
 set_property(GLOBAL PROPERTY USE_FOLDERS ON)
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+# Suppress "Performing Test ..." output from check_c_compiler_flag() and similar macros.
+set(CMAKE_REQUIRED_QUIET TRUE)
 
 # --------------------------------------------------
 # Options
@@ -135,6 +142,11 @@ option(BABYLON_NATIVE_PLUGIN_NATIVECAPTURE "Include Babylon Native Plugin Native
 option(BABYLON_NATIVE_PLUGIN_NATIVEENCODING "Include Babylon Native Plugin NativeEncoding." ON)
 option(BABYLON_NATIVE_PLUGIN_NATIVEENGINE "Include Babylon Native Plugin NativeEngine." ON)
 option(BABYLON_NATIVE_PLUGIN_NATIVEENGINE_WEBP "Include Babylon Native Plugin NativeEngine - WebP." ON)
+option(BABYLON_NATIVE_PLUGIN_NATIVEENGINE_LOAD_IMAGES "Enable image loading in NativeEngine (LoadTexture, image bitmap, bimg, WebP)." ON)
+if(NOT BABYLON_NATIVE_PLUGIN_NATIVEENGINE_LOAD_IMAGES)
+    # WebP support relies on image loading code paths; force it off when image loading is disabled.
+    set(BABYLON_NATIVE_PLUGIN_NATIVEENGINE_WEBP OFF CACHE BOOL "Include Babylon Native Plugin NativeEngine - WebP." FORCE)
+endif()
 option(BABYLON_NATIVE_PLUGIN_NATIVEENGINE_COMPILESHADERS "Include Babylon Native Plugin NativeEngine - Compile Shaders." ON)
 option(BABYLON_NATIVE_PLUGIN_NATIVEOPTIMIZATIONS "Include Babylon Native Plugin NativeOptimizations." ON)
 option(BABYLON_NATIVE_PLUGIN_NATIVETRACING "Include Babylon Native Plugin NativeTracing." ON)
@@ -171,8 +183,8 @@ if(ENABLE_SANITIZERS)
         endif()
         # Check for Clang since vptr and fdsan are Clang-specific
         if (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-            # vptr depends on UBSan runtime and is useful on non-Android hosts.
-            if(NOT ANDROID)
+            # vptr depends on UBSan runtime, and Windows does not support it.
+            if(NOT ANDROID AND NOT WIN32)
                 list(APPEND SANITIZERS "vptr")
             endif()
             # FDSan only works on Android builds with Clang
@@ -192,7 +204,10 @@ if(ENABLE_SANITIZERS)
         # created outside this directory scope.
         set(BABYLON_NATIVE_SANITIZER_FLAGS "${SANITIZER_FLAGS}" CACHE INTERNAL "Babylon Native sanitizer flag list" FORCE)
 
-        add_compile_options(-fsanitize=${SANITIZER_FLAGS} -fno-omit-frame-pointer)
+        # -fno-sanitize-recover=all makes UBSan findings fatal. Without it, UBSan
+        # only prints a diagnostic to stderr and execution continues, so CI stays
+        # green while latent UB goes unreported.
+        add_compile_options(-fsanitize=${SANITIZER_FLAGS} -fno-omit-frame-pointer -fno-sanitize-recover=all)
         add_link_options(-fsanitize=${SANITIZER_FLAGS})
     elseif(MSVC)
         # MSVC only supports AddressSanitizer
@@ -274,6 +289,50 @@ elseif(WIN32)
     endif()
 endif()
 
+# Find ANGLE libraries from Edge or Chrome when using OpenGLWindowsDevOnly.
+if(BABYLON_NATIVE_OPENGLES_FROM_BROWSER)
+    foreach(_browser_exe "msedge.exe" "chrome.exe")
+        if(ANGLE_LIBEGL)
+            break()
+        endif()
+        foreach(_reg_root "HKLM" "HKCU")
+            if(ANGLE_LIBEGL)
+                break()
+            endif()
+            execute_process(
+                COMMAND reg query "${_reg_root}\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\${_browser_exe}" /ve
+                OUTPUT_VARIABLE _reg_output
+                ERROR_QUIET
+                RESULT_VARIABLE _reg_result
+                OUTPUT_STRIP_TRAILING_WHITESPACE
+            )
+            if(NOT _reg_result EQUAL 0)
+                continue()
+            endif()
+            string(REGEX MATCH "REG_SZ[ \t]+([^\r\n]+)" _ "${_reg_output}")
+            string(STRIP "${CMAKE_MATCH_1}" _browser_path)
+            if(NOT _browser_path)
+                continue()
+            endif()
+            cmake_path(GET _browser_path PARENT_PATH _browser_dir)
+            file(GLOB _version_dirs LIST_DIRECTORIES true "${_browser_dir}/[0-9]*")
+            list(SORT _version_dirs ORDER DESCENDING)
+            foreach(_version_dir ${_version_dirs})
+                if(IS_DIRECTORY "${_version_dir}" AND EXISTS "${_version_dir}/libEGL.dll")
+                    set(ANGLE_LIBEGL "${_version_dir}/libEGL.dll")
+                    set(ANGLE_LIBGLESV2 "${_version_dir}/libGLESv2.dll")
+                    message(STATUS "Found ANGLE libraries in: ${_version_dir}")
+                    break()
+                endif()
+            endforeach()
+        endforeach()
+    endforeach()
+
+    if(NOT ANGLE_LIBEGL)
+        message(FATAL_ERROR "OpenGLWindowsDevOnly requires ANGLE libraries (libEGL.dll, libGLESv2.dll) from Edge or Chrome, but none were found.")
+    endif()
+endif()
+
 if(APPLE)
     set(BABYLON_NATIVE_PLATFORM_IMPL_EXT "mm")
 else()
@@ -290,6 +349,9 @@ if(MSVC)
 
     # default to /W3
     add_compile_options(/W3)
+
+    # Enable multiprocessor compilation for faster builds
+    add_compile_options(/MP)
 endif()
 
 if(APPLE)
