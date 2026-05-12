@@ -126,8 +126,8 @@ option(BABYLON_NATIVE_PLUGIN_NATIVEINPUT "Include Babylon Native Plugin NativeIn
 # TODO(bgfx-removal): Convert these back to user-facing option() toggles once the bgfx backend
 # is fully removed and the wgpu path is the only backend.
 option(BABYLON_NATIVE_BUILD_WEBGPU_TESTS "Build NativeWebGPU async bridge gtests on desktop hosts." OFF)
-option(BABYLON_NATIVE_ENABLE_WEBGPU_DEVELOPER_FEATURES "Expose non-standard WebGPU developer hooks (Chromium/WebKit developer-features analog)." ON)
-option(BABYLON_NATIVE_ENABLE_UNSAFE_WEBGPU "Expose non-standard unsafe WebGPU hooks (Chromium enable-unsafe-webgpu analog)." ON)
+option(BABYLON_NATIVE_ENABLE_WEBGPU_DEVELOPER_FEATURES "Expose non-standard WebGPU developer hooks (Chromium/WebKit developer-features analog)." OFF)
+option(BABYLON_NATIVE_ENABLE_UNSAFE_WEBGPU "Expose non-standard unsafe WebGPU hooks (Chromium enable-unsafe-webgpu analog)." OFF)
 
 # Polyfills
 option(BABYLON_NATIVE_POLYFILL_WINDOW "Include Babylon Native Polyfill Window." ON)
@@ -193,6 +193,26 @@ set(BABYLON_NATIVE_WGPU_USE_UPSTREAM_NATIVE ON CACHE BOOL "Use upstream wgpu-nat
 set(BABYLON_NATIVE_POLYFILL_WINDOW ON CACHE BOOL "Include Babylon Native Polyfill Window." FORCE)
 set(BABYLON_NATIVE_POLYFILL_CANVAS ON CACHE BOOL "Include Babylon Native Polyfill Canvas." FORCE)
 set(BABYLON_NATIVE_POLYFILL_CANVAS_WGPU ON CACHE BOOL "Use the wgpu/femtovg Canvas backend when Canvas polyfill is enabled." FORCE)
+
+# bgfx-dependent plugins: disabled on wgpu branch (no bgfx consumer exists).
+# ShaderCache/ShaderCompiler/ShaderTool use BgfxShaderInfo and bgfx shader binaries.
+# NativeEngine is the bgfx rendering backend replaced by NativeWebGPU.
+# TODO(bgfx-removal): Remove these FORCE overrides when bgfx is fully removed.
+set(BABYLON_NATIVE_PLUGIN_EXTERNALTEXTURE OFF CACHE BOOL "" FORCE)
+set(BABYLON_NATIVE_PLUGIN_NATIVECAMERA OFF CACHE BOOL "" FORCE)
+set(BABYLON_NATIVE_PLUGIN_NATIVECAPTURE OFF CACHE BOOL "" FORCE)
+set(BABYLON_NATIVE_PLUGIN_NATIVEENCODING OFF CACHE BOOL "" FORCE)
+set(BABYLON_NATIVE_PLUGIN_NATIVEENGINE OFF CACHE BOOL "" FORCE)
+set(BABYLON_NATIVE_PLUGIN_NATIVEENGINE_LOAD_IMAGES OFF CACHE BOOL "" FORCE)
+set(BABYLON_NATIVE_PLUGIN_NATIVEENGINE_WEBP OFF CACHE BOOL "" FORCE)
+set(BABYLON_NATIVE_PLUGIN_NATIVEENGINE_COMPILESHADERS OFF CACHE BOOL "" FORCE)
+set(BABYLON_NATIVE_PLUGIN_NATIVEOPTIMIZATIONS OFF CACHE BOOL "" FORCE)
+set(BABYLON_NATIVE_PLUGIN_NATIVETRACING OFF CACHE BOOL "" FORCE)
+set(BABYLON_NATIVE_PLUGIN_NATIVEXR OFF CACHE BOOL "" FORCE)
+set(BABYLON_NATIVE_PLUGIN_SHADERCACHE OFF CACHE BOOL "" FORCE)
+set(BABYLON_NATIVE_PLUGIN_SHADERCOMPILER OFF CACHE BOOL "" FORCE)
+set(BABYLON_NATIVE_PLUGIN_SHADERTOOL OFF CACHE BOOL "" FORCE)
+set(BABYLON_NATIVE_PLUGIN_TESTUTILS OFF CACHE BOOL "" FORCE)
 
 if(BABYLON_NATIVE_WGPU_USE_UPSTREAM_NATIVE)
     FetchContent_MakeAvailable_With_Message(webgpu_headers)
