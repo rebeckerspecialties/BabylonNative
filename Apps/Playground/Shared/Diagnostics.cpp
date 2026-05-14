@@ -1,10 +1,5 @@
 #include "Diagnostics.h"
 
-#include <bx/debug.h>
-#include <bx/error.h>
-#include <bx/platform.h>
-#include <bx/readerwriter.h>
-
 #include <atomic>
 #include <chrono>
 #include <csignal>
@@ -13,6 +8,54 @@
 #include <cstdlib>
 #include <cstring>
 #include <string>
+
+#define BN_STRINGIFY_IMPL(value) #value
+#define BN_STRINGIFY(value) BN_STRINGIFY_IMPL(value)
+
+#if defined(__clang__)
+#define BN_COMPILER_NAME "Clang " __clang_version__
+#elif defined(_MSC_VER)
+#define BN_COMPILER_NAME "MSVC " BN_STRINGIFY(_MSC_VER)
+#elif defined(__GNUC__)
+#define BN_COMPILER_NAME "GCC " __VERSION__
+#else
+#define BN_COMPILER_NAME "Unknown"
+#endif
+
+#if defined(__aarch64__) || defined(_M_ARM64)
+#define BN_CPU_NAME "arm64"
+#elif defined(__arm__) || defined(_M_ARM)
+#define BN_CPU_NAME "arm"
+#elif defined(__x86_64__) || defined(_M_X64)
+#define BN_CPU_NAME "x64"
+#elif defined(__i386__) || defined(_M_IX86)
+#define BN_CPU_NAME "x86"
+#else
+#define BN_CPU_NAME "unknown"
+#endif
+
+#if defined(__APPLE__)
+#define BN_PLATFORM_NAME "Apple"
+#elif defined(__ANDROID__)
+#define BN_PLATFORM_NAME "Android"
+#elif defined(_WIN32)
+#define BN_PLATFORM_NAME "Windows"
+#elif defined(__linux__)
+#define BN_PLATFORM_NAME "Linux"
+#else
+#define BN_PLATFORM_NAME "Unknown"
+#endif
+
+#if defined(__APPLE__) || (defined(__linux__) && !defined(__ANDROID__))
+#define BN_HAS_EXECINFO 1
+#include <execinfo.h>
+#else
+#define BN_HAS_EXECINFO 0
+#endif
+
+#if defined(__ANDROID__)
+#include <android/log.h>
+#endif
 
 #if defined(_MSC_VER)
 #define WIN32_LEAN_AND_MEAN
@@ -37,6 +80,44 @@ namespace
 
     bool s_ansiEnabled{false};
 
+    void WriteDiagnosticsMirror(const char* text)
+    {
+        if (text == nullptr || text[0] == '\0')
+        {
+            return;
+        }
+
+#if defined(_WIN32)
+        ::OutputDebugStringA(text);
+#endif
+
+#if defined(__ANDROID__)
+        __android_log_write(ANDROID_LOG_ERROR, "BabylonNative", text);
+#endif
+    }
+
+    void WriteNativeCallstack(unsigned int skipFrames)
+    {
+#if BN_HAS_EXECINFO
+        void* frames[64];
+        const int frameCount = ::backtrace(frames, static_cast<int>(sizeof(frames) / sizeof(frames[0])));
+        int firstFrame = static_cast<int>(2 + skipFrames);
+        if (firstFrame > frameCount)
+        {
+            firstFrame = frameCount;
+        }
+
+        std::fprintf(stderr, "Callstack (%d):\n", frameCount - firstFrame);
+        if (firstFrame < frameCount)
+        {
+            ::backtrace_symbols_fd(frames + firstFrame, frameCount - firstFrame, ::fileno(stderr));
+        }
+#else
+        (void)skipFrames;
+        std::fprintf(stderr, "Callstack: unavailable in this build.\n");
+#endif
+    }
+
 #if defined(_MSC_VER)
     void __cdecl OnInvalidParameter(
         const wchar_t* expression,
@@ -59,7 +140,7 @@ namespace
 
         if (::IsDebuggerPresent())
         {
-            bx::debugBreak();
+            __debugbreak();
         }
         Diagnostics::SetExitCode(3);
         Diagnostics::PrintFinishLine();
@@ -71,7 +152,7 @@ namespace
         Diagnostics::DumpFailure("ABORT", nullptr, 0, 1, "SIGABRT raised.");
         if (::IsDebuggerPresent())
         {
-            bx::debugBreak();
+            __debugbreak();
         }
         Diagnostics::SetExitCode(3);
         Diagnostics::PrintFinishLine();
@@ -119,8 +200,6 @@ namespace Diagnostics
         {
             return;
         }
-
-        bx::installExceptionHandler();
 
 #if defined(_MSC_VER)
         // Route assert() to stderr instead of UCRT's modal dialog. Covers the
@@ -248,58 +327,48 @@ namespace Diagnostics
 
     void DumpFailureV(const char* category, const char* file, int line, unsigned int skipFrames, const char* fmt, va_list args)
     {
-        // Build the dump in a static buffer with bx::write helpers, then
-        // mirror to stderr (console / CI logs) and bx::getDebugOut()
-        // (OutputDebugString for attached debuggers).
-        char temp[16 * 1024];
-        bx::StaticMemoryBlockWriter smb(temp, BX_COUNTOF(temp));
-        bx::ErrorIgnore err;
-        int32_t total = 0;
-
-        total += bx::write(&smb, &err, "\n--- BN: %s ---\n\n", category != nullptr ? category : "FAILURE");
+        std::fprintf(stderr, "\n--- BN: %s ---\n\n", category != nullptr ? category : "FAILURE");
 
         if (file != nullptr)
         {
-            total += bx::write(&smb, &err, "%s(%d): ", file, line);
+            std::fprintf(stderr, "%s(%d): ", file, line);
         }
 
         if (fmt != nullptr)
         {
-            // bx::write(WriterI*, StringView format, va_list, Error*) passes
-            // through to vsnprintf.
-            total += bx::write(&smb, fmt, args, &err);
+            char message[8 * 1024];
+            va_list argsCopy;
+            va_copy(argsCopy, args);
+            const int written = std::vsnprintf(message, sizeof(message), fmt, argsCopy);
+            va_end(argsCopy);
+
+            if (written >= 0)
+            {
+                std::fputs(message, stderr);
+                WriteDiagnosticsMirror(message);
+            }
+            else
+            {
+                std::fputs("(failed to format diagnostic message)", stderr);
+            }
         }
 
-        total += bx::write(&smb, &err, "\n\n");
+        std::fputs("\n\n", stderr);
 
-        // +2 to skip this function and the public DumpFailure trampoline.
-        uintptr_t stack[64];
-        const uint32_t numFrames = bx::getCallStackExact(2 + skipFrames, BX_COUNTOF(stack), stack);
-        total += bx::writeCallstack(&smb, stack, numFrames, &err);
+        // +2 skips this helper and the public DumpFailure trampoline.
+        WriteNativeCallstack(skipFrames);
 
-        total += bx::write(&smb, &err,
+        std::fprintf(stderr,
             "\nBuild info:\n"
-            "\tCompiler: " BX_COMPILER_NAME
-            ", CPU: " BX_CPU_NAME
-            ", Arch: " BX_ARCH_NAME
-            ", OS: " BX_PLATFORM_NAME
-            ", CRT: " BX_CRT_NAME
-            ", C++: " BX_CPP_NAME
-            ", Date: " __DATE__
-            ", Time: " __TIME__
-            "\n");
-
-        total += bx::write(&smb, &err, "\n--- END ---\n\n");
-
-        if (total > 0)
-        {
-            const size_t bytes = static_cast<size_t>(total);
-            std::fwrite(temp, 1, bytes, stderr);
-            std::fflush(stderr);
-
-            // Mirror to OutputDebugString / logcat / syslog for attached debuggers.
-            bx::write(bx::getDebugOut(), temp, total, bx::ErrorIgnore{});
-        }
+            "\tCompiler: %s, CPU: %s, OS: %s, C++: %s, Date: %s, Time: %s\n"
+            "\n--- END ---\n\n",
+            BN_COMPILER_NAME,
+            BN_CPU_NAME,
+            BN_PLATFORM_NAME,
+            BN_STRINGIFY(__cplusplus),
+            __DATE__,
+            __TIME__);
+        std::fflush(stderr);
     }
 
     void DumpFailure(const char* category, const char* file, int line, unsigned int skipFrames, const char* fmt, ...)

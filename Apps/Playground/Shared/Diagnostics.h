@@ -24,8 +24,9 @@ namespace Diagnostics
     // code. Idempotent (only first call produces output).
     void PrintFinishLine();
 
-    // Emits a bx-style banner with native callstack and build info to both
-    // stderr and bx::getDebugOut(). Format:
+    // Emits a diagnostic banner with native callstack and build info to stderr
+    // and mirrors the message body to platform debugger output where available.
+    // Format:
     //
     //     --- BN: <CATEGORY> ---
     //
