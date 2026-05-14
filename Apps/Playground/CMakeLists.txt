@@ -22,7 +22,11 @@ set(SCRIPTS
 
 set(SOURCES
     "Shared/AppContext.cpp"
-    "Shared/AppContext.h")
+    "Shared/AppContext.h"
+    "Shared/CommandLine.cpp"
+    "Shared/CommandLine.h"
+    "Shared/Diagnostics.cpp"
+    "Shared/Diagnostics.h")
 
 if(APPLE)
     find_library(JAVASCRIPTCORE_LIBRARY JavaScriptCore)
@@ -103,8 +107,18 @@ elseif(WIN32)
 endif()
 
 if(WIN32)
-    set(WIN32_EXECUTABLE TRUE)
-    add_executable(Playground WIN32 ${REFERENCE_IMAGES} ${BABYLON_SCRIPTS} ${DEPENDENCIES} ${SCRIPTS} ${SOURCES} ${RESOURCE_FILES})
+    if(WINDOWS_STORE)
+        # UWP requires SUBSYSTEM:WINDOWS.
+        set(WIN32_EXECUTABLE TRUE)
+        add_executable(Playground WIN32 ${REFERENCE_IMAGES} ${BABYLON_SCRIPTS} ${DEPENDENCIES} ${SCRIPTS} ${SOURCES} ${RESOURCE_FILES})
+    else()
+        # Win32 desktop: SUBSYSTEM:CONSOLE so stdout/stderr behave like a
+        # normal console app. /ENTRY:wWinMainCRTStartup keeps the existing
+        # wWinMain entry point and all GUI code intact.
+        add_executable(Playground ${REFERENCE_IMAGES} ${BABYLON_SCRIPTS} ${DEPENDENCIES} ${SCRIPTS} ${SOURCES} ${RESOURCE_FILES})
+        set_target_properties(Playground PROPERTIES
+            LINK_FLAGS "/SUBSYSTEM:CONSOLE /ENTRY:wWinMainCRTStartup")
+    endif()
 else()
     add_executable(Playground ${REFERENCE_IMAGES} ${BABYLON_SCRIPTS} ${DEPENDENCIES} ${SCRIPTS} ${SOURCES} ${RESOURCE_FILES})
 endif()
@@ -134,6 +148,7 @@ endif()
 target_link_libraries(Playground
     PRIVATE AppRuntime
     PRIVATE Blob
+    PRIVATE bx
     PRIVATE Console
     PRIVATE GraphicsDevice
     PRIVATE NativeInput
