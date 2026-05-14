@@ -19,15 +19,15 @@ include(FetchContent)
 
 FetchContent_Declare(AndroidExtensions
     GIT_REPOSITORY https://github.com/BabylonJS/AndroidExtensions.git
-    GIT_TAG 2e85a8d43b89246c460112c9e5546ad54b6e87b4
+    GIT_TAG 5fe60c8634dd9a5df76888e73e69202875e894f0
     EXCLUDE_FROM_ALL)
 FetchContent_Declare(arcana.cpp
     GIT_REPOSITORY https://github.com/microsoft/arcana.cpp.git
-    GIT_TAG b9bf9d85fce37d5fc9dbfc4a4dc5e1531bee215a
+    GIT_TAG 0b9f9b6d761909fbca9d3ab1f2d8ff1c3d25ed3d
     EXCLUDE_FROM_ALL)
 FetchContent_Declare(arcore-android-sdk
     GIT_REPOSITORY https://github.com/google-ar/arcore-android-sdk.git
-    GIT_TAG 98cb803de5482fb2b36effe8be3b5a0d3b726976
+    GIT_TAG 7b1e4927914e741e11d1aee9eb549b7ba829197b
     EXCLUDE_FROM_ALL)
 FetchContent_Declare(base-n
     GIT_REPOSITORY https://github.com/azawadzki/base-n.git
@@ -47,26 +47,27 @@ FetchContent_Declare(ios-cmake
     EXCLUDE_FROM_ALL)
 FetchContent_Declare(JsRuntimeHost
     GIT_REPOSITORY https://github.com/BabylonJS/JsRuntimeHost.git
-    GIT_TAG 808601482588b7f806d91231288310b94766dc84)
+    GIT_TAG 7239f910a1e707107036c14f9c4dff902dab2272)
 FetchContent_Declare(libwebp
     GIT_REPOSITORY https://github.com/webmproject/libwebp.git
-    GIT_TAG 57e324e2eb99be46df46d77b65705e34a7ae616c
+    GIT_TAG baff2c8980970f58e2aa88622c6575bdee2f876a
     EXCLUDE_FROM_ALL)
 FetchContent_Declare(webgpu_headers
-    GIT_REPOSITORY https://github.com/webgpu-native/webgpu-headers.git
-    GIT_TAG 673658bc2bd70ec39fc55ebe6bb0173cf6d0a603
+    URL https://github.com/webgpu-native/webgpu-headers/archive/673658bc2bd70ec39fc55ebe6bb0173cf6d0a603.tar.gz
+    URL_HASH SHA256=6754c6c2465c79a954f7c04c7890c9f00b7ecce8addbe01b5056e860ba3933e6
     EXCLUDE_FROM_ALL)
 FetchContent_Declare(wgpu_native
     GIT_REPOSITORY https://github.com/gfx-rs/wgpu-native.git
-    GIT_TAG f16f716698899ebfcc3f703722fabd85543318a7 # v27.0.4.1
+    GIT_TAG v29.0.0.0
+    GIT_SHALLOW TRUE
     EXCLUDE_FROM_ALL)
 FetchContent_Declare(metal-cpp
     GIT_REPOSITORY https://github.com/bkaradzic/metal-cpp.git
-    GIT_TAG metal-cpp_26
+    GIT_TAG 9a8bc57c0318b84863bec2faf6605594877c5f5d
     EXCLUDE_FROM_ALL)
 FetchContent_Declare(SPIRV-Cross
     GIT_REPOSITORY https://github.com/BabylonJS/SPIRV-Cross.git
-    GIT_TAG 0e1654748e9e54b5469fb0fbc1c715b96fa06f8f
+    GIT_TAG e1d29b3617de7fb27fc085eb565a790b31679e54
     EXCLUDE_FROM_ALL)
 
 # --------------------------------------------------
@@ -108,6 +109,8 @@ endif()
 
 project(BabylonNative)
 
+enable_testing()
+
 set_property(GLOBAL PROPERTY USE_FOLDERS ON)
 
 set(CMAKE_CXX_STANDARD 20)
@@ -134,6 +137,7 @@ option(BABYLON_NATIVE_PLUGIN_NATIVEINPUT "Include Babylon Native Plugin NativeIn
 option(BABYLON_NATIVE_BUILD_WEBGPU_TESTS "Build NativeWebGPU async bridge gtests on desktop hosts." OFF)
 option(BABYLON_NATIVE_ENABLE_WEBGPU_DEVELOPER_FEATURES "Expose non-standard WebGPU developer hooks (Chromium/WebKit developer-features analog)." OFF)
 option(BABYLON_NATIVE_ENABLE_UNSAFE_WEBGPU "Expose non-standard unsafe WebGPU hooks (Chromium enable-unsafe-webgpu analog)." OFF)
+option(BABYLON_NATIVE_LTO_BITCODE_STATIC_LIBS "Compile native static libraries as LLVM bitcode and use Rust linker-plugin LTO for final whole-program optimization." OFF)
 
 # bgfx-era plugins (declared for structural completeness; forced OFF on wgpu branch)
 option(BABYLON_NATIVE_PLUGIN_EXTERNALTEXTURE "Include Babylon Native Plugin ExternalTexture." ON)
@@ -217,12 +221,22 @@ if(ENABLE_SANITIZERS)
     endif()
 endif()
 
+if(BABYLON_NATIVE_LTO_BITCODE_STATIC_LIBS)
+    if(NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+        message(FATAL_ERROR "BABYLON_NATIVE_LTO_BITCODE_STATIC_LIBS requires a Clang-compatible compiler.")
+    endif()
+
+    add_compile_options(-flto=full)
+    add_link_options(-flto=full)
+endif()
+
 # Hardwired for wgpu branch: these are not user-configurable until bgfx is fully removed.
 # TODO(bgfx-removal): Remove FORCE overrides and restore as user-facing option() toggles.
 set(BABYLON_NATIVE_INSTALL OFF CACHE BOOL "Include the install target." FORCE)
 set(BABYLON_NATIVE_PLUGIN_NATIVEINPUT ON CACHE BOOL "Include Babylon Native Plugin NativeInput." FORCE)
 set(BABYLON_NATIVE_PLUGIN_NATIVEWEBGPU ON CACHE BOOL "Include Babylon Native Plugin NativeWebGPU." FORCE)
 set(BABYLON_NATIVE_WGPU_USE_UPSTREAM_NATIVE ON CACHE BOOL "Use upstream wgpu-native as the Rust backend base." FORCE)
+set(BABYLON_NATIVE_WGPU_NATIVE_RLIB ON CACHE BOOL "Build wgpu-native in the shared Cargo graph instead of linking a second Rust staticlib." FORCE)
 set(BABYLON_NATIVE_POLYFILL_WINDOW ON CACHE BOOL "Include Babylon Native Polyfill Window." FORCE)
 set(BABYLON_NATIVE_POLYFILL_CANVAS ON CACHE BOOL "Include Babylon Native Polyfill Canvas." FORCE)
 set(BABYLON_NATIVE_POLYFILL_CANVAS_WGPU ON CACHE BOOL "Use the wgpu/femtovg Canvas backend when Canvas polyfill is enabled." FORCE)
@@ -248,8 +262,26 @@ set(BABYLON_NATIVE_PLUGIN_SHADERTOOL OFF CACHE BOOL "" FORCE)
 set(BABYLON_NATIVE_PLUGIN_TESTUTILS OFF CACHE BOOL "" FORCE)
 
 if(BABYLON_NATIVE_WGPU_USE_UPSTREAM_NATIVE)
-    FetchContent_MakeAvailable_With_Message(webgpu_headers)
     FetchContent_MakeAvailable_With_Message(wgpu_native)
+    set(webgpu_headers_SOURCE_DIR "${wgpu_native_SOURCE_DIR}/ffi/webgpu-headers" CACHE PATH "webgpu-headers bundled with wgpu-native" FORCE)
+
+    if(BABYLON_NATIVE_WGPU_NATIVE_RLIB)
+        set(wgpu_native_rlib_SOURCE_DIR "${CMAKE_BINARY_DIR}/_deps/wgpu_native-rlib-src" CACHE PATH "build-local wgpu-native source patched to expose rlib" FORCE)
+        file(REMOVE_RECURSE "${wgpu_native_rlib_SOURCE_DIR}")
+        file(COPY "${wgpu_native_SOURCE_DIR}/" DESTINATION "${wgpu_native_rlib_SOURCE_DIR}")
+        file(READ "${wgpu_native_rlib_SOURCE_DIR}/Cargo.toml" _wgpu_native_cargo_toml)
+        string(REPLACE
+            "crate-type = [\"cdylib\", \"staticlib\"]"
+            "crate-type = [\"rlib\"]"
+            _wgpu_native_cargo_toml_patched
+            "${_wgpu_native_cargo_toml}")
+        if(_wgpu_native_cargo_toml_patched STREQUAL _wgpu_native_cargo_toml)
+            message(FATAL_ERROR "Failed to patch wgpu-native Cargo.toml to expose rlib.")
+        endif()
+        file(WRITE "${wgpu_native_rlib_SOURCE_DIR}/Cargo.toml" "${_wgpu_native_cargo_toml_patched}")
+        unset(_wgpu_native_cargo_toml)
+        unset(_wgpu_native_cargo_toml_patched)
+    endif()
 endif()
 
 # --------------------------------------------------

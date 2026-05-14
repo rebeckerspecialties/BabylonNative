@@ -119,17 +119,15 @@ fn preferred_backends() -> wgpu::Backends {
 
 fn create_instance() -> wgpu::Instance {
     #[allow(unused_mut)]
-    let mut descriptor = wgpu::InstanceDescriptor {
-        backends: preferred_backends(),
-        ..Default::default()
-    };
+    let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
+    descriptor.backends = preferred_backends();
 
     #[cfg(target_os = "android")]
     {
         descriptor.flags |= wgpu::InstanceFlags::ALLOW_UNDERLYING_NONCOMPLIANT_ADAPTER;
     }
 
-    wgpu::Instance::new(&descriptor)
+    wgpu::Instance::new(descriptor)
 }
 
 fn create_device() -> Result<(wgpu::Device, wgpu::Queue), String> {
@@ -279,8 +277,8 @@ impl Backend {
     }
 
     fn end_frame(&mut self) {
-        let command_buffer = self.canvas.flush_to_surface(&self.render_texture);
-        self.queue.submit(std::iter::once(command_buffer));
+        let command_buffers = self.canvas.flush_to_output(&self.render_texture);
+        self.queue.submit(command_buffers);
         #[cfg(all(target_os = "ios", target_abi = "sim"))]
         {
             let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
@@ -832,7 +830,9 @@ pub extern "C" fn nvgFill(ctx: *mut NVGcontext) {
     with_ctx_mut(ctx, (), |backend| {
         // Fast path: skip clone when blur is zero (the common case).
         if backend.filter_blur_sigma <= f32::EPSILON {
-            backend.canvas.fill_path(&backend.current_path, &backend.fill_paint);
+            backend
+                .canvas
+                .fill_path(&backend.current_path, &backend.fill_paint);
         } else {
             let path = backend.current_path.clone();
             let paint = backend.fill_paint.clone();
@@ -848,7 +848,9 @@ pub extern "C" fn nvgStroke(ctx: *mut NVGcontext) {
     with_ctx_mut(ctx, (), |backend| {
         // Fast path: skip clone when blur is zero (the common case).
         if backend.filter_blur_sigma <= f32::EPSILON {
-            backend.canvas.stroke_path(&backend.current_path, &backend.stroke_paint);
+            backend
+                .canvas
+                .stroke_path(&backend.current_path, &backend.stroke_paint);
         } else {
             let path = backend.current_path.clone();
             let paint = backend.stroke_paint.clone();

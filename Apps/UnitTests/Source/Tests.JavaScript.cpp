@@ -7,9 +7,19 @@
 #include <Babylon/Polyfills/Window.h>
 #include <Babylon/Polyfills/Canvas.h>
 #include <Babylon/Polyfills/Blob.h>
-#include <Babylon/Plugins/NativeEngine.h>
-#include <Babylon/Plugins/NativeEncoding.h>
 #include <Babylon/ScriptLoader.h>
+
+#if defined(BABYLON_NATIVE_UNITTESTS_WITH_NATIVEENGINE)
+#include <Babylon/Plugins/NativeEngine.h>
+#endif
+
+#if defined(BABYLON_NATIVE_UNITTESTS_WITH_NATIVEENCODING)
+#include <Babylon/Plugins/NativeEncoding.h>
+#endif
+
+#if defined(BABYLON_NATIVE_UNITTESTS_WITH_WEBGPU)
+#include <Babylon/Plugins/NativeWebGPU.h>
+#endif
 
 #include <cstdlib>
 
@@ -69,8 +79,18 @@ TEST(JavaScript, All)
         Babylon::Polyfills::Window::Initialize(env);
         Babylon::Polyfills::Blob::Initialize(env);
         nativeCanvas.emplace(Babylon::Polyfills::Canvas::Initialize(env));
+
+#if defined(BABYLON_NATIVE_UNITTESTS_WITH_NATIVEENGINE)
         Babylon::Plugins::NativeEngine::Initialize(env);
+#endif
+
+#if defined(BABYLON_NATIVE_UNITTESTS_WITH_NATIVEENCODING)
         Babylon::Plugins::NativeEncoding::Initialize(env);
+#endif
+
+#if defined(BABYLON_NATIVE_UNITTESTS_WITH_WEBGPU)
+        Babylon::Plugins::NativeWebGPU::Initialize(env);
+#endif
 
         auto setExitCodeCallback = Napi::Function::New(
             env, [&exitCodePromise](const Napi::CallbackInfo& info) {
@@ -83,9 +103,16 @@ TEST(JavaScript, All)
 
     Babylon::ScriptLoader loader{runtime};
     loader.Eval("location = { href: '' };", ""); // Required for Mocha.js as we do not have a location in Babylon Native
+
+#if defined(BABYLON_NATIVE_UNITTESTS_WITH_NATIVEENGINE)
     loader.LoadScript("app:///Assets/babylon.max.js");
     loader.LoadScript("app:///Assets/babylonjs.materials.js");
     loader.LoadScript("app:///Assets/tests.javaScript.all.js");
+#elif defined(BABYLON_NATIVE_UNITTESTS_WITH_WEBGPU)
+    loader.LoadScript("app:///Assets/tests.wgpu.js");
+#else
+#error "UnitTests JavaScript suite requires NativeEngine or NativeWebGPU."
+#endif
 
     device.StartRenderingCurrentFrame();
     device.FinishRenderingCurrentFrame();

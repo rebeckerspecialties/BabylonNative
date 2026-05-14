@@ -3,23 +3,13 @@ use std::path::PathBuf;
 use std::process::Command;
 
 fn main() {
-    println!("cargo:rerun-if-env-changed=BABYLON_WGPU_NATIVE_LIB_DIR");
-    println!("cargo:rerun-if-env-changed=BABYLON_WGPU_NATIVE_LIB_NAME");
     println!("cargo:rerun-if-env-changed=BABYLON_WGPU_NATIVE_FFI_DIR");
     println!("cargo:rerun-if-env-changed=BABYLON_WEBGPU_HEADERS_DIR");
 
-    let lib_dir = env::var("BABYLON_WGPU_NATIVE_LIB_DIR").expect(
-        "BABYLON_WGPU_NATIVE_LIB_DIR must be set by CMake",
+    let ffi_dir = PathBuf::from(
+        env::var("BABYLON_WGPU_NATIVE_FFI_DIR")
+            .expect("BABYLON_WGPU_NATIVE_FFI_DIR must be set by CMake"),
     );
-    let lib_name =
-        env::var("BABYLON_WGPU_NATIVE_LIB_NAME").unwrap_or_else(|_| String::from("wgpu_native"));
-
-    println!("cargo:rustc-link-search=native={lib_dir}");
-    println!("cargo:rustc-link-lib=static={lib_name}");
-
-    let ffi_dir = PathBuf::from(env::var("BABYLON_WGPU_NATIVE_FFI_DIR").expect(
-        "BABYLON_WGPU_NATIVE_FFI_DIR must be set by CMake",
-    ));
     let header = ffi_dir.join("wgpu.h");
     let webgpu_headers = env::var_os("BABYLON_WEBGPU_HEADERS_DIR")
         .map(PathBuf::from)
