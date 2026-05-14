@@ -4,6 +4,10 @@
 // `babylon_wgpu_destroy` concurrently. Global state (atomics and mutexes) is
 // safe for concurrent access from any thread.
 
+#[cfg(feature = "wgpu-native-rlib")]
+#[allow(unused_extern_crates)]
+extern crate wgpu_native;
+
 use std::any::Any;
 #[cfg(target_os = "android")]
 use std::ffi::CString;
@@ -1400,7 +1404,7 @@ mod upstream_wgpu_native {
                 address_mode_w: wgpu::AddressMode::ClampToEdge,
                 mag_filter: wgpu::FilterMode::Linear,
                 min_filter: wgpu::FilterMode::Linear,
-                mipmap_filter: wgpu::FilterMode::Linear,
+                mipmap_filter: wgpu::MipmapFilterMode::Linear,
                 ..Default::default()
             });
             let (canvas_texture, canvas_texture_view) =
@@ -1437,8 +1441,8 @@ mod upstream_wgpu_native {
                     .device
                     .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                         label: Some("babylon-native-webgpu.pipeline-layout"),
-                        bind_group_layouts: &[&uniform_bind_group_layout],
-                        push_constant_ranges: &[],
+                        bind_group_layouts: &[Some(&uniform_bind_group_layout)],
+                        immediate_size: 0,
                     });
             let vertex_buffer =
                 runtime
@@ -1505,8 +1509,8 @@ mod upstream_wgpu_native {
                         },
                         depth_stencil: Some(wgpu::DepthStencilState {
                             format: wgpu::TextureFormat::Depth32Float,
-                            depth_write_enabled: true,
-                            depth_compare: wgpu::CompareFunction::Less,
+                            depth_write_enabled: Some(true),
+                            depth_compare: Some(wgpu::CompareFunction::Less),
                             stencil: wgpu::StencilState::default(),
                             bias: wgpu::DepthBiasState::default(),
                         }),
@@ -1521,7 +1525,7 @@ mod upstream_wgpu_native {
                                 write_mask: wgpu::ColorWrites::ALL,
                             })],
                         }),
-                        multiview: None,
+                        multiview_mask: None,
                         cache: None,
                     });
 
@@ -1750,6 +1754,7 @@ mod upstream_wgpu_native {
                     }),
                     occlusion_query_set: None,
                     timestamp_writes: None,
+                    multiview_mask: None,
                 });
 
                 render_pass.set_pipeline(&self.render_pipeline);
@@ -1780,11 +1785,8 @@ mod upstream_wgpu_native {
             let instance = create_local_instance();
             let surface = create_local_surface(&instance, config.surface_layer)?;
 
-            let bootstrap = bootstrap_local_wgpu_runtime(
-                &instance,
-                surface.as_ref(),
-                config.prefer_low_power,
-            )?;
+            let bootstrap =
+                bootstrap_local_wgpu_runtime(&instance, surface.as_ref(), config.prefer_low_power)?;
             let max_texture_dimension_2d = bootstrap.limits.max_texture_dimension_2d.max(1);
             let (width, height) =
                 clamped_extent(requested_width, requested_height, max_texture_dimension_2d);
@@ -2051,7 +2053,8 @@ mod upstream_wgpu_native {
             return match surface_texture_result {
                 Err(_) => Ok(DrawTargetAcquireResult::Reconfigure),
                 Ok(surface_result) => match surface_result {
-                    Ok(surface_frame) => {
+                    wgpu::CurrentSurfaceTexture::Success(surface_frame)
+                    | wgpu::CurrentSurfaceTexture::Suboptimal(surface_frame) => {
                         runtime.surface_acquire_failures = 0;
                         let color_view =
                             surface_frame
@@ -2065,11 +2068,12 @@ mod upstream_wgpu_native {
                             surface_frame: Some(surface_frame),
                         })
                     }
-                    Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
+                    wgpu::CurrentSurfaceTexture::Lost | wgpu::CurrentSurfaceTexture::Outdated => {
                         runtime.surface_acquire_failures = 0;
                         Ok(DrawTargetAcquireResult::Reconfigure)
                     }
-                    Err(wgpu::SurfaceError::Timeout | wgpu::SurfaceError::OutOfMemory) => {
+                    wgpu::CurrentSurfaceTexture::Timeout
+                    | wgpu::CurrentSurfaceTexture::Occluded => {
                         // Recover from transient acquire failures by forcing a
                         // reconfigure after a few consecutive skips.
                         runtime.surface_acquire_failures =
@@ -2081,7 +2085,9 @@ mod upstream_wgpu_native {
                             Ok(DrawTargetAcquireResult::SkipFrame)
                         }
                     }
-                    Err(_error) => Ok(DrawTargetAcquireResult::Reconfigure),
+                    wgpu::CurrentSurfaceTexture::Validation => {
+                        Ok(DrawTargetAcquireResult::Reconfigure)
+                    }
                 },
             };
         }
@@ -2094,7 +2100,9 @@ mod upstream_wgpu_native {
 
         let color_view = offscreen_view
             .as_ref()
-            .ok_or_else(|| "offscreen render target view was not available after creation".to_string())?
+            .ok_or_else(|| {
+                "offscreen render target view was not available after creation".to_string()
+            })?
             .clone();
 
         Ok(DrawTargetAcquireResult::Ready {
@@ -2183,17 +2191,15 @@ mod upstream_wgpu_native {
 
     pub fn create_local_instance() -> wgpu::Instance {
         #[allow(unused_mut)]
-        let mut descriptor = wgpu::InstanceDescriptor {
-            backends: preferred_wgpu_backends(),
-            ..Default::default()
-        };
+        let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
+        descriptor.backends = preferred_wgpu_backends();
 
         #[cfg(target_os = "android")]
         {
             descriptor.flags |= wgpu::InstanceFlags::ALLOW_UNDERLYING_NONCOMPLIANT_ADAPTER;
         }
 
-        wgpu::Instance::new(&descriptor)
+        wgpu::Instance::new(descriptor)
     }
 
     pub fn bootstrap_local_wgpu_runtime(

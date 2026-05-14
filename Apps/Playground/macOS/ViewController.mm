@@ -15,20 +15,28 @@ std::optional<AppContext> appContext{};
 
 - (void)mtkView:(MTKView *)__unused view drawableSizeWillChange:(CGSize) size
 {
-    if (appContext) {
-        appContext->Device().FinishRenderingCurrentFrame();
+    @autoreleasepool {
+        if (appContext) {
+            appContext->DeviceUpdate().Finish();
+            appContext->Device().FinishRenderingCurrentFrame();
 
-        appContext->Device().UpdateSize(static_cast<size_t>(size.width), static_cast<size_t>(size.height));
+            appContext->Device().UpdateSize(static_cast<size_t>(size.width), static_cast<size_t>(size.height));
 
-        appContext->Device().StartRenderingCurrentFrame();
+            appContext->Device().StartRenderingCurrentFrame();
+            appContext->DeviceUpdate().Start();
+        }
     }
 }
 
 - (void)drawInMTKView:(MTKView *)__unused view
 {
-    if (appContext) {
-        appContext->Device().FinishRenderingCurrentFrame();
-        appContext->Device().StartRenderingCurrentFrame();
+    @autoreleasepool {
+        if (appContext) {
+            appContext->DeviceUpdate().Finish();
+            appContext->Device().FinishRenderingCurrentFrame();
+            appContext->Device().StartRenderingCurrentFrame();
+            appContext->DeviceUpdate().Start();
+        }
     }
 }
 

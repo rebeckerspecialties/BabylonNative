@@ -36,12 +36,16 @@
 }
 
 - (void)drawableWillChangeSizeWithWidth:(NSInteger)width height:(NSInteger)height {
-    if (_appContext) {
-        _appContext->Device().FinishRenderingCurrentFrame();
+    @autoreleasepool {
+        if (_appContext) {
+            _appContext->DeviceUpdate().Finish();
+            _appContext->Device().FinishRenderingCurrentFrame();
 
-        _appContext->Device().UpdateSize(static_cast<size_t>(width), static_cast<size_t>(height));
+            _appContext->Device().UpdateSize(static_cast<size_t>(width), static_cast<size_t>(height));
 
-        _appContext->Device().StartRenderingCurrentFrame();
+            _appContext->Device().StartRenderingCurrentFrame();
+            _appContext->DeviceUpdate().Start();
+        }
     }
 }
 
@@ -64,9 +68,13 @@
 }
 
 - (void)render {
-    if (_appContext && self.initialized) {
-        _appContext->Device().FinishRenderingCurrentFrame();
-        _appContext->Device().StartRenderingCurrentFrame();
+    @autoreleasepool {
+        if (_appContext && self.initialized) {
+            _appContext->DeviceUpdate().Finish();
+            _appContext->Device().FinishRenderingCurrentFrame();
+            _appContext->Device().StartRenderingCurrentFrame();
+            _appContext->DeviceUpdate().Start();
+        }
     }
 }
 

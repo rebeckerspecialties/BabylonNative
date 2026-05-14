@@ -44,8 +44,9 @@
   import CanvasWgpu output into GraphicsWgpu cube sampling (used by
   `GPUQueue.copyExternalImageToTexture(...)` internals).
 - Added optional upstream `wgpu-native` source integration (`FetchContent`) behind
-  `BABYLON_NATIVE_WGPU_USE_UPSTREAM_NATIVE`, with Rust link wiring so the
-  GraphicsWgpu backend can consume upstream staticlib artifacts.
+  `BABYLON_NATIVE_WGPU_USE_UPSTREAM_NATIVE`, with build-local manifest patching
+  so `wgpu-native` is consumed as an `rlib` in the same Cargo graph as the
+  GraphicsWgpu backend instead of as a second Rust staticlib.
 - Added explicit `webgpu-headers` FetchContent wiring (pinned to the commit used
   by upstream `wgpu-native`) and switched shim bindgen include resolution to use
   that source-of-truth header path instead of relying on nested vendored copies.
@@ -65,8 +66,10 @@
   developer flags:
   `BABYLON_NATIVE_ENABLE_WEBGPU_DEVELOPER_FEATURES` and
   `BABYLON_NATIVE_ENABLE_UNSAFE_WEBGPU`.
-- Removed in-build patching of upstream `wgpu-native/Cargo.toml`; upstream is now
-  consumed read-only and built as staticlib via Cargo/rustc flags from CMake.
+- Replaced the direct upstream `wgpu-native` staticlib link with a build-local
+  `rlib` manifest patch under `${CMAKE_BINARY_DIR}/_deps`. This keeps the repo
+  source clean while avoiding duplicate Rust runtime and Objective-C class
+  symbols from independent `wgpu-hal` / `raw-window-metal` compilations.
 - Converted the `upstream_wgpu_native` feature seam from no-op to active probe:
   backend init now records upstream `wgpu-native` version via `wgpuGetVersion()`
   and includes that metadata in adapter diagnostics.
@@ -194,6 +197,23 @@
   setting, `PipelineLayoutDescriptor.push_constant_ranges`, and
   `RenderPipelineDescriptor.multiview`) to keep compatibility while reducing
   drift during migration.
+- Updated the local Rust graph to `wgpu = 29.0.3`; after upstream femtovg PR
+  278 was published as `femtovg = 0.25.0`, the temporary fork branch was
+  removed and `femtovg` now resolves `wgpu`, `wgpu-core`, `wgpu-hal`,
+  `wgpu-types`, and `naga` to one 29.0.3 lineage from crates.io.
+- Updated `wgpu-native` FetchContent to `v29.0.0.0` and switched local C/C++
+  header resolution to the `webgpu-headers` copy bundled with that exact
+  upstream tag. `wgpu-native` is now linked through the shared Cargo graph by
+  adding `rlib` to a build-local copy of the fetched manifest, avoiding the
+  duplicate Metal/Objective-C symbols caused by linking a separate Rust
+  staticlib beside the local Rust `wgpu` API path.
+- Replaced the temporary C-ABI compute-test shim with a small cached compute
+  path on the existing local `wgpu` 29.0.3 runtime. The backend version probe
+  calls the linked `wgpu-native` C ABI (`wgpuGetVersion`) from the same Rust
+  staticlib, proving symbol resolution without a second compiled `wgpu` stack.
+- Guarded `glslang` and `SPIRV-Cross` dependency fetch/build behind
+  `BABYLON_NATIVE_PLUGIN_SHADERCOMPILER`; default wgpu-branch builds no longer
+  fetch them because the bgfx shader compiler/tool/cache path is disabled.
 - Hardened Android Playground launch sequencing by explicitly clearing
   stale `createScene` / scene-factory globals before script load and adding
   bounded async startup retries in `playground_runner.js`, reducing intermittent
@@ -216,48 +236,180 @@
 - Added explicit post-submit device polling in CanvasWgpu and tightened iOS
   simulator poll mode in GraphicsWgpu submit path to improve command retirement
   and reduce sustained simulator memory growth during long-running smoke loops.
+- Fixed Apple WGPU surface bootstrap after the upstream sync by passing the
+  already-typed `CA::MetalLayer*` surface pointer directly into GraphicsWgpu
+  instead of dereferencing a non-existent `.layer` member on `WindowT`.
+- Wrapped macOS/iOS/visionOS Playground render and resize callbacks in local
+  autorelease pools so Objective-C/Metal autoreleased temporaries are drained
+  per frame on Apple host loops.
 
-## Latest Validation Snapshot (this session)
-- Visual checks (non-headless) confirmed textured cube + Canvas text on:
-  - macOS Playground app,
-  - iOS 16.4 iPhone 11 simulator (`A1EA0817-6BA0-4A8E-860F-03E3762C30F0`),
-  - Android API 31 emulator (`emulator-5554`).
-- New startup markers consistently appear in logs:
-  - `runner:smoke-ready-await:<version>`
-  - `webgpu-smoke:ready:scene-ready`
-  - `runner:smoke-ready:<version>:scene-ready`
-  - followed by `runner:renderloop-frame:first`
-- Memory drift samples after startup settle show no unbounded leak trend in
-  current smoke path:
-  - macOS: ~`-48 KB` over 15s sample window,
-  - iOS simulator: `+10,496 KB` over first 15s warmup window, then `0 KB`
-    drift over a later 60s steady-state sample,
-  - Android API 31 emulator: `+4,908 KB` over first 15s warmup window, then
-    `+816 KB` over a later 60s steady-state sample.
-- Fresh post-patch short-window samples (2s settle + 15s) are now effectively
-  flat on active smoke runs:
-  - macOS: `0 KB` delta (`227,936 KB` -> `227,936 KB`),
-  - iOS 16.4 simulator: `-16 KB` delta (`377,152 KB` -> `377,136 KB`),
-  - Android API 31 emulator: `0 KB` delta (`259,736 KB` -> `259,736 KB`).
-- Current run after removing frame-timeout auto-enable fallback:
-  - Android API 31 relaunch reliability: `5/5` launches reached both
-    `runner:renderloop-frame:first` and `webgpu-smoke:canvas-texture-uploaded:1`
-    without startup gray-stall.
-  - 60s drift samples (after 2s settle) stayed bounded:
-    - macOS: `0 KB` (`221,104 KB` -> `221,104 KB`),
-    - iOS 16.4 simulator: `+432 KB` (`365,728 KB` -> `366,160 KB`),
-    - Android API 31 emulator: `+240 KB` (`258,876 KB` -> `259,116 KB`).
-- Current optimized artifact sizes:
-  - macOS `build_release_lto` Playground app bundle: `21 MB` (`9.5 MB` executable),
-  - iOS simulator `build_ios164_release_lto` Playground app bundle: `44 MB`
-    (`9.6 MB` executable),
-  - Android release APK (`app-release.apk`): `39 MB`.
+## Latest Validation Snapshot (2026-05-13)
+- Branch state:
+  - `wgpu` is based on current `origin/master`
+    (`git merge-base --is-ancestor origin/master HEAD` passed).
+  - HEAD remained `af1853d1 Keep wgpu branch defaults production-safe` before
+    this validation pass.
+- Dependency state:
+  - Local Rust uses `rustup` toolchain `1.94.1` (`rustc 1.94.1`, LLVM `21.1.8`).
+  - Local workspace resolves `wgpu = 29.0.3` and upstream crates.io
+    `femtovg = 0.25.0`. The temporary
+    `https://github.com/rebeckerspecialties/femtovg.git`
+    branch is no longer used after upstream femtovg PR 278 was merged and
+    published.
+  - The active compiled graph contains a single 29.0.3 lineage for `wgpu`,
+    `wgpu-core`, `wgpu-hal`, `wgpu-types`, and `naga`; the remaining
+    `cargo tree --duplicates` output is limited to non-wgpu transitive crates
+    (`hashbrown` in this snapshot).
+  - `wgpu-native` FetchContent is updated to `v29.0.0.0` for upstream source
+    and bundled-header alignment. The build creates a patched copy under the
+    build tree with `crate-type = ["rlib"]` and Cargo
+    patches the git dependency to that copy, so `wgpu-native`, local `wgpu`,
+    and femtovg share one compiled `wgpu` 29.0.3 graph.
+  - Default wgpu builds no longer need `glslang` or `SPIRV-Cross`; they are
+    only fetched when `BABYLON_NATIVE_PLUGIN_SHADERCOMPILER` is enabled.
+- femtovg validation:
+  - BabylonNative now consumes published `femtovg 0.25.0` from crates.io with
+    `default-features = false` and `features = ["wgpu", "textlayout"]`.
+  - `cargo tree --duplicates` still shows one coherent `wgpu`/`wgpu-core`/
+    `wgpu-hal`/`naga` 29.0.3 lineage across BabylonNative, femtovg, and
+    `wgpu-native`; the only duplicate shown is non-wgpu `hashbrown`.
+- macOS build:
+  - After the `wgpu-native` rlib fix, `build_wgpu_29_debug` rebuilt
+    `Playground`, `UnitTests`, and `NativeWebGPUAsyncTests` successfully.
+    Archive inspection showed one `raw_window_metal` object, one `wgpu-hal`
+    object hash, one `wgpu-core` object hash, and exported `wgpu-native` C ABI
+    symbols (`wgpuGetVersion`, `wgpuCreateInstance`) in
+    `libbabylon_graphics_backend.a`.
+  - `build_wgpu_29_debug` configured and built `Playground`, `UnitTests`, and
+    `NativeWebGPUAsyncTests` successfully after the wgpu 29.0.3/femtovg update.
+  - `build_wgpu_29_asan_ubsan` configured with `ENABLE_SANITIZERS=ON` and
+    built `UnitTests` + `NativeWebGPUAsyncTests` successfully.
+  - `build_wgpu_29_tsan` configured with AppleClang
+    `-fsanitize=thread -fno-omit-frame-pointer` C/C++ flags and built
+    `UnitTests` + `NativeWebGPUAsyncTests` successfully. Rust code in this
+    build is not TSan-instrumented; this validates the C/C++/ObjC++ side and
+    link/runtime compatibility with the Rust staticlib.
+  - Old intermediate build directories were removed. Current optimized
+    comparison builds are:
+    - `build_wgpu_29_release_baseline`: Release, non-LTO.
+    - `build_wgpu_29_release_lto_bitcode`: Release with
+      `BABYLON_NATIVE_LTO_BITCODE_STATIC_LIBS=ON`.
+  - LTO-bitcode build uses Xcode 26.5 / AppleClang 21.0.0 and Rust
+    `1.94.1` (`LLVM 21.1.8`). Native C/C++/ObjC/ObjC++ compile and final link
+    use `-flto=full`. Rust target crates use target-scoped
+    `CARGO_TARGET_AARCH64_APPLE_DARWIN_RUSTFLAGS=-C linker-plugin-lto -C embed-bitcode=yes -C codegen-units=1`.
+    The build also uses Rust `build-std` with `panic_abort` so the Rust
+    standard-library and compiler-builtins members are rebuilt by the same
+    Rust 1.94.1 toolchain instead of pulling prebuilt native std objects into
+    `libbabylon_graphics_backend.a`.
+  - Final-link archive inspection for
+    `build_wgpu_29_release_lto_bitcode/Apps/Playground/Playground.app/Contents/MacOS/Playground`
+    showed every direct object and every member of every linked `.a` contains
+    LTO bitcode (`other=0`), including
+    `cargo/aarch64-apple-darwin/release/libbabylon_graphics_backend.a`
+    (`total=103`, `lto_bitcode=103`, `other=0`).
+  - Stripped optimized Playground size changed from `12,222,464` bytes
+    (`build_wgpu_29_release_baseline`) to `5,417,720` bytes
+    (`build_wgpu_29_release_lto_bitcode`), a reduction of `6,804,744` bytes.
+  - `build_wgpu_29_release_lto_bitcode` passed `UnitTests` and all 8
+    `NativeWebGPUAsyncTests`.
+- macOS visible smoke:
+  - After the `wgpu-native` rlib fix, Debug Playground rendered a non-blank
+    BabylonJS WebGPU spinning cube with visible CanvasWgpu gradient/text.
+    Screenshot captured at
+    `/tmp/babylonnative-validation/playground-wgpu-native-rlib-macos.png`.
+    Logs included `webgpu-smoke:compute-dispatched`,
+    `webgpu-smoke:babylon-webgpu-path:1`, and runtime counters
+    `frames=643:submit=486:draw=968:canvasSkip=0:canvasW=512:canvasH=512`.
+  - Debug Playground rendered a non-blank BabylonJS WebGPU spinning cube with
+    visible CanvasWgpu gradient/text on cube faces after the wgpu 29.0.3 update.
+  - Screenshot captured at
+    `/tmp/babylonnative-validation/playground-wgpu29-macos.png`.
+  - Logs included `Babylon.js v9.6.2 - WebGPU1 engine`,
+    `runner:using-webgpu-engine`, `webgpu-smoke:canvas-texture-uploaded:1`,
+    `webgpu-smoke:compute-dispatched`, and
+    `webgpu-smoke:runtime-counters:frames=655:submit=498:draw=992:canvasSkip=0:canvasHash=5627888531996255000:canvasW=512:canvasH=512:gpuBytes=13049576`.
+  - Release+IPO Playground rendered a non-blank BabylonJS WebGPU spinning cube
+    with visible CanvasWgpu gradient/text on cube faces.
+  - Clean screenshot captured at
+    `/var/folders/_c/krb2zmbx2ss6b1xhpydpxcr80000gn/T/codex-shot-2026-05-13_00-00-53.png`.
+  - Logs included `Babylon.js v9.6.2 - WebGPU1 engine`,
+    `runner:using-webgpu-engine`, `webgpu-smoke:queue-copy-ready:1`,
+    `webgpu-smoke:canvas-texture-uploaded:1`, `webgpu-smoke:compute-dispatched`,
+    `runner:renderloop-frame:first`, and
+    `webgpu-smoke:babylon-webgpu-path:1:pipeline=3:submit=52:draw=100:drawPath=true`.
+  - Runtime counter at ~10s: `frames=618`, `submit=495`, `draw=986`,
+    `canvasSkip=0`, `canvasW=512`, `canvasH=512`,
+    `gpuBytes=13049576`.
+  - Release LTO-bitcode Playground rendered a non-blank BabylonJS WebGPU
+    spinning cube with visible CanvasWgpu gradient/text on cube faces after
+    switching from the temporary femtovg fork to published `femtovg 0.25.0`.
+    Screenshot captured at
+    `/tmp/babylonnative-validation/playground-lto-bitcode-macos.png`.
+  - Logs included `Babylon.js v9.6.2 - WebGPU1 engine`,
+    `runner:using-webgpu-engine`, `webgpu-smoke:canvas-upload-mode:queue-copyExternalImageToTexture`,
+    `webgpu-smoke:compute-dispatched`,
+    `webgpu-smoke:babylon-webgpu-path:1:pipeline=3:submit=52:draw=100:drawPath=true:backendMode=interop-shim-babylonjs-webgpu`,
+    and
+    `webgpu-smoke:runtime-counters:frames=627:submit=498:draw=992:canvasSkip=0:canvasHash=4467692183165683000:canvasW=512:canvasH=512:gpuBytes=13049576`.
+- macOS memory/CPU:
+  - For the wgpu 29.0.3 Debug smoke, the initial RSS sample rose from
+    `259,632 KB` to `260,320 KB` over 15s and then continued to
+    `261,952 KB` over a longer warmup, so it was investigated instead of being
+    accepted immediately.
+  - A later `vmmap -summary` pair over 30s was flat (`Physical footprint`
+    `546.1 MB` -> `546.0 MB`, `IOAccelerator (graphics)` `5984 KB` stable,
+    `IOSurface` `11.9 MB` stable, `owned unmapped (graphics)` `397.9 MB`
+    stable). A final 15s RSS sample plateaued around `262,992-263,024 KB`,
+    with CPU generally `13-21%` in Debug.
+  - Current conclusion for the wgpu 29.0.3 Debug run: warmup/residency growth
+    followed by a stable plateau, not confirmed unbounded growth.
+  - Initial post-warmup RSS rose from `249,968 KB` at `00:16` elapsed to
+    `251,680 KB` at `00:56`, so the run was investigated further.
+  - `vmmap -summary` did not show a growing heap/footprint trend across later
+    samples: physical footprint moved `578.2 MB` -> `573.7 MB`, WebKit malloc
+    allocated bytes moved `64.1 MB` -> `58.3 MB`, and Default malloc allocated
+    bytes moved `16.7 MB` -> `16.0 MB`.
+  - A longer sample then plateaued around `253,312-253,424 KB` RSS from
+    roughly `02:06` through `04:05` elapsed, with CPU generally `7-12%`.
+  - Current conclusion: the macOS smoke shows warmup/residency growth followed
+    by a stable plateau, not confirmed unbounded CPU/GPU memory growth.
+  - The release LTO-bitcode smoke showed increasing `ps` RSS during the first
+    samples, but a `vmmap -summary` pair taken 20s apart did not show allocator
+    or GPU-surface growth: dirty/resident-like `TOTAL` accounting moved
+    `582.5 MB` -> `577.1 MB`, malloc allocated moved `82.2 MB` -> `74.8 MB`,
+    and `IOSurface` stayed flat at `11.9 MB`. Current conclusion: the observed
+    RSS rise is resident page-in/accounting noise, not confirmed heap or GPU
+    memory growth.
+- macOS sanitizer tests:
+  - ASan+UBSan: `ctest --test-dir build_wgpu_29_asan_ubsan -R UnitTests`
+    passed. `NativeWebGPUAsyncTests` passed with
+    `ASAN_OPTIONS=detect_leaks=0:abort_on_error=1` and
+    `UBSAN_OPTIONS=halt_on_error=1`; Apple ASan reported that
+    `detect_leaks=1` is unsupported on this platform.
+  - ThreadSanitizer: `ctest --test-dir build_wgpu_29_tsan -R UnitTests`
+    passed and `NativeWebGPUAsyncTests` passed with
+    `TSAN_OPTIONS=halt_on_error=1`.
+- Device validation status:
+  - `devicectl list devices` currently reports the requested iPhone XS entry as
+    `unavailable` (`C7A1D5AD-C89D-5E03-99B9-5E65EEC30486`). The visible iPhone XS
+    smoke run has not been completed in this pass.
+  - `adb devices` reports no running Android devices. The API 31 Vulkan AVD
+    exists as `BN_API_31_GA_VK`, but the visible Android smoke run has not been
+    completed in this pass.
+  - The current upstream screenshot comparison harness
+    (`Apps/Playground/Scripts/validation_native.js`) still targets
+    `BABYLON.NativeEngine()`, not the WebGPU engine path, so the screenshot
+    comparison suite is not yet a valid WebGPU-path acceptance signal.
 
 ## Current Spike Reality (as of this branch)
 - `Core/GraphicsWgpu/Rust/src/lib.rs` is now the single GraphicsWgpu Rust
   runtime source (~2.9k LOC) and contains Babylon-facing FFI glue plus the
-  upstream C-ABI interop/runtime management that was previously split across
-  crates. The compute dispatch path lives in `src/compute.rs` as a submodule.
+  temporary local `wgpu` runtime management that must be collapsed toward
+  upstream `wgpu-native` C ABI calls. The compute dispatch path lives in
+  `src/compute.rs` as a submodule and currently dispatches on the same local
+  `wgpu` runtime while the version probe resolves through `wgpu-native` C ABI
+  symbols from the shared Rust staticlib.
 - `Polyfills/CanvasWgpu/Rust/src/lib.rs` remains the CanvasWgpu Rust runtime
   source (~1.2k LOC) and is included into the GraphicsWgpu crate via
   `#[path = ...]` so only one Rust staticlib is produced.
@@ -265,9 +417,11 @@
     code stabilizes, to improve IDE tooling and eliminate the fragile
     cross-directory `#[path]` include.
 - There is no longer a separate `Core/GraphicsWgpu/Rust/upstream-shim` crate
-  or Rust source file in-tree.
+  in-tree.
 - This is not a patched dependency; `wgpu` resolves from crates.io.
-- MSRV is `1.76` (set in `Cargo.toml`). `wgpu 27.0.1` requires this minimum.
+- MSRV is currently recorded as `1.76` in `Cargo.toml`, but the active local
+  toolchain for this branch is Rust `1.94.1`; re-check the declared MSRV before
+  treating it as a supported floor for `wgpu` 29.0.3.
 - Android emulator validation indicates the practical floor is currently API 31
   for stable Vulkan behavior in this environment; API 29/30 emulator images
   expose adapter/device-loss issues that are likely emulator-stack specific.
@@ -291,8 +445,10 @@
 ## Phase 2 Blockers (must resolve before PR merge)
 - [ ] Replace `DebugCubeRenderer` with real BabylonJS WebGPU command-stream
   execution through upstream `wgpu-native` C ABI.
-- [ ] Resolve dual GPU runtime duplication (local `wgpu` Rust API for render +
-  raw C-API for compute) — unify on a single runtime.
+- [ ] Port the active local `wgpu` Rust API render/compute path to upstream
+  `wgpu-native` C ABI calls now that the duplicate-staticlib/ObjC class symbol
+  issue is fixed by consuming `wgpu-native` as an `rlib` in the shared Cargo
+  graph.
 - [ ] Implement `getImageData` GPU texture readback (currently returns zeros).
 - [ ] Windows validation snapshot — no Win32 D3D12 data in current results.
 - [ ] Vulkan-backend CI coverage on Windows (currently D3D12 only).
@@ -361,9 +517,11 @@ Phases 3-6. Search for `TODO(bgfx-removal)` comments in the codebase.
   - keep Babylon crate `wgpu*` versions aligned with `wgpu-native` major/minor
     during migration to avoid API drift and duplicate backend logic.
 - Integration note:
-  - upstream `wgpu-native` currently builds as `cdylib/staticlib` (not `rlib`),
-    so Babylon should consume its C ABI (or build artifact) instead of depending
-    on it as a direct Rust crate.
+  - upstream `wgpu-native` currently declares `cdylib/staticlib` crate types
+    but not `rlib`; Babylon patches the fetched manifest in the build tree to
+    add `rlib` so the C ABI can be linked through one Cargo graph. Avoid
+    reintroducing a separately linked `libwgpu_native.a` while the local
+    `wgpu` Rust API path still exists.
 - Remaining work for Phase 2:
   - replace local `Core/GraphicsWgpu/Rust/src/lib.rs` device/pipeline logic
     with upstream `wgpu-native` ABI-backed calls while preserving current C++ APIs,
@@ -429,13 +587,16 @@ Phases 3-6. Search for `TODO(bgfx-removal)` comments in the codebase.
 
 ## `wgpu-native` Rebase Checklist
 - [x] Add a compile-time backend selector (`local` vs `wgpu-native`) and switch branch default to upstream while keeping rollback path.
-- [x] Wire upstream `wgpu-native` staticlib build + link path into Babylon CMake/Rust build.
-- [x] Introduce and then inline a thin Rust shim layer that wraps upstream
-  `wgpu-native` handles/callbacks without maintaining a separate crate boundary.
+- [x] Wire upstream `wgpu-native` C ABI symbols into Babylon without linking a
+  second Rust staticlib by patching the fetched build-local manifest to expose
+  `rlib` and Cargo-patching the git dependency to that source.
+- [ ] Reintroduce the thin upstream C ABI shim only as callsites are actually
+  ported to `wgpu-native`; avoid probe-only duplicate runtime ownership.
 - [ ] Port adapter/device/surface bootstrap to upstream ABI.
-  - In progress: adapter/device request bootstrap now initializes and reuses a
-    persistent upstream runtime via the shim; legacy probe-only surface checks
-    were removed in favor of runtime-backed probe + live render validation.
+  - Current state: default builds use the local `wgpu` 29.0.3 runtime for
+    render/compute dispatch. Upstream `wgpu-native v29.0.0.0` source/headers
+    and C ABI symbols are linked through the shared Rust staticlib for the next
+    C-ABI migration slice.
 - [ ] Migrate remaining local `create_context` render/surface pipeline setup
   into shim-managed upstream handles in reversible slices.
 - [ ] Replace temporary DebugCubeRenderer submit path with real
