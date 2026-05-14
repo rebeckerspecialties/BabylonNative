@@ -68,26 +68,30 @@ float screenScale{1.0f};
 
 - (void)resize:(int)inWidth height:(int)inHeight
 {
-    if (appContext)
-    {
-        appContext->DeviceUpdate().Finish();
-        appContext->Device().FinishRenderingCurrentFrame();
+    @autoreleasepool {
+        if (appContext)
+        {
+            appContext->DeviceUpdate().Finish();
+            appContext->Device().FinishRenderingCurrentFrame();
 
-        appContext->Device().UpdateSize(static_cast<size_t>(inWidth), static_cast<size_t>(inHeight));
+            appContext->Device().UpdateSize(static_cast<size_t>(inWidth), static_cast<size_t>(inHeight));
 
-        appContext->Device().StartRenderingCurrentFrame();
-        appContext->DeviceUpdate().Start();
+            appContext->Device().StartRenderingCurrentFrame();
+            appContext->DeviceUpdate().Start();
+        }
     }
 }
 
 - (void)render
 {
-    if (appContext)
-    {
-        appContext->DeviceUpdate().Finish();
-        appContext->Device().FinishRenderingCurrentFrame();
-        appContext->Device().StartRenderingCurrentFrame();
-        appContext->DeviceUpdate().Start();
+    @autoreleasepool {
+        if (appContext)
+        {
+            appContext->DeviceUpdate().Finish();
+            appContext->Device().FinishRenderingCurrentFrame();
+            appContext->Device().StartRenderingCurrentFrame();
+            appContext->DeviceUpdate().Start();
+        }
     }
 }
 

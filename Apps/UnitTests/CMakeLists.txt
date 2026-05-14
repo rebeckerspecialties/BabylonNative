@@ -10,71 +10,78 @@ set(BABYLONJS_ASSETS
 set(BABYLONJS_MATERIALS_ASSETS
     "../node_modules/babylonjs-materials/babylonjs.materials.js")
 
-set(TEST_ASSETS
-    "JavaScript/dist/tests.externalTexture.deviceLoss.js"
-    "JavaScript/dist/tests.externalTexture.msaa.js"
-    "JavaScript/dist/tests.javaScript.all.js"
-    "JavaScript/dist/tests.shaderCache.basicScene.js"
-    "JavaScript/dist/tests.shaders.cross.js")
-
-file(GLOB TEST_SCRIPTS "JavaScript/src/*.ts")
-set_source_files_properties(${TEST_SCRIPTS} PROPERTIES HEADER_FILE_ONLY TRUE)
+set(TEST_ASSETS)
 
 set(SOURCES
     "Source/App.h"
     "Source/App.cpp"
-    "Source/Tests.ExternalTexture.cpp"
-    "Source/Tests.ExternalTexture.DeviceLoss.cpp"
-    "Source/Tests.ExternalTexture.Msaa.cpp"
-    "Source/Tests.JavaScript.cpp"
-    "Source/Tests.ShaderCache.cpp"
-    "Source/Tests.ShaderCompilation.cpp"
-    "Source/Tests.UniformPadding.cpp"
-    "Source/Helpers.h"
-    "Source/Helpers.${GRAPHICS_API}.${BABYLON_NATIVE_PLATFORM_IMPL_EXT}")
+    "Source/Tests.JavaScript.cpp")
 
-if(GRAPHICS_API STREQUAL "D3D11" OR GRAPHICS_API STREQUAL "D3D12")
-    set(SOURCES ${SOURCES}
-        "Source/Tests.Device.cpp")
-endif()
+set(UNITTEST_LIBRARIES
+    AppRuntime
+    Blob
+    Canvas
+    Console
+    GraphicsDevice
+    ScriptLoader
+    Window
+    XMLHttpRequest
+    gtest_main)
 
-if(GRAPHICS_API STREQUAL "D3D11")
-    set(SOURCES ${SOURCES}
-        "Source/Tests.Device.${GRAPHICS_API}.cpp"
-        "Source/Tests.ExternalTexture.${GRAPHICS_API}.cpp")
+if(TARGET NativeEngine)
+    list(APPEND TEST_ASSETS
+        "JavaScript/dist/tests.javaScript.all.js"
+        "JavaScript/dist/tests.shaderCache.basicScene.js")
+    list(APPEND SOURCES
+        "Source/Tests.ExternalTexture.cpp"
+        "Source/Tests.ShaderCache.cpp"
+        "Source/Tests.UniformPadding.cpp"
+        "Source/Utils.h"
+        "Source/Utils.${GRAPHICS_API}.${BABYLON_NATIVE_PLATFORM_IMPL_EXT}")
+    list(APPEND UNITTEST_LIBRARIES
+        ExternalTexture
+        NativeEngine
+        ShaderCache)
+    list(APPEND ADDITIONAL_COMPILE_DEFINITIONS BABYLON_NATIVE_UNITTESTS_WITH_NATIVEENGINE)
+
+    if(TARGET NativeEncoding)
+        list(APPEND UNITTEST_LIBRARIES NativeEncoding)
+        list(APPEND ADDITIONAL_COMPILE_DEFINITIONS BABYLON_NATIVE_UNITTESTS_WITH_NATIVEENCODING)
+    endif()
+
+    if(GRAPHICS_API STREQUAL "D3D11")
+        list(APPEND SOURCES
+            "Source/Tests.Device.${GRAPHICS_API}.cpp"
+            "Source/Tests.ExternalTexture.${GRAPHICS_API}.cpp")
+    endif()
+elseif(TARGET NativeWebGPU)
+    list(APPEND TEST_ASSETS
+        "JavaScript/dist/tests.wgpu.js")
+    list(APPEND UNITTEST_LIBRARIES NativeWebGPU)
+    list(APPEND ADDITIONAL_COMPILE_DEFINITIONS BABYLON_NATIVE_UNITTESTS_WITH_WEBGPU)
+else()
+    message(FATAL_ERROR "UnitTests requires either NativeEngine or NativeWebGPU.")
 endif()
 
 if(APPLE)
     set(SOURCES ${SOURCES} "Source/App.Apple.mm")
     if(BABYLON_NATIVE_TESTS_USE_NOOP_METAL_DEVICE)
-        set(ADDITIONAL_COMPILE_DEFINITIONS
-            PRIVATE USE_NOOP_METAL_DEVICE
-            PRIVATE SKIP_EXTERNAL_TEXTURE_TESTS)
+        list(APPEND ADDITIONAL_COMPILE_DEFINITIONS
+            USE_NOOP_METAL_DEVICE
+            SKIP_EXTERNAL_TEXTURE_TESTS)
     endif()
     find_library(JAVASCRIPTCORE_LIBRARY JavaScriptCore)
-    set(ADDITIONAL_LIBRARIES PRIVATE ${JAVASCRIPTCORE_LIBRARY})
+    set(ADDITIONAL_LIBRARIES ${JAVASCRIPTCORE_LIBRARY})
 elseif(UNIX AND NOT ANDROID)
     set(SOURCES ${SOURCES} "Source/App.X11.cpp")
-    set(ADDITIONAL_COMPILE_DEFINITIONS PRIVATE SKIP_EXTERNAL_TEXTURE_TESTS)
+    list(APPEND ADDITIONAL_COMPILE_DEFINITIONS SKIP_EXTERNAL_TEXTURE_TESTS)
 elseif(WIN32)
     set(SOURCES ${SOURCES} "Source/App.Win32.cpp")
 endif()
 
 add_executable(UnitTests ${BABYLONJS_ASSETS} ${BABYLONJS_MATERIALS_ASSETS} ${TEST_ASSETS} ${TEST_SCRIPTS} ${SOURCES})
 target_link_libraries(UnitTests
-    PRIVATE AppRuntime
-    PRIVATE Blob
-    PRIVATE Canvas
-    PRIVATE Console
-    PRIVATE GraphicsDevice
-    PRIVATE ExternalTexture
-    PRIVATE NativeEngine
-    PRIVATE NativeEncoding
-    PRIVATE ScriptLoader
-    PRIVATE ShaderCache
-    PRIVATE Window
-    PRIVATE XMLHttpRequest
-    PRIVATE gtest_main
+    PRIVATE ${UNITTEST_LIBRARIES}
     ${ADDITIONAL_LIBRARIES})
 
 target_compile_definitions(UnitTests PRIVATE ${ADDITIONAL_COMPILE_DEFINITIONS})
