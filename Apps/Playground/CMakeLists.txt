@@ -148,7 +148,6 @@ endif()
 target_link_libraries(Playground
     PRIVATE AppRuntime
     PRIVATE Blob
-    PRIVATE bx
     PRIVATE Console
     PRIVATE GraphicsDevice
     PRIVATE NativeInput

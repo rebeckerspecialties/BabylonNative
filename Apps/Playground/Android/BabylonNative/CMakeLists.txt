@@ -20,7 +20,6 @@ target_include_directories(BabylonNativeJNI
 
 target_link_libraries(BabylonNativeJNI
     PRIVATE android
-    PRIVATE bx
     PRIVATE EGL
     PRIVATE log
     PRIVATE -lz
