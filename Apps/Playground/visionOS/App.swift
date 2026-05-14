@@ -31,7 +31,16 @@ final class BabylonRuntime: ObservableObject {
         self.bnRuntime = bnRuntime
 
         PlaygroundBootstrap.loadScripts(bnRuntime)
-        bnRuntime.loadScript("app:///Scripts/experience.js")
+        bnRuntime.eval("""
+            (function(){
+            globalThis.createScene=undefined;
+            globalThis.__babylonPlaygroundSceneFactoryReady=undefined;
+            globalThis.__babylonPlaygroundWebGpuSmokeReady=undefined;
+            globalThis.__webgpuSmokeDispose=undefined;
+            })();
+            """, sourceURL: "app:///Scripts/playground_bootstrap_reset.js")
+        bnRuntime.loadScript("app:///Scripts/webgpu_smoke.js")
+        bnRuntime.loadScript("app:///Scripts/playground_runner.js")
     }
 }
 

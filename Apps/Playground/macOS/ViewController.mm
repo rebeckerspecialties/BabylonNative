@@ -54,7 +54,7 @@
                        @"globalThis.__babylonPlaygroundWebGpuSmokeReady=undefined;"
                        @"globalThis.__webgpuSmokeDispose=undefined;"
                        @"})();"
-                sourceUrl:@"app:///Scripts/playground_bootstrap_reset.js"];
+                sourceURL:@"app:///Scripts/playground_bootstrap_reset.js"];
         [_runtime loadScript:@"app:///Scripts/webgpu_smoke.js"];
         [_runtime loadScript:@"app:///Scripts/playground_runner.js"];
     }

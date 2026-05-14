@@ -24,7 +24,16 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         // first BNView attach completes engine initialization on the JS
         // thread, in submission order.
         PlaygroundBootstrap.loadScripts(runtime)
-        runtime.loadScript("app:///Scripts/experience.js")
+        runtime.eval("""
+            (function(){
+            globalThis.createScene=undefined;
+            globalThis.__babylonPlaygroundSceneFactoryReady=undefined;
+            globalThis.__babylonPlaygroundWebGpuSmokeReady=undefined;
+            globalThis.__webgpuSmokeDispose=undefined;
+            })();
+            """, sourceURL: "app:///Scripts/playground_bootstrap_reset.js")
+        runtime.loadScript("app:///Scripts/webgpu_smoke.js")
+        runtime.loadScript("app:///Scripts/playground_runner.js")
 
         self.runtime = runtime
         return true

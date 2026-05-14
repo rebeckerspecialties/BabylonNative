@@ -84,8 +84,12 @@ set(RUST_BUILD_FLAG "")
 set(RUST_TARGET_TRIPLE "")
 set(RUST_TARGET_FLAG "")
 set(RUST_PLATFORM_ENV)
+set(RUST_PLATFORM_RUSTFLAGS "")
 set(RUST_COMMON_ENV "CARGO_NET_GIT_FETCH_WITH_CLI=true")
 set(RUST_PROFILE_ENV)
+set(RUST_PROFILE_RUSTFLAGS "")
+set(RUST_RELEASE_RUSTFLAGS "")
+set(RUST_RELEASE_BUILD_STD_ARGS "")
 
 if(CMAKE_BUILD_TYPE MATCHES "^[Rr]el")
     # Match Release, RelWithDebInfo, and RelMinSize to the Rust release profile.
@@ -93,6 +97,12 @@ if(CMAKE_BUILD_TYPE MATCHES "^[Rr]el")
     set(RUST_BUILD_FLAG "--release")
     list(APPEND RUST_PROFILE_ENV
         "CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1")
+    if(BABYLON_NATIVE_LTO_BITCODE_STATIC_LIBS)
+        list(APPEND RUST_PROFILE_ENV
+            "RUSTC_BOOTSTRAP=1"
+            "CARGO_PROFILE_RELEASE_PANIC=abort")
+        set(RUST_RELEASE_BUILD_STD_ARGS "-Z" "build-std=std,panic_abort")
+    endif()
 endif()
 
 function(_babylon_rust_output_lib out_var target_dir target_triple profile lib_basename)
@@ -183,13 +193,13 @@ elseif(IOS)
             set(RUST_TARGET_TRIPLE "x86_64-apple-ios")
         endif()
         list(APPEND RUST_PLATFORM_ENV
-            "IPHONEOS_DEPLOYMENT_TARGET=${DEPLOYMENT_TARGET}"
-            "RUSTFLAGS=-C link-arg=-mios-simulator-version-min=${DEPLOYMENT_TARGET}")
+            "IPHONEOS_DEPLOYMENT_TARGET=${DEPLOYMENT_TARGET}")
+        string(APPEND RUST_PLATFORM_RUSTFLAGS " -C link-arg=-mios-simulator-version-min=${DEPLOYMENT_TARGET}")
     else()
         set(RUST_TARGET_TRIPLE "aarch64-apple-ios")
         list(APPEND RUST_PLATFORM_ENV
-            "IPHONEOS_DEPLOYMENT_TARGET=${DEPLOYMENT_TARGET}"
-            "RUSTFLAGS=-C link-arg=-miphoneos-version-min=${DEPLOYMENT_TARGET}")
+            "IPHONEOS_DEPLOYMENT_TARGET=${DEPLOYMENT_TARGET}")
+        string(APPEND RUST_PLATFORM_RUSTFLAGS " -C link-arg=-miphoneos-version-min=${DEPLOYMENT_TARGET}")
     endif()
 elseif(VISIONOS)
     set(BABYLON_VISIONOS_SIMULATOR_BUILD OFF)
@@ -204,6 +214,12 @@ elseif(VISIONOS)
     else()
         set(RUST_TARGET_TRIPLE "aarch64-apple-xros")
     endif()
+elseif(APPLE)
+    if(CMAKE_OSX_ARCHITECTURES MATCHES "(^|;)x86_64(;|$)")
+        set(RUST_TARGET_TRIPLE "x86_64-apple-darwin")
+    else()
+        set(RUST_TARGET_TRIPLE "aarch64-apple-darwin")
+    endif()
 elseif(WIN32)
     if(CMAKE_SIZEOF_VOID_P EQUAL 8)
         set(RUST_TARGET_TRIPLE "x86_64-pc-windows-msvc")
@@ -215,6 +231,24 @@ endif()
 if(NOT RUST_TARGET_TRIPLE STREQUAL "")
     set(RUST_TARGET_FLAG "--target" "${RUST_TARGET_TRIPLE}")
 endif()
+
+set(RUSTFLAGS_ENV_NAME "RUSTFLAGS")
+if(NOT RUST_TARGET_TRIPLE STREQUAL "")
+    string(TOUPPER "${RUST_TARGET_TRIPLE}" RUST_TARGET_TRIPLE_ENV_NAME)
+    string(REPLACE "-" "_" RUST_TARGET_TRIPLE_ENV_NAME "${RUST_TARGET_TRIPLE_ENV_NAME}")
+    set(RUSTFLAGS_ENV_NAME "CARGO_TARGET_${RUST_TARGET_TRIPLE_ENV_NAME}_RUSTFLAGS")
+endif()
+
+set(RUST_RELEASE_RUSTFLAGS "${RUST_PLATFORM_RUSTFLAGS}")
+if(BABYLON_NATIVE_LTO_BITCODE_STATIC_LIBS)
+    string(APPEND RUST_RELEASE_RUSTFLAGS " -C linker-plugin-lto -C embed-bitcode=yes -C codegen-units=1")
+endif()
+if(CMAKE_BUILD_TYPE MATCHES "^[Rr]el")
+    set(RUST_PROFILE_RUSTFLAGS "${RUST_RELEASE_RUSTFLAGS}")
+endif()
+string(STRIP "${RUST_PLATFORM_RUSTFLAGS}" RUST_PLATFORM_RUSTFLAGS)
+string(STRIP "${RUST_RELEASE_RUSTFLAGS}" RUST_RELEASE_RUSTFLAGS)
+string(STRIP "${RUST_PROFILE_RUSTFLAGS}" RUST_PROFILE_RUSTFLAGS)
 
 _babylon_rust_output_lib(RUST_OUTPUT_LIB_DEBUG "${RUST_TARGET_DIR}" "${RUST_TARGET_TRIPLE}" "debug" "babylon_graphics_backend")
 _babylon_rust_output_lib(RUST_OUTPUT_LIB_RELEASE "${RUST_TARGET_DIR}" "${RUST_TARGET_TRIPLE}" "release" "babylon_graphics_backend")
@@ -233,12 +267,6 @@ else()
 endif()
 
 set(UPSTREAM_WGPU_NATIVE_TARGET "")
-set(UPSTREAM_WGPU_NATIVE_OUTPUT_LIB "")
-set(UPSTREAM_WGPU_NATIVE_OUTPUT_LIB_DEBUG "")
-set(UPSTREAM_WGPU_NATIVE_OUTPUT_LIB_RELEASE "")
-set(UPSTREAM_WGPU_NATIVE_LIB_DIR "")
-set(UPSTREAM_WGPU_NATIVE_LIB_DIR_DEBUG "")
-set(UPSTREAM_WGPU_NATIVE_LIB_DIR_RELEASE "")
 
 if(BABYLON_NATIVE_WGPU_USE_UPSTREAM_NATIVE)
     if(NOT DEFINED wgpu_native_SOURCE_DIR OR wgpu_native_SOURCE_DIR STREQUAL "")
@@ -247,79 +275,37 @@ if(BABYLON_NATIVE_WGPU_USE_UPSTREAM_NATIVE)
     if(NOT DEFINED webgpu_headers_SOURCE_DIR OR webgpu_headers_SOURCE_DIR STREQUAL "")
         message(FATAL_ERROR "BABYLON_NATIVE_WGPU_USE_UPSTREAM_NATIVE requires webgpu_headers_SOURCE_DIR.")
     endif()
-
-    set(UPSTREAM_WGPU_NATIVE_TARGET_DIR "${RUST_TARGET_DIR}/upstream-wgpu-native")
-    set(UPSTREAM_WGPU_NATIVE_FEATURES "wgsl")
-    if(APPLE)
-        list(APPEND UPSTREAM_WGPU_NATIVE_FEATURES "metal")
-    elseif(WIN32)
-        # Keep Vulkan available for diagnostics, but default runtime selection remains DX12-first.
-        list(APPEND UPSTREAM_WGPU_NATIVE_FEATURES "dx12" "vulkan")
-    else()
-        list(APPEND UPSTREAM_WGPU_NATIVE_FEATURES "vulkan")
-    endif()
-    string(JOIN "," UPSTREAM_WGPU_NATIVE_FEATURES_ARG ${UPSTREAM_WGPU_NATIVE_FEATURES})
-
-    _babylon_rust_output_lib(UPSTREAM_WGPU_NATIVE_OUTPUT_LIB_DEBUG "${UPSTREAM_WGPU_NATIVE_TARGET_DIR}" "${RUST_TARGET_TRIPLE}" "debug" "wgpu_native")
-    _babylon_rust_output_lib(UPSTREAM_WGPU_NATIVE_OUTPUT_LIB_RELEASE "${UPSTREAM_WGPU_NATIVE_TARGET_DIR}" "${RUST_TARGET_TRIPLE}" "release" "wgpu_native")
-    get_filename_component(UPSTREAM_WGPU_NATIVE_LIB_DIR_DEBUG "${UPSTREAM_WGPU_NATIVE_OUTPUT_LIB_DEBUG}" DIRECTORY)
-    get_filename_component(UPSTREAM_WGPU_NATIVE_LIB_DIR_RELEASE "${UPSTREAM_WGPU_NATIVE_OUTPUT_LIB_RELEASE}" DIRECTORY)
-
-    if(BABYLON_NATIVE_MULTI_CONFIG)
-        add_custom_command(
-            OUTPUT
-                "${UPSTREAM_WGPU_NATIVE_OUTPUT_LIB_DEBUG}"
-                "${UPSTREAM_WGPU_NATIVE_OUTPUT_LIB_RELEASE}"
-            COMMAND ${CMAKE_COMMAND} -E env ${RUST_COMMON_ENV} ${RUST_PLATFORM_ENV} ${CARGO_COMMAND} rustc --manifest-path "${wgpu_native_SOURCE_DIR}/Cargo.toml" --target-dir "${UPSTREAM_WGPU_NATIVE_TARGET_DIR}" ${RUST_TARGET_FLAG} --no-default-features --features "${UPSTREAM_WGPU_NATIVE_FEATURES_ARG}" --lib -- --crate-type staticlib
-            COMMAND ${CMAKE_COMMAND} -E env ${RUST_COMMON_ENV} ${RUST_PLATFORM_ENV} CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1 ${CARGO_COMMAND} rustc --manifest-path "${wgpu_native_SOURCE_DIR}/Cargo.toml" --target-dir "${UPSTREAM_WGPU_NATIVE_TARGET_DIR}" --release ${RUST_TARGET_FLAG} --no-default-features --features "${UPSTREAM_WGPU_NATIVE_FEATURES_ARG}" --lib -- --crate-type staticlib
-            WORKING_DIRECTORY "${wgpu_native_SOURCE_DIR}"
-            DEPENDS
-                "${wgpu_native_SOURCE_DIR}/Cargo.toml"
-                "${wgpu_native_SOURCE_DIR}/src/lib.rs"
-                "${wgpu_native_SOURCE_DIR}/src/logging.rs"
-            COMMENT "Building upstream wgpu-native static library (debug + release)"
-            VERBATIM)
-        set(UPSTREAM_WGPU_NATIVE_OUTPUT_LIBS
-            "${UPSTREAM_WGPU_NATIVE_OUTPUT_LIB_DEBUG}"
-            "${UPSTREAM_WGPU_NATIVE_OUTPUT_LIB_RELEASE}")
-    else()
-        if(RUST_PROFILE_DIR STREQUAL "release")
-            set(UPSTREAM_WGPU_NATIVE_OUTPUT_LIB "${UPSTREAM_WGPU_NATIVE_OUTPUT_LIB_RELEASE}")
-            set(UPSTREAM_WGPU_NATIVE_LIB_DIR "${UPSTREAM_WGPU_NATIVE_LIB_DIR_RELEASE}")
-        else()
-            set(UPSTREAM_WGPU_NATIVE_OUTPUT_LIB "${UPSTREAM_WGPU_NATIVE_OUTPUT_LIB_DEBUG}")
-            set(UPSTREAM_WGPU_NATIVE_LIB_DIR "${UPSTREAM_WGPU_NATIVE_LIB_DIR_DEBUG}")
+    if(BABYLON_NATIVE_WGPU_NATIVE_RLIB)
+        if(NOT DEFINED wgpu_native_rlib_SOURCE_DIR OR wgpu_native_rlib_SOURCE_DIR STREQUAL "")
+            message(FATAL_ERROR "BABYLON_NATIVE_WGPU_NATIVE_RLIB requires wgpu_native_rlib_SOURCE_DIR.")
         endif()
-
-        add_custom_command(
-            OUTPUT "${UPSTREAM_WGPU_NATIVE_OUTPUT_LIB}"
-            COMMAND ${CMAKE_COMMAND} -E env ${RUST_COMMON_ENV} ${RUST_PLATFORM_ENV} ${RUST_PROFILE_ENV} ${CARGO_COMMAND} rustc --manifest-path "${wgpu_native_SOURCE_DIR}/Cargo.toml" --target-dir "${UPSTREAM_WGPU_NATIVE_TARGET_DIR}" ${RUST_BUILD_FLAG} ${RUST_TARGET_FLAG} --no-default-features --features "${UPSTREAM_WGPU_NATIVE_FEATURES_ARG}" --lib -- --crate-type staticlib
-            WORKING_DIRECTORY "${wgpu_native_SOURCE_DIR}"
-            DEPENDS
-                "${wgpu_native_SOURCE_DIR}/Cargo.toml"
-                "${wgpu_native_SOURCE_DIR}/src/lib.rs"
-                "${wgpu_native_SOURCE_DIR}/src/logging.rs"
-            COMMENT "Building upstream wgpu-native static library"
-            VERBATIM)
-        set(UPSTREAM_WGPU_NATIVE_OUTPUT_LIBS "${UPSTREAM_WGPU_NATIVE_OUTPUT_LIB}")
+        set(WGPU_NATIVE_CARGO_PATCH_CONFIG
+            "--config"
+            "patch.\"https://github.com/gfx-rs/wgpu-native.git\".wgpu-native.path=\"${wgpu_native_rlib_SOURCE_DIR}\"")
+        set(WGPU_NATIVE_CARGO_FEATURES "--features" "wgpu-native-rlib")
     endif()
-
-    set(UPSTREAM_WGPU_NATIVE_TARGET wgpu_native_upstream_backend_rust)
-    add_custom_target(${UPSTREAM_WGPU_NATIVE_TARGET} DEPENDS ${UPSTREAM_WGPU_NATIVE_OUTPUT_LIBS})
 endif()
 
 if(BABYLON_NATIVE_MULTI_CONFIG)
     set(RUST_BACKEND_ENV_DEBUG ${RUST_COMMON_ENV} ${RUST_PLATFORM_ENV})
     set(RUST_BACKEND_ENV_RELEASE ${RUST_COMMON_ENV} ${RUST_PLATFORM_ENV} "CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1")
+    if(BABYLON_NATIVE_LTO_BITCODE_STATIC_LIBS)
+        list(APPEND RUST_BACKEND_ENV_RELEASE
+            "RUSTC_BOOTSTRAP=1"
+            "CARGO_PROFILE_RELEASE_PANIC=abort")
+        set(RUST_RELEASE_BUILD_STD_ARGS "-Z" "build-std=std,panic_abort")
+    endif()
+    if(NOT RUST_PLATFORM_RUSTFLAGS STREQUAL "")
+        list(APPEND RUST_BACKEND_ENV_DEBUG "${RUSTFLAGS_ENV_NAME}=${RUST_PLATFORM_RUSTFLAGS}")
+    endif()
+    if(NOT RUST_RELEASE_RUSTFLAGS STREQUAL "")
+        list(APPEND RUST_BACKEND_ENV_RELEASE "${RUSTFLAGS_ENV_NAME}=${RUST_RELEASE_RUSTFLAGS}")
+    endif()
     if(BABYLON_NATIVE_WGPU_USE_UPSTREAM_NATIVE)
         list(APPEND RUST_BACKEND_ENV_DEBUG
-            "BABYLON_WGPU_NATIVE_LIB_DIR=${UPSTREAM_WGPU_NATIVE_LIB_DIR_DEBUG}"
-            "BABYLON_WGPU_NATIVE_LIB_NAME=wgpu_native"
             "BABYLON_WGPU_NATIVE_FFI_DIR=${wgpu_native_SOURCE_DIR}/ffi"
             "BABYLON_WEBGPU_HEADERS_DIR=${webgpu_headers_SOURCE_DIR}")
         list(APPEND RUST_BACKEND_ENV_RELEASE
-            "BABYLON_WGPU_NATIVE_LIB_DIR=${UPSTREAM_WGPU_NATIVE_LIB_DIR_RELEASE}"
-            "BABYLON_WGPU_NATIVE_LIB_NAME=wgpu_native"
             "BABYLON_WGPU_NATIVE_FFI_DIR=${wgpu_native_SOURCE_DIR}/ffi"
             "BABYLON_WEBGPU_HEADERS_DIR=${webgpu_headers_SOURCE_DIR}")
     endif()
@@ -328,8 +314,8 @@ if(BABYLON_NATIVE_MULTI_CONFIG)
         OUTPUT
             "${RUST_OUTPUT_LIB_DEBUG}"
             "${RUST_OUTPUT_LIB_RELEASE}"
-        COMMAND ${CMAKE_COMMAND} -E env ${RUST_BACKEND_ENV_DEBUG} ${CARGO_COMMAND} build --manifest-path "${RUST_CRATE_DIR}/Cargo.toml" --target-dir "${RUST_TARGET_DIR}" ${RUST_TARGET_FLAG}
-        COMMAND ${CMAKE_COMMAND} -E env ${RUST_BACKEND_ENV_RELEASE} ${CARGO_COMMAND} build --manifest-path "${RUST_CRATE_DIR}/Cargo.toml" --target-dir "${RUST_TARGET_DIR}" --release ${RUST_TARGET_FLAG}
+        COMMAND ${CMAKE_COMMAND} -E env ${RUST_BACKEND_ENV_DEBUG} ${CARGO_COMMAND} build --manifest-path "${RUST_CRATE_DIR}/Cargo.toml" --target-dir "${RUST_TARGET_DIR}" ${RUST_TARGET_FLAG} ${WGPU_NATIVE_CARGO_PATCH_CONFIG} ${WGPU_NATIVE_CARGO_FEATURES}
+        COMMAND ${CMAKE_COMMAND} -E env ${RUST_BACKEND_ENV_RELEASE} ${CARGO_COMMAND} build ${RUST_RELEASE_BUILD_STD_ARGS} --manifest-path "${RUST_CRATE_DIR}/Cargo.toml" --target-dir "${RUST_TARGET_DIR}" --release ${RUST_TARGET_FLAG} ${WGPU_NATIVE_CARGO_PATCH_CONFIG} ${WGPU_NATIVE_CARGO_FEATURES}
         WORKING_DIRECTORY "${RUST_CRATE_DIR}"
         DEPENDS
             "${BABYLON_NATIVE_REPO_ROOT}/Cargo.toml"
@@ -337,22 +323,28 @@ if(BABYLON_NATIVE_MULTI_CONFIG)
             "${RUST_CRATE_DIR}/Cargo.toml"
             "${RUST_CRATE_DIR}/build.rs"
             "${RUST_CRATE_DIR}/src/lib.rs"
+            "${RUST_CRATE_DIR}/src/upstream_wgpu_native/compute.rs"
             "${BABYLON_NATIVE_REPO_ROOT}/Polyfills/CanvasWgpu/Rust/src/lib.rs"
         COMMENT "Building Rust WebGPU backend (debug + release)"
         VERBATIM)
 else()
     set(RUST_BACKEND_ENV ${RUST_COMMON_ENV} ${RUST_PLATFORM_ENV} ${RUST_PROFILE_ENV})
+    if(RUST_PROFILE_DIR STREQUAL "release")
+        if(NOT RUST_PROFILE_RUSTFLAGS STREQUAL "")
+            list(APPEND RUST_BACKEND_ENV "${RUSTFLAGS_ENV_NAME}=${RUST_PROFILE_RUSTFLAGS}")
+        endif()
+    elseif(NOT RUST_PLATFORM_RUSTFLAGS STREQUAL "")
+        list(APPEND RUST_BACKEND_ENV "${RUSTFLAGS_ENV_NAME}=${RUST_PLATFORM_RUSTFLAGS}")
+    endif()
     if(BABYLON_NATIVE_WGPU_USE_UPSTREAM_NATIVE)
         list(APPEND RUST_BACKEND_ENV
-            "BABYLON_WGPU_NATIVE_LIB_DIR=${UPSTREAM_WGPU_NATIVE_LIB_DIR}"
-            "BABYLON_WGPU_NATIVE_LIB_NAME=wgpu_native"
             "BABYLON_WGPU_NATIVE_FFI_DIR=${wgpu_native_SOURCE_DIR}/ffi"
             "BABYLON_WEBGPU_HEADERS_DIR=${webgpu_headers_SOURCE_DIR}")
     endif()
 
     add_custom_command(
         OUTPUT "${RUST_OUTPUT_LIB}"
-        COMMAND ${CMAKE_COMMAND} -E env ${RUST_BACKEND_ENV} ${CARGO_COMMAND} build --manifest-path "${RUST_CRATE_DIR}/Cargo.toml" --target-dir "${RUST_TARGET_DIR}" ${RUST_BUILD_FLAG} ${RUST_TARGET_FLAG}
+        COMMAND ${CMAKE_COMMAND} -E env ${RUST_BACKEND_ENV} ${CARGO_COMMAND} build ${RUST_RELEASE_BUILD_STD_ARGS} --manifest-path "${RUST_CRATE_DIR}/Cargo.toml" --target-dir "${RUST_TARGET_DIR}" ${RUST_BUILD_FLAG} ${RUST_TARGET_FLAG} ${WGPU_NATIVE_CARGO_PATCH_CONFIG} ${WGPU_NATIVE_CARGO_FEATURES}
         WORKING_DIRECTORY "${RUST_CRATE_DIR}"
         DEPENDS
             "${BABYLON_NATIVE_REPO_ROOT}/Cargo.toml"
@@ -360,6 +352,7 @@ else()
             "${RUST_CRATE_DIR}/Cargo.toml"
             "${RUST_CRATE_DIR}/build.rs"
             "${RUST_CRATE_DIR}/src/lib.rs"
+            "${RUST_CRATE_DIR}/src/upstream_wgpu_native/compute.rs"
             "${BABYLON_NATIVE_REPO_ROOT}/Polyfills/CanvasWgpu/Rust/src/lib.rs"
         COMMENT "Building Rust WebGPU backend"
         VERBATIM)
@@ -397,6 +390,11 @@ target_link_libraries(Graphics
     PRIVATE JsRuntimeInternal
     PRIVATE babylon_graphics_backend)
 
+if(APPLE)
+    target_link_libraries(Graphics
+        PRIVATE metal-cpp)
+endif()
+
 target_compile_definitions(Graphics
     PRIVATE NOMINMAX)
 
@@ -419,6 +417,11 @@ target_link_libraries(GraphicsDevice
     INTERFACE Graphics
     INTERFACE JsRuntime)
 
+if(APPLE)
+    target_link_libraries(GraphicsDevice
+        INTERFACE metal-cpp)
+endif()
+
 add_library(GraphicsDeviceContext INTERFACE)
 target_include_directories(GraphicsDeviceContext
     INTERFACE "InternalInclude")
@@ -426,6 +429,11 @@ target_link_libraries(GraphicsDeviceContext
     INTERFACE Graphics
     INTERFACE JsRuntimeInternal
     INTERFACE arcana)
+
+if(APPLE)
+    target_link_libraries(GraphicsDeviceContext
+        INTERFACE metal-cpp)
+endif()
 
 target_compile_definitions(GraphicsDeviceContext
     INTERFACE NOMINMAX)

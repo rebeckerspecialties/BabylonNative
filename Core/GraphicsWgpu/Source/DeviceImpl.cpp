@@ -146,11 +146,7 @@ namespace Babylon::Graphics
             config.PreferLowPower = false;
             config.EnableValidation = false;
 #if defined(__APPLE__)
-#if TARGET_OS_VISION
-            config.SurfaceLayer = (__bridge void*)m_state.Window;
-#else
-            config.SurfaceLayer = m_state.Window != nullptr ? (__bridge void*)m_state.Window.layer : nullptr;
-#endif
+            config.SurfaceLayer = static_cast<void*>(m_state.Window);
 #elif defined(__ANDROID__)
             config.SurfaceLayer = m_state.Window;
 #endif
