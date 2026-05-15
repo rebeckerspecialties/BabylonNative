@@ -8,6 +8,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstdint>
@@ -165,6 +166,61 @@ namespace Babylon::Plugins::NativeWebGPU
             }
 
             return static_cast<uint32_t>(std::min<int64_t>(raw, std::numeric_limits<uint32_t>::max()));
+        }
+
+        double ToFiniteNumber(const Napi::Value& value, double fallback)
+        {
+            if (!value.IsNumber())
+            {
+                return fallback;
+            }
+
+            const auto raw = value.As<Napi::Number>().DoubleValue();
+            return std::isfinite(raw) ? raw : fallback;
+        }
+
+        uint32_t ToNonNegativeUint32(double value)
+        {
+            if (value <= 0)
+            {
+                return 0;
+            }
+
+            return static_cast<uint32_t>(std::min<double>(std::floor(value), std::numeric_limits<uint32_t>::max()));
+        }
+
+        struct ScissorRect final
+        {
+            uint32_t X{};
+            uint32_t Y{};
+            uint32_t Width{};
+            uint32_t Height{};
+        };
+
+        ScissorRect ReadScissorRect(const Napi::CallbackInfo& info)
+        {
+            auto x = info.Length() > 0 ? ToFiniteNumber(info[0], 0) : 0;
+            auto y = info.Length() > 1 ? ToFiniteNumber(info[1], 0) : 0;
+            auto width = info.Length() > 2 ? ToFiniteNumber(info[2], 1) : 1;
+            auto height = info.Length() > 3 ? ToFiniteNumber(info[3], 1) : 1;
+
+            if (x < 0)
+            {
+                width += x;
+                x = 0;
+            }
+            if (y < 0)
+            {
+                height += y;
+                y = 0;
+            }
+
+            return {
+                ToNonNegativeUint32(x),
+                ToNonNegativeUint32(y),
+                ToNonNegativeUint32(width),
+                ToNonNegativeUint32(height),
+            };
         }
 
         std::vector<uint32_t> GetDynamicOffsets(const Napi::CallbackInfo& info, size_t index = 2)
@@ -1418,12 +1474,8 @@ namespace Babylon::Plugins::NativeWebGPU
             }));
             pass.Set("setScissorRect", Napi::Function::New(env, [](const Napi::CallbackInfo& info) {
                 const auto passId = GetNativeHandleId(info.This(), NativeResourceKind::RenderPass);
-                babylon_wgpu_native_render_pass_set_scissor_rect(
-                    passId,
-                    info.Length() > 0 ? ToUint32(info[0], 0) : 0,
-                    info.Length() > 1 ? ToUint32(info[1], 0) : 0,
-                    info.Length() > 2 ? ToUint32(info[2], 1) : 1,
-                    info.Length() > 3 ? ToUint32(info[3], 1) : 1);
+                const auto scissor = ReadScissorRect(info);
+                babylon_wgpu_native_render_pass_set_scissor_rect(passId, scissor.X, scissor.Y, scissor.Width, scissor.Height);
             }));
             pass.Set("setStencilReference", Napi::Function::New(env, [](const Napi::CallbackInfo& info) {
                 babylon_wgpu_native_render_pass_set_stencil_reference(
@@ -1605,12 +1657,9 @@ namespace Babylon::Plugins::NativeWebGPU
                 });
             }));
             encoder.Set("setScissorRect", Napi::Function::New(env, [state](const Napi::CallbackInfo& info) {
-                const auto x = info.Length() > 0 ? ToUint32(info[0], 0) : 0;
-                const auto y = info.Length() > 1 ? ToUint32(info[1], 0) : 0;
-                const auto width = info.Length() > 2 ? ToUint32(info[2], 1) : 1;
-                const auto height = info.Length() > 3 ? ToUint32(info[3], 1) : 1;
-                state->Commands.emplace_back([x, y, width, height](uint64_t passId) {
-                    babylon_wgpu_native_render_pass_set_scissor_rect(passId, x, y, width, height);
+                const auto scissor = ReadScissorRect(info);
+                state->Commands.emplace_back([scissor](uint64_t passId) {
+                    babylon_wgpu_native_render_pass_set_scissor_rect(passId, scissor.X, scissor.Y, scissor.Width, scissor.Height);
                 });
             }));
             encoder.Set("setStencilReference", Napi::Function::New(env, [state](const Napi::CallbackInfo& info) {
