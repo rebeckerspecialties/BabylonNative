@@ -13,6 +13,8 @@ set(SOURCES
 add_executable(NativeWebGPUAsyncTests ${SOURCES})
 set_property(TARGET NativeWebGPUAsyncTests PROPERTY UNITY_BUILD false)
 warnings_as_errors(NativeWebGPUAsyncTests)
+target_include_directories(NativeWebGPUAsyncTests
+    PRIVATE "${CMAKE_CURRENT_LIST_DIR}/../../../Core/GraphicsWgpu/InternalInclude")
 
 target_link_libraries(NativeWebGPUAsyncTests
     PRIVATE AppRuntime
