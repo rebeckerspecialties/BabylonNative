@@ -1554,6 +1554,42 @@
             evaluateScreenshot(test, screenshot, renderImage, done, compareFunction);
         };
 
+        const requestScreenshot = function () {
+            if (evaluated || readbackRequested) {
+                return;
+            }
+            readbackRequested = true;
+
+            const requestFramebufferData = function () {
+                if (evaluated) {
+                    return;
+                }
+                TestUtils.getFrameBufferData(function (data) {
+                    if (stopped) {
+                        runEvaluation(data);
+                    } else {
+                        pendingScreenshot = data;
+                    }
+                });
+            };
+
+            if (engine.isWebGPU) {
+                waitForValidationWebGPUQueue().then(requestFramebufferData).catch(function (error) {
+                    if (evaluated) {
+                        return;
+                    }
+                    evaluated = true;
+                    stopped = true;
+                    engine.stopRenderLoop();
+                    console.error("WEBGPU_QUEUE_WAIT_FAILED: " + formatLogArgument(error));
+                    disposeCurrentSceneForFailure();
+                    failTest(done);
+                });
+            } else {
+                requestFramebufferData();
+            }
+        };
+
         readinessTimer = setTimeout(function () {
             if (evaluated) {
                 return;
@@ -1607,42 +1643,8 @@
 
                     currentScene.render();
 
-                    if (frameIndex === compareFrame && !readbackRequested) {
-                        readbackRequested = true;
-                        const requestScreenshot = function () {
-                            if (evaluated) {
-                                return;
-                            }
-                            if (stopped) {
-                                return;
-                            }
-                            // Queue the framebuffer readback. The callback runs
-                            // asynchronously; safe to dispose the scene from it
-                            // but only after stopRenderLoop() has been called.
-                            TestUtils.getFrameBufferData(function (data) {
-                                if (stopped) {
-                                    runEvaluation(data);
-                                } else {
-                                    pendingScreenshot = data;
-                                }
-                            });
-                        };
-
-                        if (engine.isWebGPU) {
-                            waitForValidationWebGPUQueue().then(requestScreenshot).catch(function (error) {
-                                if (evaluated) {
-                                    return;
-                                }
-                                evaluated = true;
-                                stopped = true;
-                                engine.stopRenderLoop();
-                                console.error("WEBGPU_QUEUE_WAIT_FAILED: " + formatLogArgument(error));
-                                disposeCurrentSceneForFailure();
-                                failTest(done);
-                            });
-                        } else {
-                            requestScreenshot();
-                        }
+                    if (frameIndex >= compareFrame && !readbackRequested) {
+                        requestScreenshot();
                     }
 
                     if (frameIndex >= stopFrame && !stopped && (!readbackRequested || pendingScreenshot !== null)) {
