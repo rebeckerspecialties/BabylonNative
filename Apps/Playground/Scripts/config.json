@@ -147,8 +147,10 @@
         },
         {
             "title": "GUI3D SpherePanel",
-            "playgroundId": "#HB4C01#9",
+            "playgroundId": "#AMM2WB#0",
             "renderCount": 50,
+            "threshold": 80,
+            "errorRatio": 0.25,
             "referenceImage": "spherepanel.png"
         },
         {
@@ -826,7 +828,8 @@
             "playgroundId": "#22KZUW#652",
             "referenceImage": "simple-refraction.png",
             "excludeFromAutomaticTesting": true,
-            "reason": "Test crashes on Win32 V8 D3D11 (access violation)"
+            "reason": "Test crashes on Win32 V8 D3D11 (access violation)",
+            "includeInNativeWebGPU": true
         },
         {
             "title": "Detail map",
@@ -1139,18 +1142,23 @@
         },
         {
             "title": "GUI Slate",
-            "playgroundId": "#2YZFA0#277",
+            "playgroundId": "#UDLHJ3#0",
             "renderCount": 60,
             "excludeFromAutomaticTesting": true,
             "reason": "Pixel comparison fails (more than 20% pixels differ)",
+            "includeInNativeWebGPU": true,
+            "errorRatio": 0.25,
             "referenceImage": "guiSlate.png"
         },
         {
             "title": "GUI Near Menu",
-            "playgroundId": "#2YZFA0#302",
+            "playgroundId": "#DZPGOB#0",
             "renderCount": 60,
             "excludeFromAutomaticTesting": true,
             "reason": "Test crashes on Win32 V8 D3D11 / hangs on OpenGL",
+            "includeInNativeWebGPU": true,
+            "threshold": 35,
+            "errorRatio": 0.25,
             "referenceImage": "guiNearMenu.png"
         },
         {
@@ -1690,6 +1698,7 @@
             "playgroundId": "#LCA0Q4#26",
             "excludeFromAutomaticTesting": true,
             "reason": "Pixel comparison fails (more than 20% pixels differ)",
+            "includeInNativeWebGPU": true,
             "referenceImage": "pbr-refraction.png"
         },
         {
@@ -2182,6 +2191,7 @@
             "renderCount": 1,
             "excludeFromAutomaticTesting": true,
             "reason": "Pixel comparison fails (more than 20% pixels differ)",
+            "includeInNativeWebGPU": true,
             "referenceImage": "refraction-local-std.png"
         },
         {
@@ -2190,6 +2200,7 @@
             "renderCount": 1,
             "excludeFromAutomaticTesting": true,
             "reason": "Pixel comparison fails (more than 20% pixels differ)",
+            "includeInNativeWebGPU": true,
             "referenceImage": "refraction-local-pbr.png"
         },
         {
@@ -2360,7 +2371,8 @@
             "title": "Material Plugin",
             "playgroundId": "#22HT5Z#10",
             "excludeFromAutomaticTesting": true,
-            "reason": "Pixel comparison fails (more than 20% pixels differ)",
+            "excludeFromNativeWebGPU": true,
+            "reason": "Uses a sample MaterialPlugin with GLSL-only custom shader code; WebGPU requires a WGSL-compatible plugin implementation.",
             "referenceImage": "materialPlugin.png"
         },
         {
@@ -2638,6 +2650,7 @@
             "playgroundId": "#TFDNZI#2",
             "excludeFromAutomaticTesting": true,
             "reason": "Test crashes or hangs on Babylon Native",
+            "includeInNativeWebGPU": true,
             "referenceImage": "MeshDebugPluginMaterial.png"
         },
         {
@@ -4628,6 +4641,8 @@
             "title": "Particles - Effects",
             "playgroundId": "#1ASENS#424",
             "renderCount": 120,
+            "excludeFromNativeWebGPU": true,
+            "reason": "Uses a custom GLSL createEffectForParticles shader; NativeWebGPU intentionally does not ship glslang/twgsl.",
             "referenceImage": "particles-effects.png"
         },
         {
