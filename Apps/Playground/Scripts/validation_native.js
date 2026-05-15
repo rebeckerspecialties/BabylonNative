@@ -1048,6 +1048,331 @@
         }
     }
 
+    function getUnsupportedNativeWebGPUEffectMessage(effect, context) {
+        if (!effect || !effect._engine || !effect._engine.isWebGPU || effect._shaderLanguage !== 0) {
+            return "";
+        }
+
+        try {
+            const pipelineContext = typeof effect.getPipelineContext === "function" ? effect.getPipelineContext() : effect._pipelineContext;
+            if (!pipelineContext || pipelineContext.stages || pipelineContext.stage) {
+                return "";
+            }
+        } catch (e) {
+            return "";
+        }
+
+        const parts = [];
+        if (context) {
+            parts.push(context);
+        }
+        if (effect.name) {
+            parts.push("effect=" + formatLogArgument(effect.name));
+        }
+        if (effect._key) {
+            parts.push("key=" + formatLogArgument(effect._key));
+        }
+
+        return "BabylonJS requested a GLSL WebGPU effect without a compiled pipeline" +
+            (parts.length > 0 ? " (" + parts.join(",") + ")" : "") +
+            ". BabylonNative WebGPU does not ship the glslang/twgsl fallback. This BabylonJS path needs a WGSL implementation, a shaderLanguage=WGSL createEffect path, or a deliberate NativeWebGPU exclusion.";
+    }
+
+    function getEffectReadinessDetails(effect, context) {
+        if (!effect) {
+            return "effect=null";
+        }
+
+        const details = [];
+        try {
+            if (typeof effect._shaderLanguage !== "undefined") {
+                details.push("shaderLanguage=" + effect._shaderLanguage);
+            }
+            if (effect.name) {
+                details.push("name=" + formatLogArgument(effect.name));
+            }
+            if (effect._key) {
+                details.push("key=" + formatLogArgument(effect._key));
+            }
+            if (typeof effect.isReady === "function") {
+                details.push("effectReady=" + effect.isReady());
+            }
+        } catch (e) {
+            details.push("effectReadyError=" + formatLogArgument(e));
+        }
+
+        try {
+            if (typeof effect.getCompilationError === "function") {
+                const error = effect.getCompilationError();
+                if (error) {
+                    details.push("compileError=" + formatLogArgument(error));
+                }
+            } else if (effect._compilationError) {
+                details.push("compileError=" + formatLogArgument(effect._compilationError));
+            }
+        } catch (e) {
+            details.push("compileErrorReadError=" + formatLogArgument(e));
+        }
+
+        try {
+            const pipelineContext = typeof effect.getPipelineContext === "function" ? effect.getPipelineContext() : effect._pipelineContext;
+            if (pipelineContext) {
+                details.push("pipelineReady=" + !!pipelineContext.isReady);
+                if (!pipelineContext.stages && !pipelineContext.stage) {
+                    details.push("pipelineStages=false");
+                    const unsupportedMessage = getUnsupportedNativeWebGPUEffectMessage(effect, context);
+                    if (unsupportedMessage) {
+                        details.push("nativeWebGPUError=" + formatLogArgument(unsupportedMessage));
+                    }
+                }
+            } else {
+                details.push("pipeline=null");
+            }
+        } catch (e) {
+            details.push("pipelineError=" + formatLogArgument(e));
+        }
+
+        return details.join(",");
+    }
+
+    function getMaterialReadinessLabel(material, mesh, subMesh, hardwareInstancedRendering) {
+        const className = material && typeof material.getClassName === "function" ? material.getClassName() : (material && material.constructor ? material.constructor.name : "Material");
+        const name = material && (material.name || material.id) ? (material.name || material.id) : "(unnamed material)";
+        const details = [name + ":" + className];
+
+        try {
+            if (material && typeof material.shaderLanguage !== "undefined") {
+                details.push("shaderLanguage=" + material.shaderLanguage);
+            }
+        } catch (e) {
+            details.push("shaderLanguageError=" + formatLogArgument(e));
+        }
+
+        try {
+            const effect = subMesh && subMesh.effect ? subMesh.effect : (material && typeof material.getEffect === "function" ? material.getEffect() : null);
+            const effectContext = "material=" + name + ",class=" + className + (mesh ? ",mesh=" + (mesh.name || mesh.id || "(unnamed mesh)") : "");
+            const effectDetails = getEffectReadinessDetails(effect, effectContext);
+            if (effectDetails) {
+                details.push(effectDetails);
+            }
+        } catch (e) {
+            details.push("effectError=" + formatLogArgument(e));
+        }
+
+        try {
+            if (material && typeof material.isReadyForSubMesh === "function" && mesh && subMesh) {
+                details.push("isReadyForSubMesh=" + material.isReadyForSubMesh(mesh, subMesh, hardwareInstancedRendering));
+            } else if (material && typeof material.isReady === "function") {
+                details.push("isReady=" + material.isReady(mesh, hardwareInstancedRendering));
+            }
+        } catch (e) {
+            details.push("readyCheckError=" + formatLogArgument(e));
+        }
+
+        return details[0] + "{" + details.slice(1).join(",") + "}";
+    }
+
+    function appendMeshReadinessDiagnostics(scene, details) {
+        const notReadyMeshes = [];
+        const notReadySubMeshes = [];
+        const engine = scene.getEngine && scene.getEngine();
+        const meshes = scene.meshes || [];
+        for (let i = 0; i < meshes.length && (notReadyMeshes.length < 8 || notReadySubMeshes.length < 8); ++i) {
+            const mesh = meshes[i];
+            if (!mesh || !mesh.subMeshes || mesh.subMeshes.length === 0) {
+                continue;
+            }
+
+            let meshReady = true;
+            try {
+                meshReady = typeof mesh.isReady === "function" ? mesh.isReady(true) : true;
+            } catch (e) {
+                meshReady = false;
+                if (notReadyMeshes.length < 8) {
+                    notReadyMeshes.push((mesh.name || mesh.id || "(unnamed mesh)") + "{meshReadyError=" + formatLogArgument(e) + "}");
+                }
+            }
+
+            if (!meshReady && notReadyMeshes.length < 8) {
+                notReadyMeshes.push(mesh.name || mesh.id || "(unnamed mesh)");
+            }
+
+            const hardwareInstancedRendering = !!(mesh.hasThinInstances ||
+                (mesh.getClassName && (mesh.getClassName() === "InstancedMesh" || mesh.getClassName() === "InstancedLinesMesh")) ||
+                (engine && engine.getCaps && engine.getCaps().instancedArrays && mesh.instances && mesh.instances.length > 0));
+            for (let subMeshIndex = 0; subMeshIndex < mesh.subMeshes.length && notReadySubMeshes.length < 8; ++subMeshIndex) {
+                const subMesh = mesh.subMeshes[subMeshIndex];
+                const material = subMesh && typeof subMesh.getMaterial === "function" ? subMesh.getMaterial() : (mesh.material || scene.defaultMaterial);
+                if (!material) {
+                    continue;
+                }
+
+                let ready = true;
+                try {
+                    if (material._storeEffectOnSubMeshes && typeof material.isReadyForSubMesh === "function") {
+                        ready = material.isReadyForSubMesh(mesh, subMesh, hardwareInstancedRendering);
+                    } else if (typeof material.isReady === "function") {
+                        ready = material.isReady(mesh, hardwareInstancedRendering);
+                    }
+                } catch (e) {
+                    ready = false;
+                }
+
+                if (!ready) {
+                    notReadySubMeshes.push((mesh.name || mesh.id || "(unnamed mesh)") + "#" + subMeshIndex + ":" + getMaterialReadinessLabel(material, mesh, subMesh, hardwareInstancedRendering));
+                }
+            }
+        }
+
+        details.push("meshes=" + meshes.length + " notReady=[" + notReadyMeshes.join(",") + "]");
+        details.push("subMeshesNotReady=[" + notReadySubMeshes.join(",") + "]");
+    }
+
+    function appendParticleReadinessDiagnostics(scene, details) {
+        const notReadyParticles = [];
+        const particleSystems = scene.particleSystems || [];
+        for (let i = 0; i < particleSystems.length && notReadyParticles.length < 8; ++i) {
+            const particleSystem = particleSystems[i];
+            if (!particleSystem) {
+                continue;
+            }
+
+            let ready = true;
+            try {
+                ready = typeof particleSystem.isReady === "function" ? particleSystem.isReady() : true;
+            } catch (e) {
+                ready = false;
+            }
+
+            if (ready) {
+                continue;
+            }
+
+            const label = [particleSystem.name || particleSystem.id || "(unnamed particle system)"];
+            try {
+                label.push("emitter=" + !!particleSystem.emitter);
+                label.push("textureReady=" + !!(particleSystem.particleTexture && particleSystem.particleTexture.isReady && particleSystem.particleTexture.isReady()));
+                if (particleSystem._platform) {
+                    label.push("updateBufferCreated=" + !!(particleSystem._platform.isUpdateBufferCreated && particleSystem._platform.isUpdateBufferCreated()));
+                    label.push("updateBufferReady=" + !!(particleSystem._platform.isUpdateBufferReady && particleSystem._platform.isUpdateBufferReady()));
+                    if (particleSystem._platform._updateComputeShader && particleSystem._platform._updateComputeShader._effect) {
+                        label.push("updateEffect={" + getEffectReadinessDetails(particleSystem._platform._updateComputeShader._effect, "particleSystem=" + label[0] + ",stage=update") + "}");
+                    }
+                }
+                if (typeof particleSystem._getWrapper === "function") {
+                    const wrapper = particleSystem._getWrapper(particleSystem.blendMode);
+                    if (wrapper && wrapper.effect) {
+                        label.push("renderEffect={" + getEffectReadinessDetails(wrapper.effect, "particleSystem=" + label[0] + ",stage=render") + "}");
+                    }
+                }
+            } catch (e) {
+                label.push("diagnosticError=" + formatLogArgument(e));
+            }
+
+            notReadyParticles.push(label[0] + "{" + label.slice(1).join(",") + "}");
+        }
+
+        details.push("particleSystems=" + particleSystems.length + " notReady=[" + notReadyParticles.join(",") + "]");
+    }
+
+    function findUnsupportedNativeWebGPUEffectInScene(scene) {
+        if (!scene) {
+            return "";
+        }
+
+        const engine = scene.getEngine && scene.getEngine();
+        if (!engine || !engine.isWebGPU) {
+            return "";
+        }
+
+        const meshes = scene.meshes || [];
+        for (let i = 0; i < meshes.length; ++i) {
+            const mesh = meshes[i];
+            const subMeshes = mesh && mesh.subMeshes ? mesh.subMeshes : [];
+            for (let subMeshIndex = 0; subMeshIndex < subMeshes.length; ++subMeshIndex) {
+                const subMesh = subMeshes[subMeshIndex];
+                const material = subMesh && typeof subMesh.getMaterial === "function" ? subMesh.getMaterial() : (mesh.material || scene.defaultMaterial);
+                const effect = subMesh && subMesh.effect ? subMesh.effect : (material && typeof material.getEffect === "function" ? material.getEffect() : null);
+                const className = material && typeof material.getClassName === "function" ? material.getClassName() : (material && material.constructor ? material.constructor.name : "Material");
+                const name = material && (material.name || material.id) ? (material.name || material.id) : "(unnamed material)";
+                const message = getUnsupportedNativeWebGPUEffectMessage(
+                    effect,
+                    "material=" + name + ",class=" + className + ",mesh=" + (mesh.name || mesh.id || "(unnamed mesh)") + ",subMesh=" + subMeshIndex);
+                if (message) {
+                    return message;
+                }
+            }
+        }
+
+        const particleSystems = scene.particleSystems || [];
+        for (let i = 0; i < particleSystems.length; ++i) {
+            const particleSystem = particleSystems[i];
+            if (!particleSystem) {
+                continue;
+            }
+
+            const particleName = particleSystem.name || particleSystem.id || "(unnamed particle system)";
+            try {
+                if (particleSystem._platform && particleSystem._platform._updateComputeShader && particleSystem._platform._updateComputeShader._effect) {
+                    const updateMessage = getUnsupportedNativeWebGPUEffectMessage(
+                        particleSystem._platform._updateComputeShader._effect,
+                        "particleSystem=" + particleName + ",stage=update");
+                    if (updateMessage) {
+                        return updateMessage;
+                    }
+                }
+                if (typeof particleSystem._getWrapper === "function") {
+                    const wrapper = particleSystem._getWrapper(particleSystem.blendMode);
+                    if (wrapper && wrapper.effect) {
+                        const renderMessage = getUnsupportedNativeWebGPUEffectMessage(
+                            wrapper.effect,
+                            "particleSystem=" + particleName + ",stage=render");
+                        if (renderMessage) {
+                            return renderMessage;
+                        }
+                    }
+                }
+            } catch (e) {
+                // Diagnostic-only; readiness reporting will include more detail.
+            }
+        }
+
+        return "";
+    }
+
+    function findUnsupportedNativeWebGPUEffectInSceneFamily(scene) {
+        const mainMessage = findUnsupportedNativeWebGPUEffectInScene(scene);
+        if (mainMessage) {
+            return "main: " + mainMessage;
+        }
+
+        try {
+            if (BABYLON.UtilityLayerRenderer) {
+                const utilityLayers = [
+                    BABYLON.UtilityLayerRenderer._DefaultUtilityLayer,
+                    BABYLON.UtilityLayerRenderer._DefaultKeepDepthUtilityLayer
+                ];
+                const seenScenes = [];
+                for (let i = 0; i < utilityLayers.length; ++i) {
+                    const utilityLayer = utilityLayers[i];
+                    const utilityScene = utilityLayer && utilityLayer.utilityLayerScene;
+                    if (!utilityScene || seenScenes.indexOf(utilityScene) !== -1) {
+                        continue;
+                    }
+                    seenScenes.push(utilityScene);
+                    const message = findUnsupportedNativeWebGPUEffectInScene(utilityScene);
+                    if (message) {
+                        return "utilityLayer" + i + ": " + message;
+                    }
+                }
+            }
+        } catch (e) {
+            // Diagnostic-only; readiness reporting will include more detail.
+        }
+
+        return "";
+    }
+
     function getSceneReadinessDiagnostics(scene) {
         const details = [];
         if (!scene) {
@@ -1097,21 +1422,15 @@
         }
 
         try {
-            const notReadyMaterials = [];
-            const materials = scene.materials || [];
-            for (let i = 0; i < materials.length && notReadyMaterials.length < 8; ++i) {
-                const material = materials[i];
-                let ready = true;
-                if (material && typeof material.isReady === "function") {
-                    ready = material.isReady();
-                }
-                if (!ready) {
-                    notReadyMaterials.push(material.name || material.id || "(unnamed material)");
-                }
-            }
-            details.push("materials=" + materials.length + " notReady=[" + notReadyMaterials.join(",") + "]");
+            appendMeshReadinessDiagnostics(scene, details);
         } catch (e) {
-            details.push("materialError=" + formatLogArgument(e));
+            details.push("meshMaterialError=" + formatLogArgument(e));
+        }
+
+        try {
+            appendParticleReadinessDiagnostics(scene, details);
+        } catch (e) {
+            details.push("particleError=" + formatLogArgument(e));
         }
 
         if (lastConsoleError) {
@@ -1119,6 +1438,31 @@
         }
 
         return details.join(" ");
+    }
+
+    function getSceneFamilyReadinessDiagnostics(scene) {
+        const diagnostics = ["main{" + getSceneReadinessDiagnostics(scene) + "}"];
+        try {
+            if (BABYLON.UtilityLayerRenderer) {
+                const utilityLayers = [
+                    BABYLON.UtilityLayerRenderer._DefaultUtilityLayer,
+                    BABYLON.UtilityLayerRenderer._DefaultKeepDepthUtilityLayer
+                ];
+                const seenScenes = [];
+                for (let i = 0; i < utilityLayers.length; ++i) {
+                    const utilityLayer = utilityLayers[i];
+                    const utilityScene = utilityLayer && utilityLayer.utilityLayerScene;
+                    if (!utilityScene || seenScenes.indexOf(utilityScene) !== -1) {
+                        continue;
+                    }
+                    seenScenes.push(utilityScene);
+                    diagnostics.push("utilityLayer" + i + "{shouldRender=" + !!utilityLayer.shouldRender + " " + getSceneReadinessDiagnostics(utilityScene) + "}");
+                }
+            }
+        } catch (e) {
+            diagnostics.push("utilityLayerError=" + formatLogArgument(e));
+        }
+        return diagnostics.join(" ");
     }
 
     function disposeCurrentSceneForFailure() {
@@ -1180,7 +1524,7 @@
         }
     }
 
-    function startSceneReadinessRenderPump(scene, label) {
+    function startSceneReadinessRenderPump(scene, label, onFatalError) {
         let stopped = false;
         let frameCount = 0;
         const pumpLabel = label || "readiness";
@@ -1199,9 +1543,16 @@
                     scene.render();
                     frameCount++;
                 }
+                const unsupportedWebGPUEffect = findUnsupportedNativeWebGPUEffectInSceneFamily(scene);
+                if (unsupportedWebGPUEffect) {
+                    throw new Error("NATIVE_WEBGPU_UNSUPPORTED_EFFECT: " + unsupportedWebGPUEffect);
+                }
             } catch (e) {
                 stopped = true;
                 console.error("Readiness render pump failed during " + pumpLabel + ": " + formatLogArgument(e));
+                if (typeof onFatalError === "function") {
+                    onFatalError(e);
+                }
                 return;
             }
 
@@ -1256,6 +1607,147 @@
         };
 
         bufferPrototype.__nativeValidationPreviousWorldFrameOrderInstalled = true;
+    }
+
+    function installWebGPUGui3DShaderLanguageShim(engine) {
+        if (!engine || !engine.isWebGPU || !BABYLON.ShaderLanguage || engine.__nativeValidationGui3DShaderLanguageInstalled) {
+            return;
+        }
+
+        const shaderStore = BABYLON.ShaderStore || BABYLON.Effect;
+        if (!shaderStore || !shaderStore.ShadersStoreWGSL) {
+            return;
+        }
+
+        if (!shaderStore.ShadersStoreWGSL.fluentVertexShader) {
+            shaderStore.ShadersStoreWGSL.fluentVertexShader = `attribute position: vec3f;attribute normal: vec3f;attribute uv: vec2f;uniform world: mat4x4f;uniform viewProjection: mat4x4f;varying vUV: vec2f;
+#ifdef BORDER
+varying scaleInfo: vec2f;uniform borderWidth: f32;uniform scaleFactor: vec3f;
+#endif
+#ifdef HOVERLIGHT
+varying worldPosition: vec3f;
+#endif
+@vertex
+fn main(input: VertexInputs)->FragmentInputs {
+vertexOutputs.vUV=vertexInputs.uv;
+#ifdef BORDER
+var scale: vec3f=uniforms.scaleFactor;var minScale: f32=min(min(scale.x,scale.y),scale.z);var maxScale: f32=max(max(scale.x,scale.y),scale.z);var minOverMiddleScale: f32=minScale/(scale.x+scale.y+scale.z-minScale-maxScale);var areaYZ: f32=scale.y*scale.z;var areaXZ: f32=scale.x*scale.z;var areaXY: f32=scale.x*scale.y;var scaledBorderWidth: f32=uniforms.borderWidth;
+if (abs(vertexInputs.normal.x)==1.0) {scale.x=scale.y;scale.y=scale.z;if (areaYZ>areaXZ && areaYZ>areaXY) {scaledBorderWidth=scaledBorderWidth*minOverMiddleScale;}}
+else if (abs(vertexInputs.normal.y)==1.0) {scale.x=scale.z;if (areaXZ>areaXY && areaXZ>areaYZ) {scaledBorderWidth=scaledBorderWidth*minOverMiddleScale;}}
+else {if (areaXY>areaYZ && areaXY>areaXZ) {scaledBorderWidth=scaledBorderWidth*minOverMiddleScale;}}
+var scaleRatio: f32=min(scale.x,scale.y)/max(scale.x,scale.y);
+if (scale.x>scale.y) {vertexOutputs.scaleInfo=vec2f(1.0-(scaledBorderWidth*scaleRatio),1.0-scaledBorderWidth);}
+else {vertexOutputs.scaleInfo=vec2f(1.0-scaledBorderWidth,1.0-(scaledBorderWidth*scaleRatio));}
+#endif
+var worldPos: vec4f=uniforms.world*vec4f(vertexInputs.position,1.0);
+#ifdef HOVERLIGHT
+vertexOutputs.worldPosition=worldPos.xyz;
+#endif
+vertexOutputs.position=uniforms.viewProjection*worldPos;
+}`;
+        }
+
+        if (!shaderStore.ShadersStoreWGSL.fluentPixelShader) {
+            shaderStore.ShadersStoreWGSL.fluentPixelShader = `varying vUV: vec2f;uniform albedoColor: vec4f;
+#ifdef INNERGLOW
+uniform innerGlowColor: vec4f;
+#endif
+#ifdef BORDER
+varying scaleInfo: vec2f;uniform edgeSmoothingValue: f32;uniform borderMinValue: f32;
+#endif
+#ifdef HOVERLIGHT
+varying worldPosition: vec3f;uniform hoverPosition: vec3f;uniform hoverColor: vec4f;uniform hoverRadius: f32;
+#endif
+#ifdef TEXTURE
+var albedoSamplerSampler: sampler;var albedoSampler: texture_2d<f32>;uniform textureMatrix: mat4x4f;
+#endif
+@fragment
+fn main(input: FragmentInputs)->FragmentOutputs {
+var albedo: vec3f=uniforms.albedoColor.rgb;var alpha: f32=uniforms.albedoColor.a;
+#ifdef TEXTURE
+let finalUV: vec2f=(uniforms.textureMatrix*vec4f(input.vUV,1.0,0.0)).xy;albedo=textureSample(albedoSampler,albedoSamplerSampler,finalUV).rgb;
+#endif
+#ifdef HOVERLIGHT
+let pointToHover: f32=(1.0-clamp(length(uniforms.hoverPosition-input.worldPosition)/uniforms.hoverRadius,0.0,1.0))*uniforms.hoverColor.a;albedo=clamp(albedo+uniforms.hoverColor.rgb*pointToHover,vec3f(0.0),vec3f(1.0));
+#else
+let pointToHover: f32=1.0;
+#endif
+#ifdef BORDER
+let borderPower: f32=10.0;let inverseBorderPower: f32=1.0/borderPower;var borderColor: vec3f=albedo*borderPower;let distanceToEdge: vec2f=abs(input.vUV-vec2f(0.5))*2.0;let borderValue: f32=max(smoothstep(input.scaleInfo.x-uniforms.edgeSmoothingValue,input.scaleInfo.x+uniforms.edgeSmoothingValue,distanceToEdge.x),smoothstep(input.scaleInfo.y-uniforms.edgeSmoothingValue,input.scaleInfo.y+uniforms.edgeSmoothingValue,distanceToEdge.y));borderColor=borderColor*borderValue*max(uniforms.borderMinValue*inverseBorderPower,pointToHover);albedo=albedo+borderColor;alpha=max(alpha,borderValue);
+#endif
+#ifdef INNERGLOW
+var uvGlow: vec2f=(input.vUV-vec2f(0.5))*(uniforms.innerGlowColor.a*2.0);uvGlow=uvGlow*uvGlow;uvGlow=uvGlow*uvGlow;albedo=albedo+mix(vec3f(0.0),uniforms.innerGlowColor.rgb,uvGlow.x+uvGlow.y);
+#endif
+fragmentOutputs.color=vec4f(albedo,alpha);
+}`;
+        }
+
+        if (!shaderStore.ShadersStoreWGSL.handleVertexShader) {
+            shaderStore.ShadersStoreWGSL.handleVertexShader = `attribute position: vec3f;uniform positionOffset: vec3f;uniform worldViewProjection: mat4x4f;uniform scale: f32;
+@vertex
+fn main(input: VertexInputs)->FragmentInputs {
+let vPos: vec4f=vec4f((vertexInputs.position+uniforms.positionOffset)*uniforms.scale,1.0);
+vertexOutputs.position=uniforms.worldViewProjection*vPos;
+}`;
+        }
+
+        if (!shaderStore.ShadersStoreWGSL.handlePixelShader) {
+            shaderStore.ShadersStoreWGSL.handlePixelShader = `uniform color: vec3f;
+@fragment
+fn main(input: FragmentInputs)->FragmentOutputs {
+fragmentOutputs.color=vec4f(uniforms.color,1.0);
+}`;
+        }
+
+        if (!shaderStore.ShadersStoreWGSL.fluentBackplateVertexShader) {
+            shaderStore.ShadersStoreWGSL.fluentBackplateVertexShader = `attribute position: vec3f;attribute normal: vec3f;uniform world: mat4x4f;uniform viewProjection: mat4x4f;varying vUV: vec2f;
+@vertex
+fn main(input: VertexInputs)->FragmentInputs {
+let worldPos: vec4f=uniforms.world*vec4f(vertexInputs.position,1.0);
+vertexOutputs.position=uniforms.viewProjection*worldPos;
+vertexOutputs.vUV=vertexInputs.position.xy*2.0+vec2f(0.5);
+}`;
+        }
+
+        if (!shaderStore.ShadersStoreWGSL.fluentBackplatePixelShader) {
+            shaderStore.ShadersStoreWGSL.fluentBackplatePixelShader = `varying vUV: vec2f;uniform _Line_Width_: f32;uniform _Base_Color_: vec4f;uniform _Line_Color_: vec4f;uniform _Fade_Out_: f32;
+@fragment
+fn main(input: FragmentInputs)->FragmentOutputs {
+let edge: vec2f=abs(input.vUV-vec2f(0.5))*2.0;
+let distanceToEdge: f32=max(edge.x,edge.y);
+let lineWidth: f32=max(uniforms._Line_Width_*6.0,0.01);
+let border: f32=smoothstep(1.0-lineWidth,1.0,distanceToEdge);
+var color: vec4f=mix(uniforms._Base_Color_,uniforms._Line_Color_,border);
+color.a=color.a*uniforms._Fade_Out_;
+fragmentOutputs.color=color;
+}`;
+        }
+
+        const webGpuGui3DShaders = {
+            fluent: true,
+            fluentBackplate: true,
+            handle: true
+        };
+        const originalCreateEffect = engine.createEffect;
+        if (typeof originalCreateEffect !== "function") {
+            return;
+        }
+
+        engine.createEffect = function (baseName) {
+            const args = Array.prototype.slice.call(arguments);
+            const vertex = typeof baseName === "string" ? baseName : (baseName && (baseName.vertexToken || baseName.vertexSource || baseName.vertexElement || baseName.vertex));
+            const fragment = typeof baseName === "string" ? baseName : (baseName && (baseName.fragmentToken || baseName.fragmentSource || baseName.fragmentElement || baseName.fragment));
+            if (vertex && fragment && vertex === fragment && webGpuGui3DShaders[vertex]) {
+                if (args[1] && typeof args[1] === "object") {
+                    args[1] = Object.assign({}, args[1], { shaderLanguage: BABYLON.ShaderLanguage.WGSL });
+                } else {
+                    args[9] = BABYLON.ShaderLanguage.WGSL;
+                }
+            }
+            return originalCreateEffect.apply(this, args);
+        };
+
+        engine.__nativeValidationGui3DShaderLanguageInstalled = true;
     }
 
     function installSceneReadinessShims() {
@@ -1368,6 +1860,7 @@
     const engine = validationEngine.engine;
     engine.getCaps().parallelShaderCompile = undefined;
     installWebGPUPreviousWorldBufferFrameOrderShim(engine);
+    installWebGPUGui3DShaderLanguageShim(engine);
     if (engine.isWebGPU && typeof navigator !== "undefined" && navigator.gpu && typeof navigator.gpu._backendStats === "function") {
         try {
             const stats = navigator.gpu._backendStats();
@@ -1489,6 +1982,9 @@
                 testRes = false;
                 console.log("Test '" + (test.title || "(unnamed)") + "' failed");
                 logNativeWebGPUStats("after failed " + (test.title || "(unnamed)"));
+                if (engine.isWebGPU) {
+                    console.error("SCENE_RENDER_MISMATCH_DIAGNOSTICS: " + getSceneFamilyReadinessDiagnostics(currentScene));
+                }
             } else {
                 testRes = true;
                 console.log("Test '" + (test.title || "(unnamed)") + "' validated");
@@ -1610,7 +2106,25 @@
         }, sceneReadyTimeoutMs);
 
         primeDynamicTexturesForReadiness(currentScene);
-        readinessPump = startSceneReadinessRenderPump(currentScene, "executeWhenReady for " + (test.title || "(unnamed)"));
+        readinessPump = startSceneReadinessRenderPump(currentScene, "executeWhenReady for " + (test.title || "(unnamed)"), function (error) {
+            if (evaluated) {
+                return;
+            }
+            evaluated = true;
+            stopped = true;
+            if (readinessTimer !== null) {
+                clearTimeout(readinessTimer);
+                readinessTimer = null;
+            }
+            if (readinessPump !== null) {
+                readinessPump.stop();
+                readinessPump = null;
+            }
+            console.error(formatLogArgument(error));
+            console.error("SCENE_READY_FAILED: Test '" + (test.title || "(unnamed)") + "' failed during readiness. " + getSceneFamilyReadinessDiagnostics(currentScene));
+            disposeCurrentSceneForFailure();
+            failTest(done);
+        });
 
         currentScene.executeWhenReady(function () {
             if (evaluated) {
