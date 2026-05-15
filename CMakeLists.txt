@@ -18,8 +18,11 @@ include(FetchContent)
 # targets that are part of the Babylon Native contract.
 
 FetchContent_Declare(AndroidExtensions
-    GIT_REPOSITORY https://github.com/BabylonJS/AndroidExtensions.git
-    GIT_TAG 5fe60c8634dd9a5df76888e73e69202875e894f0
+    URL https://github.com/BabylonJS/AndroidExtensions/archive/5fe60c8634dd9a5df76888e73e69202875e894f0.tar.gz
+    URL_HASH SHA256=a5af89378b6c9922ffbebc68674fa781963cb148f2c5b87b91eb4f032ad6dc5a
+    PATCH_COMMAND ${CMAKE_COMMAND}
+        "-DPATCH_FILE=${CMAKE_CURRENT_LIST_DIR}/Patches/AndroidExtensions/0001-use-jni-string-region.patch"
+        -P "${CMAKE_CURRENT_LIST_DIR}/Patches/apply_patch_if_needed.cmake"
     EXCLUDE_FROM_ALL)
 FetchContent_Declare(arcana.cpp
     GIT_REPOSITORY https://github.com/microsoft/arcana.cpp.git
@@ -171,6 +174,11 @@ option(BABYLON_NATIVE_POLYFILL_WINDOW "Include Babylon Native Polyfill Window." 
 
 # Sanitizers
 option(ENABLE_SANITIZERS "Enable AddressSanitizer and UBSan" OFF)
+option(ENABLE_THREAD_SANITIZER "Enable ThreadSanitizer" OFF)
+
+if(ENABLE_SANITIZERS AND ENABLE_THREAD_SANITIZER)
+    message(FATAL_ERROR "ENABLE_SANITIZERS and ENABLE_THREAD_SANITIZER are mutually exclusive.")
+endif()
 
 if(ENABLE_SANITIZERS)
     include(CheckCCompilerFlag)
@@ -211,7 +219,10 @@ if(ENABLE_SANITIZERS)
         # -fno-sanitize-recover=all makes UBSan findings fatal. Without it, UBSan
         # only prints a diagnostic to stderr and execution continues, so CI stays
         # green while latent UB goes unreported.
-        add_compile_options(-fsanitize=${SANITIZER_FLAGS} -fno-omit-frame-pointer -fno-sanitize-recover=all)
+        add_compile_options(
+            $<$<COMPILE_LANGUAGE:C,CXX,OBJC,OBJCXX>:-fsanitize=${SANITIZER_FLAGS}>
+            $<$<COMPILE_LANGUAGE:C,CXX,OBJC,OBJCXX>:-fno-omit-frame-pointer>
+            $<$<COMPILE_LANGUAGE:C,CXX,OBJC,OBJCXX>:-fno-sanitize-recover=all>)
         add_link_options(-fsanitize=${SANITIZER_FLAGS})
     elseif(MSVC)
         # MSVC only supports AddressSanitizer
@@ -221,12 +232,25 @@ if(ENABLE_SANITIZERS)
     endif()
 endif()
 
+if(ENABLE_THREAD_SANITIZER)
+    set(ENABLE_RTTI ON CACHE BOOL "" FORCE)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+        set(BABYLON_NATIVE_SANITIZER_FLAGS "thread" CACHE INTERNAL "Babylon Native sanitizer flag list" FORCE)
+        add_compile_options(
+            $<$<COMPILE_LANGUAGE:C,CXX,OBJC,OBJCXX>:-fsanitize=thread>
+            $<$<COMPILE_LANGUAGE:C,CXX,OBJC,OBJCXX>:-fno-omit-frame-pointer>)
+        add_link_options(-fsanitize=thread)
+    else()
+        message(FATAL_ERROR "ThreadSanitizer is not supported on this compiler.")
+    endif()
+endif()
+
 if(BABYLON_NATIVE_LTO_BITCODE_STATIC_LIBS)
     if(NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
         message(FATAL_ERROR "BABYLON_NATIVE_LTO_BITCODE_STATIC_LIBS requires a Clang-compatible compiler.")
     endif()
 
-    add_compile_options(-flto=full)
+    add_compile_options($<$<COMPILE_LANGUAGE:C,CXX,OBJC,OBJCXX>:-flto=full>)
     add_link_options(-flto=full)
 endif()
 
@@ -234,6 +258,7 @@ endif()
 # TODO(bgfx-removal): Remove FORCE overrides and restore as user-facing option() toggles.
 set(BABYLON_NATIVE_INSTALL OFF CACHE BOOL "Include the install target." FORCE)
 set(BABYLON_NATIVE_PLUGIN_NATIVEINPUT ON CACHE BOOL "Include Babylon Native Plugin NativeInput." FORCE)
+set(BABYLON_NATIVE_PLUGIN_NATIVEOPTIMIZATIONS ON CACHE BOOL "Include Babylon Native Plugin NativeOptimizations." FORCE)
 set(BABYLON_NATIVE_PLUGIN_NATIVEWEBGPU ON CACHE BOOL "Include Babylon Native Plugin NativeWebGPU." FORCE)
 set(BABYLON_NATIVE_WGPU_USE_UPSTREAM_NATIVE ON CACHE BOOL "Use upstream wgpu-native as the Rust backend base." FORCE)
 set(BABYLON_NATIVE_WGPU_NATIVE_RLIB ON CACHE BOOL "Build wgpu-native in the shared Cargo graph instead of linking a second Rust staticlib." FORCE)
@@ -253,13 +278,12 @@ set(BABYLON_NATIVE_PLUGIN_NATIVEENGINE OFF CACHE BOOL "" FORCE)
 set(BABYLON_NATIVE_PLUGIN_NATIVEENGINE_LOAD_IMAGES OFF CACHE BOOL "" FORCE)
 set(BABYLON_NATIVE_PLUGIN_NATIVEENGINE_WEBP OFF CACHE BOOL "" FORCE)
 set(BABYLON_NATIVE_PLUGIN_NATIVEENGINE_COMPILESHADERS OFF CACHE BOOL "" FORCE)
-set(BABYLON_NATIVE_PLUGIN_NATIVEOPTIMIZATIONS OFF CACHE BOOL "" FORCE)
 set(BABYLON_NATIVE_PLUGIN_NATIVETRACING OFF CACHE BOOL "" FORCE)
 set(BABYLON_NATIVE_PLUGIN_NATIVEXR OFF CACHE BOOL "" FORCE)
 set(BABYLON_NATIVE_PLUGIN_SHADERCACHE OFF CACHE BOOL "" FORCE)
 set(BABYLON_NATIVE_PLUGIN_SHADERCOMPILER OFF CACHE BOOL "" FORCE)
 set(BABYLON_NATIVE_PLUGIN_SHADERTOOL OFF CACHE BOOL "" FORCE)
-set(BABYLON_NATIVE_PLUGIN_TESTUTILS OFF CACHE BOOL "" FORCE)
+set(BABYLON_NATIVE_PLUGIN_TESTUTILS ON CACHE BOOL "" FORCE)
 
 if(BABYLON_NATIVE_WGPU_USE_UPSTREAM_NATIVE)
     FetchContent_MakeAvailable_With_Message(wgpu_native)
@@ -278,8 +302,28 @@ if(BABYLON_NATIVE_WGPU_USE_UPSTREAM_NATIVE)
         if(_wgpu_native_cargo_toml_patched STREQUAL _wgpu_native_cargo_toml)
             message(FATAL_ERROR "Failed to patch wgpu-native Cargo.toml to expose rlib.")
         endif()
+        set(_wgpu_native_cargo_toml_after_crate_type "${_wgpu_native_cargo_toml_patched}")
+        string(REPLACE
+            [=[
+[target.'cfg(all(unix, not(target_os = "ios"), not(target_os = "macos")))'.dependencies]
+hal = { workspace = true, features = ["renderdoc"] }
+
+[target.'cfg(windows)'.dependencies]
+hal = { workspace = true, features = ["dx12", "renderdoc"] }
+]=]
+            [=[
+# BabylonNative selects wgpu-native backend features per platform from
+# Core/GraphicsWgpu/Rust/Cargo.toml. Keep this direct hal dependency featureless
+# so Vulkan-only Windows/Linux/Android builds do not re-enable DX12 or RenderDoc.
+]=]
+            _wgpu_native_cargo_toml_patched
+            "${_wgpu_native_cargo_toml_patched}")
+        if(_wgpu_native_cargo_toml_patched STREQUAL _wgpu_native_cargo_toml_after_crate_type)
+            message(FATAL_ERROR "Failed to patch wgpu-native Cargo.toml target hal features.")
+        endif()
         file(WRITE "${wgpu_native_rlib_SOURCE_DIR}/Cargo.toml" "${_wgpu_native_cargo_toml_patched}")
         unset(_wgpu_native_cargo_toml)
+        unset(_wgpu_native_cargo_toml_after_crate_type)
         unset(_wgpu_native_cargo_toml_patched)
     endif()
 endif()
@@ -394,7 +438,7 @@ if(APPLE)
     if(NOT CMAKE_GENERATOR MATCHES "Xcode")
         # Some fetched dependencies gate ARC behind Xcode-only attributes.
         # Apply ARC explicitly for non-Xcode generators (Makefiles/Ninja).
-        add_compile_options(-fobjc-arc)
+        add_compile_options($<$<COMPILE_LANGUAGE:C,CXX,OBJC,OBJCXX>:-fobjc-arc>)
     endif()
 
     # Without this option on azure pipelines, there is a mismatch with math.h giving a lot of undefined functions on macOS.

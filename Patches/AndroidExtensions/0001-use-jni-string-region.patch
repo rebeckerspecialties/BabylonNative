@@ -1,0 +1,17 @@
+diff --git a/Source/JavaWrappers.cpp b/Source/JavaWrappers.cpp
+index 7aa2bec..2a4b7dd 100644
+--- a/Source/JavaWrappers.cpp
++++ b/Source/JavaWrappers.cpp
+@@ -254,9 +254,9 @@ namespace java::lang
+             // If there is a possibility that the underlying Java string is null, you should test for that using (jstring != nullptr) before trying to implicitly convert.
+             throw std::runtime_error("Tried to implicitly convert null Java String to C++ String");
+         }
+-        const char* buffer{m_env->GetStringUTFChars(m_string, nullptr)};
+-        std::string str{buffer};
+-        m_env->ReleaseStringUTFChars(m_string, buffer);
++        const auto utf16Length = m_env->GetStringLength(m_string);
++        std::string str(static_cast<size_t>(m_env->GetStringUTFLength(m_string)), '\0');
++        m_env->GetStringUTFRegion(m_string, 0, utf16Length, str.data());
+         return str;
+     }
+ 

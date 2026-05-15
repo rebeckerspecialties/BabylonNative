@@ -15,8 +15,16 @@ def arcore_libpath = layout.buildDirectory.dir("arcore-native").get().asFile.abs
 def enable_sanitizers = project.hasProperty("ENABLE_SANITIZERS") &&
     project.property("ENABLE_SANITIZERS").toString().toLowerCase() in ["1", "true", "on", "yes"]
 def ndk_version = project.hasProperty("NDK_VERSION") ? project.property("NDK_VERSION").toString() : "29.0.14206865"
+def sanitizerWrapResourcesDir = layout.buildDirectory.dir("generated/sanitizer-wrap-resources").get().asFile
 
 configurations { natives }
+
+def sanitizerAbiToArch = [
+    "arm64-v8a"  : "aarch64",
+    "armeabi-v7a": "arm",
+    "x86"        : "i686",
+    "x86_64"     : "x86_64"
+]
 
 android {
     compileSdk = 34
@@ -34,12 +42,14 @@ android {
     packaging {
         jniLibs {
             pickFirsts += ['lib/*/libv8android.so', 'lib/*/libjsc.so', 'lib/*/libBabylonNativeJNI.so', 'lib/*/libc++_shared.so']
+            useLegacyPackaging = enable_sanitizers
         }
     }
 
     sourceSets {
         main {
             jniLibs.srcDirs += ["${buildDir}/sanitizer-jniLibs"]
+            resources.srcDirs += [sanitizerWrapResourcesDir]
         }
     }
 
@@ -104,7 +114,8 @@ tasks.register('stageSanitizerRuntimeLibs') {
             throw new GradleException("Unsupported host OS for sanitizer runtime staging: ${osName}")
         }
 
-        def clangRoot = file("${android.sdkDirectory}/ndk/${ndk_version}/toolchains/llvm/prebuilt/${hostTag}/lib/clang")
+        def sdkRoot = androidComponents.sdkComponents.sdkDirectory.get().asFile
+        def clangRoot = file("${sdkRoot}/ndk/${ndk_version}/toolchains/llvm/prebuilt/${hostTag}/lib/clang")
         if (!clangRoot.exists()) {
             throw new GradleException("Missing NDK clang runtime root: ${clangRoot}")
         }
@@ -125,14 +136,7 @@ tasks.register('stageSanitizerRuntimeLibs') {
         def outDir = file("${buildDir}/sanitizer-jniLibs")
         delete(outDir)
 
-        def abiToArch = [
-            "arm64-v8a"  : "aarch64",
-            "armeabi-v7a": "arm",
-            "x86"        : "i686",
-            "x86_64"     : "x86_64"
-        ]
-
-        abiToArch.each { abi, arch ->
+        sanitizerAbiToArch.each { abi, arch ->
             def abiOut = file("${outDir}/${abi}")
             abiOut.mkdirs()
 
@@ -152,6 +156,29 @@ tasks.register('stageSanitizerRuntimeLibs') {
     }
 }
 
+tasks.register('generateSanitizerWrapScripts') {
+    outputs.dir(sanitizerWrapResourcesDir)
+    doFirst {
+        delete(sanitizerWrapResourcesDir)
+    }
+    doLast {
+        if (!enable_sanitizers) {
+            return
+        }
+
+        sanitizerAbiToArch.keySet().each { abi ->
+            def wrapDir = file("${sanitizerWrapResourcesDir}/lib/${abi}")
+            wrapDir.mkdirs()
+            def wrapScript = file("${wrapDir}/wrap.sh")
+            wrapScript.text = '''#!/system/bin/sh
+export ASAN_OPTIONS="${ASAN_OPTIONS}:detect_leaks=0:intercept_strlen=0"
+exec "$@"
+'''
+            wrapScript.setExecutable(true, false)
+        }
+    }
+}
+
 tasks.configureEach { task ->
     if ((task.name.contains("buildCMake") || task.name.contains("configureCMake")) && !task.name.contains("Clean")) {
         task.dependsOn('extractNativeLibraries')
@@ -163,6 +190,7 @@ tasks.named('preBuild').configure {
     dependsOn 'copyFiles'
     if (enable_sanitizers) {
         dependsOn 'stageSanitizerRuntimeLibs'
+        dependsOn 'generateSanitizerWrapScripts'
     }
 }
 
