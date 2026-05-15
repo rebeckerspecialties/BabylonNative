@@ -1218,8 +1218,44 @@
                     console.log("Readiness render pump for " + pumpLabel + " rendered " + frameCount + " frame(s).");
                 }
                 stopped = true;
+            },
+            getFrameCount: function () {
+                return frameCount;
             }
         };
+    }
+
+    function installWebGPUPreviousWorldBufferFrameOrderShim(engine) {
+        if (!engine || !engine.isWebGPU || typeof engine.flushFramebuffer !== "function" || !BABYLON.Buffer) {
+            return;
+        }
+
+        const bufferPrototype = BABYLON.Buffer.prototype;
+        if (!bufferPrototype || bufferPrototype.__nativeValidationPreviousWorldFrameOrderInstalled) {
+            return;
+        }
+
+        const originalCreateVertexBuffer = bufferPrototype.createVertexBuffer;
+        const originalUpdateDirectly = bufferPrototype.updateDirectly;
+        if (typeof originalCreateVertexBuffer !== "function" || typeof originalUpdateDirectly !== "function") {
+            return;
+        }
+
+        bufferPrototype.createVertexBuffer = function (kind) {
+            if (typeof kind === "string" && kind.indexOf("previousWorld") === 0) {
+                this.__nativeValidationPreviousWorldBuffer = true;
+            }
+            return originalCreateVertexBuffer.apply(this, arguments);
+        };
+
+        bufferPrototype.updateDirectly = function () {
+            if (this.__nativeValidationPreviousWorldBuffer && engine._currentRenderPass) {
+                engine.flushFramebuffer();
+            }
+            return originalUpdateDirectly.apply(this, arguments);
+        };
+
+        bufferPrototype.__nativeValidationPreviousWorldFrameOrderInstalled = true;
     }
 
     function installSceneReadinessShims() {
@@ -1331,6 +1367,7 @@
     const validationEngine = await createValidationEngineAsync();
     const engine = validationEngine.engine;
     engine.getCaps().parallelShaderCompile = undefined;
+    installWebGPUPreviousWorldBufferFrameOrderShim(engine);
     if (engine.isWebGPU && typeof navigator !== "undefined" && navigator.gpu && typeof navigator.gpu._backendStats === "function") {
         try {
             const stats = navigator.gpu._backendStats();
@@ -1521,6 +1558,12 @@
         currentScene.executeWhenReady(function () {
             if (evaluated) {
                 return;
+            }
+            if (readinessPump !== null && typeof readinessPump.getFrameCount === "function") {
+                frameIndex = readinessPump.getFrameCount();
+                if (frameIndex > 0) {
+                    console.log("Counting " + frameIndex + " readiness render pump frame(s) toward renderCount for " + (test.title || "(unnamed)") + ".");
+                }
             }
             if (readinessPump !== null) {
                 readinessPump.stop();
