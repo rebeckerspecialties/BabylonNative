@@ -2,11 +2,12 @@ use std::collections::HashMap;
 use std::ffi::{c_char, c_void, CStr};
 use std::ptr;
 use std::slice;
+use std::sync::OnceLock;
 
 use femtovg::renderer::WGPURenderer;
 use femtovg::{
-    Color, CompositeOperation, FontId, ImageFlags, ImageId, LineCap, LineJoin, Paint, Path,
-    Solidity, Transform2D,
+    Color, CompositeOperation, FontId, ImageFlags, ImageId, ImageInfo, LineCap, LineJoin, Paint,
+    Path, PixelFormat, Solidity, Transform2D,
 };
 use imgref::Img;
 use rgb::RGBA8;
@@ -152,6 +153,26 @@ fn create_device() -> Result<(wgpu::Device, wgpu::Queue), String> {
         .map_err(|err| format!("request_device failed: {err}"))
 }
 
+fn shared_device() -> Result<(wgpu::Device, wgpu::Queue), String> {
+    static SHARED_DEVICE: OnceLock<Result<(wgpu::Device, wgpu::Queue), String>> = OnceLock::new();
+
+    SHARED_DEVICE
+        .get_or_init(create_device)
+        .as_ref()
+        .map(|(device, queue)| (device.clone(), queue.clone()))
+        .map_err(Clone::clone)
+}
+
+fn opaque_ptr_as_ref<T>(ptr: *const c_void) -> Option<&'static T> {
+    if ptr.is_null() {
+        return None;
+    }
+
+    // SAFETY: CanvasWgpu only accepts opaque pointers created by its own FFI
+    // exports. Callers pass stable pointers to Rust-owned wgpu wrapper objects.
+    Some(unsafe { &*(ptr as *const T) })
+}
+
 fn create_render_texture(
     device: &wgpu::Device,
     width: u32,
@@ -178,7 +199,7 @@ fn create_render_texture(
 
 impl Backend {
     fn new(width: u32, height: u32) -> Result<Self, String> {
-        let (device, queue) = create_device()?;
+        let (device, queue) = shared_device()?;
         let renderer = WGPURenderer::new(device.clone(), queue.clone());
         let mut canvas = femtovg::Canvas::new(renderer)
             .map_err(|err| format!("femtovg canvas create failed: {err:?}"))?;
@@ -770,6 +791,16 @@ pub extern "C" fn nvgFillPaint(ctx: *mut NVGcontext, paint: NVGpaint) {
 }
 
 #[no_mangle]
+pub extern "C" fn nvgStrokePaint(ctx: *mut NVGcontext, paint: NVGpaint) {
+    with_ctx_mut(ctx, (), |backend| {
+        let mut converted = backend.paint_from_pattern(paint);
+        backend.apply_text_style(&mut converted);
+        backend.stroke_paint = converted;
+        backend.apply_stroke_style();
+    });
+}
+
+#[no_mangle]
 pub extern "C" fn nvgStrokeWidth(ctx: *mut NVGcontext, width: f32) {
     with_ctx_mut(ctx, (), |backend| {
         backend.stroke_width = width.max(0.0);
@@ -904,6 +935,55 @@ pub extern "C" fn nvgCreateImageRGBA(
 
         let img = Img::new(storage.as_slice(), width, height);
         match backend.canvas.create_image(img, ImageFlags::empty()) {
+            Ok(image_id) => {
+                let handle = backend.next_image_handle;
+                backend.next_image_handle += 1;
+                backend.images.insert(handle, image_id);
+                handle
+            }
+            Err(_) => -1,
+        }
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn nvgCreateImageFromNativeTexture(
+    ctx: *mut NVGcontext,
+    native_texture: *const c_void,
+    w: i32,
+    h: i32,
+    _image_flags: i32,
+) -> i32 {
+    with_ctx_mut(ctx, -1, |backend| {
+        let Some(native_handle) =
+            opaque_ptr_as_ref::<BabylonCanvasNativeTextureHandle>(native_texture)
+        else {
+            return -1;
+        };
+        let Some(source_texture) = opaque_ptr_as_ref::<wgpu::Texture>(native_handle.texture) else {
+            return -1;
+        };
+        let Some(source_device) = opaque_ptr_as_ref::<wgpu::Device>(native_handle.device) else {
+            return -1;
+        };
+
+        if source_device != &backend.device {
+            return -1;
+        }
+
+        let width = if w > 0 { w as u32 } else { native_handle.width }.max(1) as usize;
+        let height = if h > 0 {
+            h as u32
+        } else {
+            native_handle.height
+        }
+        .max(1) as usize;
+        let info = ImageInfo::new(ImageFlags::empty(), width, height, PixelFormat::Rgba8);
+
+        match backend
+            .canvas
+            .create_image_from_native_texture(source_texture.clone(), info)
+        {
             Ok(image_id) => {
                 let handle = backend.next_image_handle;
                 backend.next_image_handle += 1;
