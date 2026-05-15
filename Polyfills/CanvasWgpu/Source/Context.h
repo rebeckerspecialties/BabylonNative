@@ -2,6 +2,9 @@
 
 #include <Babylon/Polyfills/Canvas.h>
 #include <Babylon/JsRuntimeScheduler.h>
+#include <cstdint>
+#include <unordered_map>
+#include <variant>
 #include "Image.h"
 #include "Path2D.h"
 #include "Font.h"
@@ -23,6 +26,7 @@ namespace Babylon::Polyfills::Internal
 
         NVGcontext* GetNVGContext() const { return *m_nvg.get(); }
         void* GetNativeRenderTexture() const;
+        void Flush();
 
     private:
         void FillRect(const Napi::CallbackInfo&);
@@ -97,7 +101,7 @@ namespace Babylon::Polyfills::Internal
 
         Font m_font;
         std::variant<std::string, CanvasGradient*> m_fillStyle{};
-        std::string m_strokeStyle{};
+        std::variant<std::string, CanvasGradient*> m_strokeStyle{};
         NVGlineCap m_lineCap{NVG_BUTT};
         NVGlineCap m_lineJoin{NVG_MITER};
         std::string m_filter{};
@@ -107,6 +111,10 @@ namespace Babylon::Polyfills::Internal
         float m_lineWidth{0.f};
         float m_globalAlpha{1.f};
         float m_letterSpacing{0.f};
+        std::string m_shadowColor{"rgba(0, 0, 0, 0)"};
+        float m_shadowBlur{0.f};
+        float m_shadowOffsetX{0.f};
+        float m_shadowOffsetY{0.f};
 
         std::map<std::string, int> m_fonts;
         int m_currentFontId{-1};
@@ -118,11 +126,21 @@ namespace Babylon::Polyfills::Internal
             float left, top, width, height;
         } m_rectangleClipping{};
 
+        struct CanvasTextureImageEntry
+        {
+            int imageIndex{-1};
+            uint64_t generation{};
+            uint32_t width{};
+            uint32_t height{};
+        };
+
         std::shared_ptr<arcana::cancellation_source> m_cancellationSource{};
         JsRuntimeScheduler m_runtimeScheduler;
 
         std::unordered_map<const NativeCanvasImage*, int> m_nvgImageIndices;
+        std::unordered_map<const void*, CanvasTextureImageEntry> m_canvasTextureImageIndices;
         void BindFillStyle(const Napi::CallbackInfo& info, float left, float top, float width, float height);
+        void BindStrokeStyle(const Napi::CallbackInfo& info, float left, float top, float width, float height);
         void FlushGraphicResources() override;
         void PlayPath2D(const NativeCanvasPath2D* path);
         void SetFilterStack();

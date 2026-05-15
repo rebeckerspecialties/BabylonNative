@@ -1964,11 +1964,24 @@ mod upstream_wgpu_native {
         value.get(key).and_then(Value::as_bool).unwrap_or(fallback)
     }
 
+    fn value_u32(value: &Value, fallback: u32) -> u32 {
+        if let Some(raw) = value.as_u64() {
+            return raw.min(u64::from(u32::MAX)) as u32;
+        }
+
+        if let Some(raw) = value.as_f64() {
+            if raw.is_finite() && raw >= 0.0 {
+                return raw.floor().min(f64::from(u32::MAX)) as u32;
+            }
+        }
+
+        fallback
+    }
+
     fn json_u32(value: &Value, key: &str, fallback: u32) -> u32 {
         value
             .get(key)
-            .and_then(Value::as_u64)
-            .map(|raw| raw.min(u64::from(u32::MAX)) as u32)
+            .map(|raw| value_u32(raw, fallback))
             .unwrap_or(fallback)
     }
 
@@ -2493,10 +2506,21 @@ mod upstream_wgpu_native {
     fn parse_extent3d(value: &Value) -> wgpu::Extent3d {
         if let Some(array) = value.as_array() {
             return wgpu::Extent3d {
-                width: array.get(0).and_then(Value::as_u64).unwrap_or(1).max(1) as u32,
-                height: array.get(1).and_then(Value::as_u64).unwrap_or(1).max(1) as u32,
-                depth_or_array_layers: array.get(2).and_then(Value::as_u64).unwrap_or(1).max(1)
-                    as u32,
+                width: array
+                    .get(0)
+                    .map(|raw| value_u32(raw, 1))
+                    .unwrap_or(1)
+                    .max(1),
+                height: array
+                    .get(1)
+                    .map(|raw| value_u32(raw, 1))
+                    .unwrap_or(1)
+                    .max(1),
+                depth_or_array_layers: array
+                    .get(2)
+                    .map(|raw| value_u32(raw, 1))
+                    .unwrap_or(1)
+                    .max(1),
             };
         }
         wgpu::Extent3d {
@@ -2893,8 +2917,7 @@ mod upstream_wgpu_native {
                 base_mip_level,
                 mip_level_count: descriptor
                     .get("mipLevelCount")
-                    .and_then(Value::as_u64)
-                    .map(|raw| raw.min(u64::from(u32::MAX)) as u32),
+                    .map(|raw| value_u32(raw, u32::MAX)),
                 base_array_layer: json_u32(&descriptor, "baseArrayLayer", 0),
                 array_layer_count: descriptor
                     .get("arrayLayerCount")

@@ -149,11 +149,16 @@ namespace Babylon::Polyfills::Internal
             {
                 nvgDeleteImage(*m_nvg, image.second);
             }
+            for (auto& image : m_canvasTextureImageIndices)
+            {
+                nvgDeleteImage(*m_nvg, image.second.imageIndex);
+            }
             nvgDelete(*m_nvg);
             m_nvg = nullptr;
         }
 
         m_nvgImageIndices.clear();
+        m_canvasTextureImageIndices.clear();
         m_fonts.clear();
         m_currentFontId = -1;
         m_isClipped = false;
@@ -177,6 +182,26 @@ namespace Babylon::Polyfills::Internal
         else
         {
             throw Napi::Error::New(info.Env(), "Fillstyle is not a color string or a gradient.");
+        }
+    }
+
+    void Context::BindStrokeStyle(const Napi::CallbackInfo& info, float left, float, float width, float height)
+    {
+        if (std::holds_alternative<std::string>(m_strokeStyle))
+        {
+            const auto color = StringToColor(info.Env(), std::get<std::string>(m_strokeStyle));
+            nvgStrokeColor(*m_nvg, color);
+        }
+        else if (std::holds_alternative<CanvasGradient*>(m_strokeStyle))
+        {
+            CanvasGradient* gradient = std::get<CanvasGradient*>(m_strokeStyle);
+            gradient->UpdateCache();
+            NVGpaint imagePaint = nvgImagePattern(*m_nvg, 0.f, 0.f, width + left, height, 0.f, gradient->CachedImage(), 1.f);
+            nvgStrokePaint(*m_nvg, imagePaint);
+        }
+        else
+        {
+            throw Napi::Error::New(info.Env(), "Strokestyle is not a color string or a gradient.");
         }
     }
 
@@ -237,14 +262,34 @@ namespace Babylon::Polyfills::Internal
 
     Napi::Value Context::GetStrokeStyle(const Napi::CallbackInfo&)
     {
-        return Napi::Value::From(Env(), m_strokeStyle);
+        if (std::holds_alternative<std::string>(m_strokeStyle))
+        {
+            return Napi::Value::From(Env(), std::get<std::string>(m_strokeStyle));
+        }
+        else
+        {
+            return Napi::External<CanvasGradient>::New(Env(), std::get<CanvasGradient*>(m_strokeStyle));
+        }
     }
 
     void Context::SetStrokeStyle(const Napi::CallbackInfo& info, const Napi::Value& value)
     {
-        m_strokeStyle = value.As<Napi::String>().Utf8Value();
-        auto color = StringToColor(info.Env(), m_strokeStyle);
-        nvgStrokeColor(*m_nvg, color);
+        if (value.IsString())
+        {
+            auto string = value.As<Napi::String>().Utf8Value();
+            const auto color = StringToColor(info.Env(), string);
+            m_strokeStyle = std::move(string);
+            nvgStrokeColor(*m_nvg, color);
+        }
+        else if (value.IsObject())
+        {
+            CanvasGradient* canvasGradient = CanvasGradient::Unwrap(value.As<Napi::Object>());
+            m_strokeStyle = canvasGradient;
+        }
+        else
+        {
+            throw Napi::TypeError::New(info.Env(), "Context2D.strokeStyle must be a color string or CanvasGradient.");
+        }
     }
 
     Napi::Value Context::GetLineWidth(const Napi::CallbackInfo&)
@@ -442,7 +487,13 @@ namespace Babylon::Polyfills::Internal
         const auto width = info[2].As<Napi::Number>().FloatValue();
         const auto height = info[3].As<Napi::Number>().FloatValue();
 
+        if (!m_isClipped)
+        {
+            nvgBeginPath(*m_nvg);
+        }
+
         nvgRect(*m_nvg, left, top, width, height);
+        BindStrokeStyle(info, left, top, width, height);
         SetFilterStack();
         nvgStroke(*m_nvg);
     }
@@ -531,6 +582,7 @@ namespace Babylon::Polyfills::Internal
             PlayPath2D(path);
         }
 
+        BindStrokeStyle(info, 0.f, 0.f, static_cast<float>(m_canvas->GetWidth()), static_cast<float>(m_canvas->GetHeight()));
         SetFilterStack();
         nvgStroke(*m_nvg);
     }
@@ -630,6 +682,11 @@ namespace Babylon::Polyfills::Internal
 
     void Context::Flush(const Napi::CallbackInfo&)
     {
+        Flush();
+    }
+
+    void Context::Flush()
+    {
         const bool needClear = m_canvas->UpdateRenderTarget();
         const auto width = m_canvas->GetWidth();
         const auto height = m_canvas->GetHeight();
@@ -648,12 +705,53 @@ namespace Babylon::Polyfills::Internal
         nvgEndFrame(*m_nvg);
     }
 
-    void Context::PutImageData(const Napi::CallbackInfo&)
+    void Context::PutImageData(const Napi::CallbackInfo& info)
     {
-        // TODO(putImageData): Implement by uploading the pixel data from the
-        // JavaScript ImageData object to a GPU texture (or staging buffer) and
-        // blitting it into the canvas render target at the specified offset.
-        throw std::runtime_error{"not implemented"};
+        if (info.Length() < 3 || !info[0].IsObject())
+        {
+            throw Napi::TypeError::New(info.Env(), "Context2D.putImageData requires ImageData, dx, and dy.");
+        }
+
+        const auto imageData = info[0].As<Napi::Object>();
+        const uint32_t width = imageData.Get("width").As<Napi::Number>().Uint32Value();
+        const uint32_t height = imageData.Get("height").As<Napi::Number>().Uint32Value();
+        const auto dataValue = imageData.Get("data");
+        if (width == 0 || height == 0 || !dataValue.IsTypedArray())
+        {
+            return;
+        }
+
+        const auto data = dataValue.As<Napi::TypedArray>();
+        if (data.ElementSize() != 1)
+        {
+            throw Napi::TypeError::New(info.Env(), "Context2D.putImageData expects 8-bit RGBA image data.");
+        }
+
+        const size_t expectedBytes = static_cast<size_t>(width) * static_cast<size_t>(height) * 4u;
+        if (data.ByteLength() < expectedBytes)
+        {
+            throw Napi::RangeError::New(info.Env(), "Context2D.putImageData image data is smaller than width * height * 4.");
+        }
+
+        const auto buffer = data.ArrayBuffer();
+        const auto* bytes = static_cast<const unsigned char*>(buffer.Data()) + data.ByteOffset();
+        const auto imageHandle = nvgCreateImageRGBA(*m_nvg, static_cast<int>(width), static_cast<int>(height), 0, bytes);
+        if (imageHandle == -1)
+        {
+            throw Napi::Error::New(info.Env(), "Context2D.putImageData failed to create an intermediate image.");
+        }
+
+        const auto dx = info[1].As<Napi::Number>().FloatValue();
+        const auto dy = info[2].As<Napi::Number>().FloatValue();
+        nvgSave(*m_nvg);
+        nvgGlobalCompositeOperation(*m_nvg, NVG_COPY);
+        nvgBeginPath(*m_nvg);
+        nvgRect(*m_nvg, dx, dy, static_cast<float>(width), static_cast<float>(height));
+        const auto imagePaint = nvgImagePattern(*m_nvg, dx, dy, static_cast<float>(width), static_cast<float>(height), 0.f, imageHandle, 1.f);
+        nvgFillPaint(*m_nvg, imagePaint);
+        nvgFill(*m_nvg);
+        nvgRestore(*m_nvg);
+        nvgDeleteImage(*m_nvg, imageHandle);
     }
 
     void Context::Arc(const Napi::CallbackInfo& info)
@@ -669,30 +767,127 @@ namespace Babylon::Polyfills::Internal
 
     void Context::DrawImage(const Napi::CallbackInfo& info)
     {
-        const NativeCanvasImage* canvasImage = NativeCanvasImage::Unwrap(info[0].As<Napi::Object>());
-
-        int imageIndex{-1};
-        const auto nvgImageIter = m_nvgImageIndices.find(canvasImage);
-        if (nvgImageIter == m_nvgImageIndices.end())
+        if (info.Length() == 0 || !info[0].IsObject())
         {
-            imageIndex = canvasImage->CreateNVGImageForContext(*m_nvg);
-            m_nvgImageIndices.try_emplace(canvasImage, imageIndex);
+            Napi::TypeError::New(info.Env(), "Context2D.drawImage source must be a native image object.").ThrowAsJavaScriptException();
+            return;
+        }
+
+        const auto sourceObject = info[0].As<Napi::Object>();
+        int imageIndex{-1};
+        uint32_t sourceWidth{};
+        uint32_t sourceHeight{};
+
+        if (sourceObject.Has("getCanvasTexture"))
+        {
+            const auto getCanvasTextureValue = sourceObject.Get("getCanvasTexture");
+            if (!getCanvasTextureValue.IsFunction())
+            {
+                Napi::TypeError::New(info.Env(), "Context2D.drawImage canvas source has an invalid getCanvasTexture method.").ThrowAsJavaScriptException();
+                return;
+            }
+
+            const auto payloadValue = getCanvasTextureValue.As<Napi::Function>().Call(sourceObject, {});
+            if (!payloadValue.IsObject())
+            {
+                Napi::Error::New(info.Env(), "Context2D.drawImage canvas source did not provide a native texture payload.").ThrowAsJavaScriptException();
+                return;
+            }
+
+            const auto payload = payloadValue.As<Napi::Object>();
+            const auto nativeTextureValue = payload.Get("nativeTexture");
+            if (!nativeTextureValue.IsExternal())
+            {
+                Napi::Error::New(info.Env(), "Context2D.drawImage canvas source native texture payload was missing.").ThrowAsJavaScriptException();
+                return;
+            }
+
+            const auto* nativeTexture = nativeTextureValue.As<Napi::External<void>>().Data();
+            sourceWidth = payload.Get("width").As<Napi::Number>().Uint32Value();
+            sourceHeight = payload.Get("height").As<Napi::Number>().Uint32Value();
+            const auto generationValue = payload.Get("generation");
+            const auto generation = generationValue.IsNumber()
+                ? static_cast<uint64_t>(generationValue.As<Napi::Number>().DoubleValue())
+                : 0u;
+
+            auto imageIter = m_canvasTextureImageIndices.find(nativeTexture);
+            if (imageIter == m_canvasTextureImageIndices.end() ||
+                imageIter->second.generation != generation ||
+                imageIter->second.width != sourceWidth ||
+                imageIter->second.height != sourceHeight)
+            {
+                if (imageIter != m_canvasTextureImageIndices.end())
+                {
+                    nvgDeleteImage(*m_nvg, imageIter->second.imageIndex);
+                    m_canvasTextureImageIndices.erase(imageIter);
+                }
+
+                imageIndex = nvgCreateImageFromNativeTexture(
+                    *m_nvg,
+                    nativeTexture,
+                    static_cast<int>(sourceWidth),
+                    static_cast<int>(sourceHeight),
+                    0);
+                if (imageIndex == -1)
+                {
+                    Napi::Error::New(info.Env(), "Context2D.drawImage could not import the canvas source texture into CanvasWgpu.").ThrowAsJavaScriptException();
+                    return;
+                }
+
+                m_canvasTextureImageIndices.try_emplace(
+                    nativeTexture,
+                    CanvasTextureImageEntry{
+                        imageIndex,
+                        generation,
+                        sourceWidth,
+                        sourceHeight});
+            }
+            else
+            {
+                imageIndex = imageIter->second.imageIndex;
+            }
+        }
+        else if (sourceObject.Has("_getNativeImageData"))
+        {
+            const NativeCanvasImage* canvasImage = NativeCanvasImage::Unwrap(sourceObject);
+            if (canvasImage == nullptr)
+            {
+                Napi::TypeError::New(info.Env(), "Context2D.drawImage source is not backed by a native image.").ThrowAsJavaScriptException();
+                return;
+            }
+
+            const auto nvgImageIter = m_nvgImageIndices.find(canvasImage);
+            if (nvgImageIter == m_nvgImageIndices.end())
+            {
+                imageIndex = canvasImage->CreateNVGImageForContext(*m_nvg);
+                m_nvgImageIndices.try_emplace(canvasImage, imageIndex);
+            }
+            else
+            {
+                imageIndex = nvgImageIter->second;
+            }
+
+            sourceWidth = canvasImage->GetWidth();
+            sourceHeight = canvasImage->GetHeight();
         }
         else
         {
-            imageIndex = nvgImageIter->second;
+            Napi::TypeError::New(info.Env(), "Context2D.drawImage source must be a native image or canvas object.").ThrowAsJavaScriptException();
+            return;
         }
+
         if (imageIndex == -1)
         {
-            throw Napi::Error::New(info.Env(), "Unable to create native canvas image.");
+            Napi::Error::New(info.Env(), "Unable to create native canvas image.").ThrowAsJavaScriptException();
+            return;
         }
 
         if (info.Length() == 3)
         {
             const auto dx = static_cast<float>(info[1].As<Napi::Number>().Int32Value());
             const auto dy = static_cast<float>(info[2].As<Napi::Number>().Int32Value());
-            const auto width = static_cast<float>(canvasImage->GetWidth());
-            const auto height = static_cast<float>(canvasImage->GetHeight());
+            const auto width = static_cast<float>(sourceWidth);
+            const auto height = static_cast<float>(sourceHeight);
 
             NVGpaint imagePaint = nvgImagePattern(*m_nvg, 0.f, 0.f, width, height, 0.f, imageIndex, 1.f);
 
@@ -741,8 +936,8 @@ namespace Babylon::Polyfills::Internal
             const auto dy = static_cast<float>(info[6].As<Napi::Number>().Int32Value());
             const auto dWidth = static_cast<float>(info[7].As<Napi::Number>().Uint32Value());
             const auto dHeight = static_cast<float>(info[8].As<Napi::Number>().Uint32Value());
-            const auto width = static_cast<float>(canvasImage->GetWidth());
-            const auto height = static_cast<float>(canvasImage->GetHeight());
+            const auto width = static_cast<float>(sourceWidth);
+            const auto height = static_cast<float>(sourceHeight);
             (void)sx;
             (void)sy;
             (void)sWidth;
@@ -764,7 +959,8 @@ namespace Babylon::Polyfills::Internal
         }
         else
         {
-            throw Napi::Error::New(info.Env(), "Invalid number of parameters for DrawImage");
+            Napi::Error::New(info.Env(), "Invalid number of parameters for DrawImage").ThrowAsJavaScriptException();
+            return;
         }
     }
 
@@ -781,7 +977,10 @@ namespace Babylon::Polyfills::Internal
 
     void Context::SetLineDash(const Napi::CallbackInfo& info)
     {
-        throw Napi::Error::New(info.Env(), "not implemented");
+        // femtovg does not currently expose dashed stroke rendering. Accept the
+        // browser API call so GUI layout/rendering paths that set a dash pattern
+        // continue to execute instead of failing before visual comparison.
+        (void)info;
     }
 
     void Context::StrokeText(const Napi::CallbackInfo& info)
@@ -1018,42 +1217,46 @@ namespace Babylon::Polyfills::Internal
 
     Napi::Value Context::GetShadowColor(const Napi::CallbackInfo& info)
     {
-        throw Napi::Error::New(info.Env(), "not implemented");
+        return Napi::String::New(info.Env(), m_shadowColor);
     }
 
     void Context::SetShadowColor(const Napi::CallbackInfo& info, const Napi::Value& value)
     {
-        throw Napi::Error::New(info.Env(), "not implemented");
+        (void)info;
+        m_shadowColor = value.ToString();
     }
 
     Napi::Value Context::GetShadowBlur(const Napi::CallbackInfo& info)
     {
-        throw Napi::Error::New(info.Env(), "not implemented");
+        return Napi::Number::New(info.Env(), m_shadowBlur);
     }
 
     void Context::SetShadowBlur(const Napi::CallbackInfo& info, const Napi::Value& value)
     {
-        throw Napi::Error::New(info.Env(), "not implemented");
+        (void)info;
+        m_shadowBlur = value.As<Napi::Number>().FloatValue();
     }
 
     Napi::Value Context::GetShadowOffsetX(const Napi::CallbackInfo& info)
     {
-        throw Napi::Error::New(info.Env(), "not implemented");
+        return Napi::Number::New(info.Env(), m_shadowOffsetX);
     }
 
     void Context::SetShadowOffsetX(const Napi::CallbackInfo& info, const Napi::Value& value)
     {
-        throw Napi::Error::New(info.Env(), "not implemented");
+        (void)info;
+        m_shadowOffsetX = value.As<Napi::Number>().FloatValue();
     }
 
     Napi::Value Context::GetShadowOffsetY(const Napi::CallbackInfo& info)
     {
-        throw Napi::Error::New(info.Env(), "not implemented");
+        return Napi::Number::New(info.Env(), m_shadowOffsetY);
     }
 
     void Context::SetShadowOffsetY(const Napi::CallbackInfo& info, const Napi::Value& value)
     {
-        throw Napi::Error::New(info.Env(), "not implemented");
+        (void)info;
+        m_shadowOffsetY = value.As<Napi::Number>().FloatValue();
     }
 }
 
