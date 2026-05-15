@@ -682,7 +682,10 @@ namespace Babylon::Polyfills::Internal
         {
             imageIndex = nvgImageIter->second;
         }
-        assert(imageIndex != -1);
+        if (imageIndex == -1)
+        {
+            throw Napi::Error::New(info.Env(), "Unable to create native canvas image.");
+        }
 
         if (info.Length() == 3)
         {
