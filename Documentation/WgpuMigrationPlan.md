@@ -242,8 +242,87 @@
 - Wrapped macOS/iOS/visionOS Playground render and resize callbacks in local
   autorelease pools so Objective-C/Metal autoreleased temporaries are drained
   per frame on Apple host loops.
+- Switched the workspace `wgpu` dependency to `default-features = false` and
+  selected backend features per target: Metal/WGSL/std on Apple targets and
+  Vulkan/WGSL/std on Android, Linux, and Windows. The build-local
+  `wgpu-native` rlib manifest patch also removes upstream's direct `hal`
+  DX12/RenderDoc feature forcing so our platform feature selection controls
+  the linked backend set.
+- Moved CanvasWgpu image decoding on macOS/iOS/visionOS from Rust `image` crate
+  codecs to a small Swift 6 `ImageIO`/`CoreGraphics` decoder behind the existing
+  `babylon_canvas_decode_image_rgba` C ABI. The decoder intentionally loads
+  only the first frame and keeps `HTMLImageElement` animation behavior out of
+  scope for this JS game-engine runtime.
+- Moved CanvasWgpu image decoding on Android 10+ from Rust `image` crate codecs
+  to platform decoders: Android 11/API 30+ dynamically loads the NDK
+  `AImageDecoder` entrypoints from `libjnigraphics` and decodes directly into
+  native RGBA memory; Android 10/API 29 keeps a `BitmapFactory` +
+  `AndroidBitmap_lockPixels` fallback.
+- Added UnitTests coverage for CanvasWgpu `Image` PNG data URL decode success
+  and invalid data URL rejection so the platform decoder path is exercised
+  through the same JS-visible Canvas image API.
+- Added Playground smoke coverage that decodes a PNG data URL, draws it into the
+  CanvasWgpu texture, and checks invalid data URL rejection through the same
+  `Image` event path used by application JS.
 
-## Latest Validation Snapshot (2026-05-13)
+## Latest Validation Snapshot (2026-05-14)
+- Dependency/feature state:
+  - Apple target Cargo feature audit resolves `wgpu` and `wgpu-native` with
+    `metal` only; the Rust `image` crate is not in the Apple target graph.
+  - Android target Cargo feature audit resolves `wgpu` and `wgpu-native` with
+    `vulkan`; the Rust `image` crate is not in the Android target graph.
+  - Linux/Windows target Cargo feature audits resolve `wgpu` and `wgpu-native`
+    with `vulkan`; those targets still retain the Rust `image` decoder while
+    the Linux/SteamOS platform decoder strategy is finalized.
+  - Upstream `wgpu` 29.0.3 still hardwires `wgpu-core`'s `renderdoc` feature
+    for non-wasm targets through its target dependency. The local
+    `wgpu-native` patch no longer adds DX12 or RenderDoc on top of that.
+  - Steam Runtime 3.0 `sniper` latest public stable/beta manifests include
+    `libgdk-pixbuf-2.0-0`, `libjpeg62-turbo`, `libpng16-16`, `libtiff5`, and
+    `libwebp6`, so a dynamically loaded Linux system/runtime decoder path looks
+    plausible. Do not remove the Linux Rust decoder until that path is
+    implemented and validated inside the Steam Runtime container.
+- Release LTO-bitcode build:
+  - Reconfigured `build_wgpu_29_release_lto_bitcode` with Rust `1.94.1`
+    (`rustc 1.94.1`, LLVM `21.1.8`) and
+    `BABYLON_NATIVE_LTO_BITCODE_STATIC_LIBS=ON`.
+  - Built `Playground`, `UnitTests`, and `NativeWebGPUAsyncTests`.
+  - Final stripped Playground size changed from `5,417,720` bytes to
+    `4,880,648` bytes, a reduction of `537,072` bytes (`9.91%`).
+  - Raw Playground size changed from `6,616,872` bytes to `6,001,752` bytes,
+    a reduction of `615,120` bytes (`9.30%`).
+  - Final link-input inspection checked 25 object/archive inputs and 132
+    archive members; all had LLVM bitcode markers.
+  - `otool -L` now shows dynamic links to system `CoreGraphics` and `ImageIO`;
+    `nm` confirms `babylon_canvas_decode_image_rgba` resolves from
+    `CanvasAppleImageDecoder` and the Rust image codec symbols are absent from
+    the macOS Playground binary.
+- Tests and smoke validation:
+  - `ctest --test-dir build_wgpu_29_release_lto_bitcode --output-on-failure`
+    passed, including the new Canvas `Image` data URL decode/reject tests.
+  - `NativeWebGPUAsyncTests` passed all 8 tests.
+  - Refreshed macOS ASan/UBSan and ThreadSanitizer builds passed `UnitTests`,
+    `NativeWebGPUAsyncTests`, and Playground log smoke. Both sanitizer
+    Playgrounds decoded the PNG data URL, rejected the invalid image data URL,
+    drew the decoded image into the CanvasWgpu texture, and reported the
+    BabylonJS WebGPU path without sanitizer diagnostics.
+  - Android API 31 ASan Playground build/install/run passed the image decoder
+    smoke through the `AImageDecoder` path: `image-loaded:2x1` and
+    `image-invalid-rejected:1`, with no ASan report. Native heap stayed flat at
+    `22,364 KB` through 15 one-second `dumpsys meminfo` samples after warmup.
+    This emulator still reports a broken Vulkan/wgpu device limit
+    (`max buffer size (0)`), so the Android WebGPU visual path remains blocked
+    on this virtual device even though the decoder smoke is now green.
+  - macOS LTO Playground launched visibly by running the executable directly
+    from the bundle (the Ninja bundle Info.plist still contains
+    `$(EXECUTABLE_NAME)`, so `open` cannot launch it). Screenshot:
+    `/tmp/babylonnative-validation/playground-lto-after-appledecode-macos.png`.
+  - The visible smoke rendered the BabylonJS WebGPU cube with CanvasWgpu
+    gradient/text texture. A short RSS sample still showed page-sized upward
+    drift; the saved pre-change LTO executable showed the same trend in the
+    same scene, so this was not introduced by the Apple decoder change.
+
+## Previous Validation Snapshot (2026-05-13)
 - Branch state:
   - `wgpu` is based on current `origin/master`
     (`git merge-base --is-ancestor origin/master HEAD` passed).
