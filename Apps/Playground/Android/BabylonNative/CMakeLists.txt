@@ -30,6 +30,7 @@ target_link_libraries(BabylonNativeJNI
     PRIVATE Console
     PRIVATE GraphicsDevice
     PRIVATE NativeInput
+    PRIVATE NativeOptimizations
     PRIVATE NativeWebGPU
     PRIVATE Performance
     PRIVATE ScriptLoader
@@ -39,7 +40,8 @@ target_link_libraries(BabylonNativeJNI
     PRIVATE XMLHttpRequest)
 
 target_compile_definitions(BabylonNativeJNI
-    PRIVATE BABYLON_NATIVE_PLAYGROUND_HAS_CANVAS=1)
+    PRIVATE BABYLON_NATIVE_PLAYGROUND_HAS_CANVAS=1
+    PRIVATE BABYLON_NATIVE_PLAYGROUND_HAS_NATIVEOPTIMIZATIONS=1)
 
 if(ENABLE_SANITIZERS AND DEFINED BABYLON_NATIVE_SANITIZER_FLAGS)
     target_compile_options(BabylonNativeJNI

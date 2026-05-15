@@ -18,6 +18,19 @@ namespace
 {
     std::optional<AppContext> appContext{};
     JavaVM* sJavaVM{};
+
+    std::string JStringToStdString(JNIEnv* env, jstring value)
+    {
+        if (value == nullptr)
+        {
+            return {};
+        }
+
+        const auto utf16Length = env->GetStringLength(value);
+        std::string result(static_cast<size_t>(env->GetStringUTFLength(value)), '\0');
+        env->GetStringUTFRegion(value, 0, utf16Length, result.data());
+        return result;
+    }
 }
 
 extern "C"
@@ -147,9 +160,7 @@ extern "C"
         for (int i = 0; i < env->GetArrayLength(permissions); i++)
         {
             jstring permission = (jstring)env->GetObjectArrayElement(permissions, i);
-            const char* utfString{env->GetStringUTFChars(permission, nullptr)};
-            nativePermissions.push_back(utfString);
-            env->ReleaseStringUTFChars(permission, utfString);
+            nativePermissions.push_back(JStringToStdString(env, permission));
         }
 
         auto grantResultElements{env->GetIntArrayElements(grantResults, nullptr)};
@@ -165,9 +176,7 @@ extern "C"
     {
         if (appContext)
         {
-            const char* sourcePath = env->GetStringUTFChars(path, nullptr);
-            appContext->ScriptLoader().LoadScript(sourcePath);
-            env->ReleaseStringUTFChars(path, sourcePath);
+            appContext->ScriptLoader().LoadScript(JStringToStdString(env, path));
         }
     }
 
@@ -176,12 +185,8 @@ extern "C"
     {
         if (appContext)
         {
-            const char* sourceUrlChars = env->GetStringUTFChars(sourceURL, nullptr);
-            const char* sourceChars = env->GetStringUTFChars(source, nullptr);
-            std::string url = sourceUrlChars;
-            std::string src = sourceChars;
-            env->ReleaseStringUTFChars(sourceURL, sourceUrlChars);
-            env->ReleaseStringUTFChars(source, sourceChars);
+            auto url = JStringToStdString(env, sourceURL);
+            auto src = JStringToStdString(env, source);
             appContext->ScriptLoader().Eval(std::move(src), std::move(url));
         }
     }
