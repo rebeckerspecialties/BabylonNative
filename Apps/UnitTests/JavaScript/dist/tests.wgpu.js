@@ -15,6 +15,56 @@
         }
     }
 
+    function expectPixel(actual, expected, message) {
+        expect(actual && actual.length === 4, message + ": pixel readback did not return four channels");
+        for (var i = 0; i < 4; i++) {
+            if (Math.abs(Number(actual[i]) - expected[i]) > 2) {
+                fail(message + ": expected [" + expected.join(",") + "], got [" + Array.prototype.join.call(actual, ",") + "]");
+            }
+        }
+    }
+
+    function textureId(texture) {
+        return Number(texture && texture.__babylonNativeWebGPUHandleId || 0);
+    }
+
+    function makeCanvasContext(device, width, height) {
+        var context = navigator.gpu._createCanvasContext();
+        context.canvas = { width: width, height: height };
+        context.configure({
+            device: device,
+            format: navigator.gpu.getPreferredCanvasFormat(),
+            usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC
+        });
+        return context;
+    }
+
+    function clearTexture(device, texture, color) {
+        var encoder = device.createCommandEncoder();
+        var pass = encoder.beginRenderPass({
+            colorAttachments: [{
+                view: texture.createView(),
+                loadOp: "clear",
+                storeOp: "store",
+                clearValue: color
+            }]
+        });
+        pass.end();
+        device.queue.submit([encoder.finish()]);
+    }
+
+    function createFloatBuffer(device, values, usage) {
+        var data = new Float32Array(values);
+        var buffer = device.createBuffer({
+            size: data.byteLength,
+            usage: usage,
+            mappedAtCreation: true
+        });
+        new Float32Array(buffer.getMappedRange()).set(data);
+        buffer.unmap();
+        return buffer;
+    }
+
     var tests = [
         ["Canvas.parseColor accepts supported CSS color forms", function () {
             expect(typeof _native === "object", "_native was not installed");
@@ -51,6 +101,34 @@
                 expect(didThrow, "Expected parseColor to reject " + value);
             });
         }],
+        ["Canvas Image decodes PNG data URLs", async function () {
+            var ImageCtor = _native.Image || (typeof Image !== "undefined" ? Image : null);
+            expect(!!ImageCtor, "Image constructor missing; _native keys: " + Object.getOwnPropertyNames(_native).join(","));
+
+            var image = new ImageCtor();
+            var loaded = await new Promise(function (resolve) {
+                image.onload = function () { resolve(true); };
+                image.onerror = function () { resolve(false); };
+                image.src = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAYAAAD0In+KAAAAEUlEQVR4nGP4z8Dwn6HhfwMAEPoD/o3Nc3sAAAAASUVORK5CYII=";
+            });
+
+            expect(loaded, "PNG data URL did not fire onload");
+            expectEqual(image.width, 2, "decoded image width");
+            expectEqual(image.height, 1, "decoded image height");
+            expectEqual(image.naturalWidth, 2, "decoded naturalWidth");
+            expectEqual(image.naturalHeight, 1, "decoded naturalHeight");
+        }],
+        ["Canvas Image rejects invalid data URLs", async function () {
+            var ImageCtor = _native.Image || Image;
+            var image = new ImageCtor();
+            var errored = await new Promise(function (resolve) {
+                image.onload = function () { resolve(false); };
+                image.onerror = function () { resolve(true); };
+                image.src = "data:image/png;base64,AAAA";
+            });
+
+            expect(errored, "invalid PNG data URL did not fire onerror");
+        }],
         ["navigator.gpu exposes the WebGPU adapter/device promise surface", async function () {
             expect(typeof navigator === "object", "navigator missing");
             expect(navigator.gpu === navigator.gpu, "navigator.gpu should be SameObject-like");
@@ -83,6 +161,184 @@
             expect(texture && typeof texture.createView === "function", "current texture view factory missing");
             expect(texture.createView(), "createView returned null");
             context.unconfigure();
+        }],
+        ["GPUCanvasContext renders to distinct offscreen canvases with predictable lifetimes", async function () {
+            expect(typeof navigator.gpu._testReadTexturePixel === "function", "texture readback test hook missing");
+
+            var adapter = await navigator.gpu.requestAdapter();
+            var device = await adapter.requestDevice();
+            var contextA = makeCanvasContext(device, 8, 8);
+            var contextB = makeCanvasContext(device, 8, 8);
+
+            var textureA = contextA.getCurrentTexture();
+            var textureB = contextB.getCurrentTexture();
+            expect(textureId(textureA) !== 0, "canvas A texture id missing");
+            expect(textureId(textureB) !== 0, "canvas B texture id missing");
+            expect(textureId(textureA) !== textureId(textureB), "offscreen canvas textures should be distinct");
+
+            clearTexture(device, textureA, { r: 1, g: 0, b: 0, a: 1 });
+            clearTexture(device, textureB, { r: 0, g: 1, b: 0, a: 1 });
+            await device.queue.onSubmittedWorkDone();
+
+            expectPixel(navigator.gpu._testReadTexturePixel(textureA, 0, 0), [255, 0, 0, 255], "canvas A retained its red clear");
+            expectPixel(navigator.gpu._testReadTexturePixel(textureB, 0, 0), [0, 255, 0, 255], "canvas B retained its green clear");
+
+            contextA.canvas.width = 16;
+            var textureAResized = contextA.getCurrentTexture();
+            expect(textureId(textureAResized) !== textureId(textureA), "resizing canvas A should acquire a new texture");
+            expectEqual(textureId(contextB.getCurrentTexture()), textureId(textureB), "resizing canvas A should not rotate canvas B");
+
+            clearTexture(device, textureAResized, { r: 0, g: 0, b: 1, a: 1 });
+            await device.queue.onSubmittedWorkDone();
+            expectPixel(navigator.gpu._testReadTexturePixel(textureAResized, 0, 0), [0, 0, 255, 255], "resized canvas A retained its blue clear");
+            expectPixel(navigator.gpu._testReadTexturePixel(textureB, 0, 0), [0, 255, 0, 255], "canvas B survived canvas A resize");
+
+            contextA.unconfigure();
+            var destroyedTextureRejected = false;
+            try {
+                textureAResized.createView({ label: "after-unconfigure" });
+            } catch (error) {
+                destroyedTextureRejected = String(error && error.message || error).indexOf("GPUTexture") !== -1;
+            }
+            expect(destroyedTextureRejected, "unconfiguring canvas A should invalidate its current texture predictably");
+            expectPixel(navigator.gpu._testReadTexturePixel(textureB, 0, 0), [0, 255, 0, 255], "canvas B survived canvas A unconfigure");
+
+            contextB.unconfigure();
+        }],
+        ["WebGPU instanced matrix and color vertex attributes render distinct instances", async function () {
+            expect(typeof navigator.gpu._testReadTexturePixel === "function", "texture readback test hook missing");
+
+            var adapter = await navigator.gpu.requestAdapter();
+            var device = await adapter.requestDevice();
+            var texture = device.createTexture({
+                size: [32, 16, 1],
+                format: "rgba8unorm",
+                usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC
+            });
+
+            var vertices = createFloatBuffer(device, [
+                -1, -1,
+                 1, -1,
+                -1,  1,
+                -1,  1,
+                 1, -1,
+                 1,  1
+            ], GPUBufferUsage.VERTEX);
+
+            var matrices = createFloatBuffer(device, [
+                0.35, 0, 0, 0,  0, 0.7, 0, 0,  0, 0, 1, 0,  -0.45, 0, 0, 1,
+                0.35, 0, 0, 0,  0, 0.7, 0, 0,  0, 0, 1, 0,   0.45, 0, 0, 1
+            ], GPUBufferUsage.VERTEX);
+
+            var colors = createFloatBuffer(device, [
+                1, 0, 0, 1,
+                0, 1, 0, 1
+            ], GPUBufferUsage.VERTEX);
+
+            var shader = device.createShaderModule({
+                code:
+                    "struct VSOut { @builtin(position) position : vec4f, @location(0) color : vec4f };\n" +
+                    "@vertex fn vsMain(@location(0) position : vec2f, @location(1) m0 : vec4f, @location(2) m1 : vec4f, @location(3) m2 : vec4f, @location(4) m3 : vec4f, @location(5) color : vec4f) -> VSOut {\n" +
+                    "  var out : VSOut;\n" +
+                    "  let world = mat4x4f(m0, m1, m2, m3) * vec4f(position, 0.0, 1.0);\n" +
+                    "  out.position = world;\n" +
+                    "  out.color = color;\n" +
+                    "  return out;\n" +
+                    "}\n" +
+                    "@fragment fn fsMain(in : VSOut) -> @location(0) vec4f { return in.color; }\n"
+            });
+
+            var pipeline = device.createRenderPipeline({
+                layout: "auto",
+                vertex: {
+                    module: shader,
+                    entryPoint: "vsMain",
+                    buffers: [
+                        {
+                            arrayStride: 8,
+                            attributes: [{ shaderLocation: 0, offset: 0, format: "float32x2" }]
+                        },
+                        {
+                            arrayStride: 64,
+                            stepMode: "instance",
+                            attributes: [
+                                { shaderLocation: 1, offset: 0, format: "float32x4" },
+                                { shaderLocation: 2, offset: 16, format: "float32x4" },
+                                { shaderLocation: 3, offset: 32, format: "float32x4" },
+                                { shaderLocation: 4, offset: 48, format: "float32x4" }
+                            ]
+                        },
+                        {
+                            arrayStride: 16,
+                            stepMode: "instance",
+                            attributes: [{ shaderLocation: 5, offset: 0, format: "float32x4" }]
+                        }
+                    ]
+                },
+                fragment: {
+                    module: shader,
+                    entryPoint: "fsMain",
+                    targets: [{ format: "rgba8unorm" }]
+                },
+                primitive: { topology: "triangle-list" }
+            });
+
+            var encoder = device.createCommandEncoder();
+            var pass = encoder.beginRenderPass({
+                colorAttachments: [{
+                    view: texture.createView(),
+                    loadOp: "clear",
+                    storeOp: "store",
+                    clearValue: { r: 0, g: 0, b: 0, a: 1 }
+                }]
+            });
+            pass.setPipeline(pipeline);
+            pass.setVertexBuffer(0, vertices);
+            pass.setVertexBuffer(1, matrices);
+            pass.setVertexBuffer(2, colors);
+            pass.draw(6, 2);
+            pass.end();
+            device.queue.submit([encoder.finish()]);
+            await device.queue.onSubmittedWorkDone();
+
+            expectPixel(navigator.gpu._testReadTexturePixel(texture, 8, 8), [255, 0, 0, 255], "left matrix/color instance");
+            expectPixel(navigator.gpu._testReadTexturePixel(texture, 24, 8), [0, 255, 0, 255], "right matrix/color instance");
+        }],
+        ["GPUQueue.copyExternalImageToTexture flipY uses a single upload buffer", async function () {
+            expect(typeof navigator.gpu._testResetDebugStats === "function", "debug stat reset hook missing");
+            expect(typeof navigator.gpu._backendStats === "function", "backend stats hook missing");
+            expect(typeof navigator.gpu._testReadTexturePixel === "function", "texture readback test hook missing");
+
+            navigator.gpu._testResetDebugStats();
+            var adapter = await navigator.gpu.requestAdapter();
+            var device = await adapter.requestDevice();
+            var rgba = new Uint8Array([
+                255, 0, 0, 255,   0, 255, 0, 255,
+                0, 0, 255, 255,   255, 255, 255, 255
+            ]);
+            var source = {
+                _getNativeImageData: function () {
+                    return { width: 2, height: 2, data: rgba };
+                }
+            };
+            var usage = GPUTextureUsage.COPY_SRC | GPUTextureUsage.COPY_DST | GPUTextureUsage.TEXTURE_BINDING;
+            var textureNoFlip = device.createTexture({ size: [2, 2, 1], format: "rgba8unorm", usage: usage });
+            var stats0 = navigator.gpu._backendStats();
+            device.queue.copyExternalImageToTexture({ source: source }, { texture: textureNoFlip }, { width: 2, height: 2 });
+            await device.queue.onSubmittedWorkDone();
+            var stats1 = navigator.gpu._backendStats();
+            expectEqual(stats1.externalImageUploadBorrowedCount, stats0.externalImageUploadBorrowedCount + 1, "contiguous RGBA upload should borrow decoded bytes");
+            expectEqual(stats1.externalImageUploadBorrowedBytes, stats0.externalImageUploadBorrowedBytes + 16, "borrowed upload byte count");
+            expectEqual(stats1.externalImageUploadOwnedCount, stats0.externalImageUploadOwnedCount, "no-flip RGBA upload should not allocate an owned upload");
+            expectPixel(navigator.gpu._testReadTexturePixel(textureNoFlip, 0, 0), [255, 0, 0, 255], "no-flip upload orientation");
+
+            var textureFlip = device.createTexture({ size: [2, 2, 1], format: "rgba8unorm", usage: usage });
+            device.queue.copyExternalImageToTexture({ source: source, flipY: true }, { texture: textureFlip }, { width: 2, height: 2 });
+            await device.queue.onSubmittedWorkDone();
+            var stats2 = navigator.gpu._backendStats();
+            expectEqual(stats2.externalImageUploadOwnedCount, stats1.externalImageUploadOwnedCount + 1, "flipY upload should allocate exactly one upload buffer");
+            expectEqual(stats2.externalImageUploadOwnedBytes, stats1.externalImageUploadOwnedBytes + 16, "flipY owned upload should be exactly the copy size");
+            expectPixel(navigator.gpu._testReadTexturePixel(textureFlip, 0, 0), [0, 0, 255, 255], "flipY upload orientation");
         }]
     ];
 

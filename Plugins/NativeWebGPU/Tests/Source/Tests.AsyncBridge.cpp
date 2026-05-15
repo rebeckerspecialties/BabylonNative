@@ -1,11 +1,13 @@
 #include <gtest/gtest.h>
 
 #include <Babylon/AppRuntime.h>
+#include <Babylon/Graphics/WgpuInterop.h>
 #include <Babylon/Plugins/NativeWebGPU.h>
 #include <Babylon/Polyfills/Window.h>
 #include <Babylon/ScriptLoader.h>
 
 #include <atomic>
+#include <array>
 #include <chrono>
 #include <future>
 #include <memory>
@@ -15,8 +17,53 @@ using namespace std::chrono_literals;
 
 namespace
 {
+    class ScopedWgpuBackend final
+    {
+    public:
+        ScopedWgpuBackend()
+        {
+            BabylonWgpuConfig config{};
+            config.width = 64;
+            config.height = 64;
+            m_context = babylon_wgpu_create(&config);
+        }
+
+        ~ScopedWgpuBackend()
+        {
+            if (m_context != nullptr)
+            {
+                babylon_wgpu_destroy(m_context);
+            }
+        }
+
+        ScopedWgpuBackend(const ScopedWgpuBackend&) = delete;
+        ScopedWgpuBackend& operator=(const ScopedWgpuBackend&) = delete;
+
+        bool IsValid() const
+        {
+            return m_context != nullptr;
+        }
+
+        std::string LastError() const
+        {
+            std::array<char, 1024> buffer{};
+            if (babylon_wgpu_get_last_error(buffer.data(), buffer.size()) && buffer[0] != '\0')
+            {
+                return buffer.data();
+            }
+
+            return {};
+        }
+
+    private:
+        void* m_context{};
+    };
+
     void RunNativeWebGpuAsyncScript(const char* scriptSource)
     {
+        ScopedWgpuBackend backend{};
+        ASSERT_TRUE(backend.IsValid()) << backend.LastError();
+
         std::promise<std::string> completionPromise{};
         auto completionFlag = std::make_shared<std::atomic_bool>(false);
 
@@ -200,6 +247,80 @@ TEST(NativeWebGPUAsyncBridge, ResolveFactoryThrowRejectsPromiseWithOperationMeta
     )JS");
 }
 
+TEST(NativeWebGPUAsyncBridge, RustBackendErrorsThrowActionableJavaScriptException)
+{
+    RunNativeWebGpuAsyncScript(R"JS(
+        function rustFailurePath() {
+            navigator.gpu._testThrowRustError();
+        }
+
+        (async () => {
+            try {
+                rustFailurePath();
+                throw new Error("Expected Rust backend failure to throw.");
+            } catch (error) {
+                if (!(error instanceof Error)) {
+                    throw new Error("Rust backend failure was not an Error instance.");
+                }
+                if (error.nativeOperation !== "NativeWebGPU._testThrowRustError") {
+                    throw new Error("Unexpected Rust nativeOperation metadata: " + String(error.nativeOperation));
+                }
+                const message = String(error.message || error);
+                if (message.indexOf("NativeWebGPU._testThrowRustError") === -1 ||
+                    message.indexOf("copyExternalImageToTexture source dimensions must be non-zero") === -1) {
+                    throw new Error("Rust error message is not actionable: " + message);
+                }
+                const stack = String(error.stack || "");
+                if (stack.indexOf("rustFailurePath") === -1 ||
+                    stack.indexOf("[native] NativeWebGPU._testThrowRustError") === -1) {
+                    throw new Error("Rust error stack is missing JS/native context: " + stack);
+                }
+            }
+
+            __nativeWebGpuTestDone(true, "");
+        })().catch((error) => {
+            __nativeWebGpuTestDone(false, String(error));
+        });
+    )JS");
+}
+
+TEST(NativeWebGPUAsyncBridge, CppExceptionsThrowActionableJavaScriptException)
+{
+    RunNativeWebGpuAsyncScript(R"JS(
+        function cppFailurePath() {
+            navigator.gpu._testThrowCppException();
+        }
+
+        (async () => {
+            try {
+                cppFailurePath();
+                throw new Error("Expected C++ exception to throw.");
+            } catch (error) {
+                if (!(error instanceof Error)) {
+                    throw new Error("C++ exception was not an Error instance.");
+                }
+                if (error.nativeOperation !== "NativeWebGPU._testThrowCppException") {
+                    throw new Error("Unexpected C++ nativeOperation metadata: " + String(error.nativeOperation));
+                }
+                const message = String(error.message || error);
+                if (message.indexOf("NativeWebGPU._testThrowCppException") === -1 ||
+                    message.indexOf("simulated C++ exception") === -1) {
+                    throw new Error("C++ exception message is not actionable: " + message);
+                }
+                const stack = String(error.stack || "");
+                if (stack.indexOf("cppFailurePath") === -1 ||
+                    stack.indexOf("[native] NativeWebGPU._testThrowCppException") === -1) {
+                    throw new Error("C++ exception stack is missing JS/native context: " + stack);
+                }
+            }
+
+            __nativeWebGpuTestDone(true, "");
+        })().catch((error) => {
+            __nativeWebGpuTestDone(false, String(error));
+        });
+    )JS");
+}
+
 TEST(NativeWebGPUAsyncBridge, CreateRenderPipelineAsyncRejectsForInvalidDescriptor)
 {
     RunNativeWebGpuAsyncScript(R"JS(
@@ -259,6 +380,28 @@ TEST(NativeWebGPUAsyncBridge, SetPipelineWithoutDrawActivatesNativeDrawPath)
             });
 
             const before = navigator.gpu._debugStats();
+            const shader = device.createShaderModule({ code: `
+                @vertex
+                fn vs(@builtin(vertex_index) vertexIndex : u32) -> @builtin(position) vec4f {
+                    var positions = array<vec2f, 3>(
+                        vec2f(-1.0, -1.0),
+                        vec2f(3.0, -1.0),
+                        vec2f(-1.0, 3.0));
+                    return vec4f(positions[vertexIndex], 0.0, 1.0);
+                }
+
+                @fragment
+                fn fs() -> @location(0) vec4f {
+                    return vec4f(0.0, 0.0, 0.0, 1.0);
+                }` });
+            const pipeline = device.createRenderPipeline({
+                vertex: { module: shader, entryPoint: "vs" },
+                fragment: {
+                    module: shader,
+                    entryPoint: "fs",
+                    targets: [{ format: navigator.gpu.getPreferredCanvasFormat() }]
+                }
+            });
             const encoder = device.createCommandEncoder();
             const pass = encoder.beginRenderPass({
                 colorAttachments: [{
@@ -268,7 +411,7 @@ TEST(NativeWebGPUAsyncBridge, SetPipelineWithoutDrawActivatesNativeDrawPath)
                     clearValue: { r: 0, g: 0, b: 0, a: 1 }
                 }]
             });
-            pass.setPipeline(device.createRenderPipeline({}));
+            pass.setPipeline(pipeline);
             pass.end();
             device.queue.submit([encoder.finish()]);
 
@@ -318,6 +461,28 @@ TEST(NativeWebGPUAsyncBridge, DrawIndirectIncrementsNativeDrawCounters)
             });
 
             const before = navigator.gpu._debugStats();
+            const shader = device.createShaderModule({ code: `
+                @vertex
+                fn vs(@builtin(vertex_index) vertexIndex : u32) -> @builtin(position) vec4f {
+                    var positions = array<vec2f, 3>(
+                        vec2f(-1.0, -1.0),
+                        vec2f(3.0, -1.0),
+                        vec2f(-1.0, 3.0));
+                    return vec4f(positions[vertexIndex], 0.0, 1.0);
+                }
+
+                @fragment
+                fn fs() -> @location(0) vec4f {
+                    return vec4f(0.0, 0.0, 0.0, 1.0);
+                }` });
+            const pipeline = device.createRenderPipeline({
+                vertex: { module: shader, entryPoint: "vs" },
+                fragment: {
+                    module: shader,
+                    entryPoint: "fs",
+                    targets: [{ format: navigator.gpu.getPreferredCanvasFormat() }]
+                }
+            });
             const encoder = device.createCommandEncoder();
             const pass = encoder.beginRenderPass({
                 colorAttachments: [{
@@ -327,11 +492,11 @@ TEST(NativeWebGPUAsyncBridge, DrawIndirectIncrementsNativeDrawCounters)
                     clearValue: { r: 0, g: 0, b: 0, a: 1 }
                 }]
             });
-            pass.setPipeline(device.createRenderPipeline({}));
+            pass.setPipeline(pipeline);
 
             const indirectBuffer = device.createBuffer({
                 size: 16,
-                usage: 1
+                usage: GPUBufferUsage.INDIRECT
             });
             pass.drawIndirect(indirectBuffer, 0);
             pass.end();
