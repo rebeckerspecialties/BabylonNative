@@ -318,6 +318,17 @@ namespace Babylon::Graphics
             return;
         }
 
+        std::queue<std::function<void(std::vector<uint8_t>)>> pendingCallbacks{};
+        {
+            std::scoped_lock lock{m_screenShotCallbacksMutex};
+            pendingCallbacks.swap(m_screenShotCallbacks);
+        }
+
+        if (wgpu && !pendingCallbacks.empty())
+        {
+            wgpu->RequestScreenShot();
+        }
+
         if (wgpu)
         {
             wgpu->Render();
@@ -325,28 +336,26 @@ namespace Babylon::Graphics
 
         m_afterRenderDispatcher.tick(*cancellationSource);
 
-        std::queue<std::function<void(std::vector<uint8_t>)>> pendingCallbacks{};
-        {
-            std::scoped_lock lock{m_screenShotCallbacksMutex};
-            pendingCallbacks.swap(m_screenShotCallbacks);
-        }
-
         if (pendingCallbacks.empty())
         {
             return;
         }
 
-        if (renderWidth == 0 || renderHeight == 0)
+        auto frame = wgpu ? wgpu->CopyScreenShot() : std::vector<uint8_t>{};
+        if (frame.empty())
         {
-            renderWidth = 1;
-            renderHeight = 1;
-        }
+            if (renderWidth == 0 || renderHeight == 0)
+            {
+                renderWidth = 1;
+                renderHeight = 1;
+            }
 
-        std::vector<uint8_t> blackFrame(renderWidth * renderHeight * 4u, 0);
+            frame.resize(renderWidth * renderHeight * 4u, 0);
+        }
 
         while (!pendingCallbacks.empty())
         {
-            pendingCallbacks.front()(blackFrame);
+            pendingCallbacks.front()(frame);
             pendingCallbacks.pop();
         }
     }
