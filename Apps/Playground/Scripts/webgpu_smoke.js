@@ -30,8 +30,16 @@ globalThis.__babylonPlaygroundWebGpuSmokeReady = {
 
 var kSmokeFontName = "wgpu_smoke_font";
 var kSmokeFontUrl = "app:///Scripts/RobotoSlab.ttf";
+var kSmokeImagePngDataUrl = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAYAAAD0In+KAAAAEUlEQVR4nGP4z8Dwn6HhfwMAEPoD/o3Nc3sAAAAASUVORK5CYII=";
+var kSmokeInvalidImageDataUrl = "data:image/png;base64,AAAA";
 var smokeFontLoaded = false;
 var smokeFontLoadPromise = null;
+var smokeDecodedImage = null;
+var smokeImageDecodePromise = null;
+var smokeInvalidImageRejectPromise = null;
+var smokeNeedsImageDecodeUpload = false;
+var smokeImageDrawReported = false;
+var smokeImageDrawFailureReported = false;
 var smokeCanvas = null;
 var smokeCtx = null;
 var smokeGradient = null;
@@ -107,6 +115,110 @@ function getNativeWebGpuStatsSnapshot() {
         reportStatus("webgpu-smoke:stats-call-error:" + String(error));
         return null;
     }
+}
+
+function getNativeImageConstructor() {
+    if (typeof _native !== "undefined" && _native.Image) {
+        return _native.Image;
+    }
+
+    if (typeof Image !== "undefined") {
+        return Image;
+    }
+
+    return null;
+}
+
+function ensureSmokeImageDecoded() {
+    if (smokeDecodedImage) {
+        return Promise.resolve(smokeDecodedImage);
+    }
+
+    if (smokeImageDecodePromise) {
+        return smokeImageDecodePromise;
+    }
+
+    var ImageCtor = getNativeImageConstructor();
+    if (!ImageCtor) {
+        reportStatus("webgpu-smoke:image-api-unavailable");
+        return Promise.resolve(null);
+    }
+
+    smokeImageDecodePromise = new Promise(function (resolve) {
+        var image = null;
+        try {
+            image = new ImageCtor();
+        } catch (error) {
+            reportStatus("webgpu-smoke:image-ctor-failed:" + String(error));
+            resolve(null);
+            return;
+        }
+
+        image.onload = function () {
+            smokeDecodedImage = image;
+            smokeNeedsImageDecodeUpload = true;
+            reportStatus("webgpu-smoke:image-loaded:" + String(image.width) + "x" + String(image.height));
+            resolve(image);
+        };
+        image.onerror = function (error) {
+            reportStatus("webgpu-smoke:image-load-failed:" + String(error));
+            resolve(null);
+        };
+
+        try {
+            image.src = kSmokeImagePngDataUrl;
+        } catch (error) {
+            reportStatus("webgpu-smoke:image-src-failed:" + String(error));
+            resolve(null);
+        }
+    }).then(function (result) {
+        if (!result) {
+            smokeImageDecodePromise = null;
+        }
+        return result;
+    });
+
+    return smokeImageDecodePromise;
+}
+
+function ensureInvalidSmokeImageRejected() {
+    if (smokeInvalidImageRejectPromise) {
+        return smokeInvalidImageRejectPromise;
+    }
+
+    var ImageCtor = getNativeImageConstructor();
+    if (!ImageCtor) {
+        return Promise.resolve(false);
+    }
+
+    smokeInvalidImageRejectPromise = new Promise(function (resolve) {
+        var image = null;
+        try {
+            image = new ImageCtor();
+        } catch (error) {
+            reportStatus("webgpu-smoke:image-invalid-ctor-failed:" + String(error));
+            resolve(false);
+            return;
+        }
+
+        image.onload = function () {
+            reportStatus("webgpu-smoke:image-invalid-rejected:0");
+            resolve(false);
+        };
+        image.onerror = function () {
+            reportStatus("webgpu-smoke:image-invalid-rejected:1");
+            resolve(true);
+        };
+
+        try {
+            image.src = kSmokeInvalidImageDataUrl;
+        } catch (error) {
+            reportStatus("webgpu-smoke:image-invalid-src-failed:" + String(error));
+            resolve(false);
+        }
+    });
+
+    return smokeInvalidImageRejectPromise;
 }
 
 function ensureCanvasFontLoaded() {
@@ -249,15 +361,21 @@ function disposeSmokeCanvas() {
     smokeDisposed = true;
     smokeUploadSucceeded = false;
     smokeNeedsFontRefreshUpload = false;
+    smokeNeedsImageDecodeUpload = false;
     smokeUploadStateReported = null;
     smokeGradient = null;
     smokeReportedMetrics = false;
     smokeMetricsInvalidReported = false;
+    smokeImageDrawReported = false;
+    smokeImageDrawFailureReported = false;
     smokeUploadAttemptCount = 0;
     smokeQueueCopyReadyPromise = null;
     smokeQueueCopyQueue = null;
     smokeQueueCopyTexture = null;
     smokeUploadModeReported = null;
+    smokeDecodedImage = null;
+    smokeImageDecodePromise = null;
+    smokeInvalidImageRejectPromise = null;
 
     try {
         if (smokeCtx && typeof smokeCtx.destroy === "function") {
@@ -346,6 +464,31 @@ function drawCanvasTextureSource(frameSeed) {
     ctx.strokeText("Canvas", 58, 300);
     ctx.fillText("Canvas", 58, 300);
 
+    if (smokeDecodedImage) {
+        ctx.fillStyle = "#f6fbff";
+        ctx.fillRect(352, 46, 120, 78);
+        ctx.strokeStyle = "#102038";
+        ctx.lineWidth = 4;
+        ctx.strokeRect(352, 46, 120, 78);
+        try {
+            ctx.drawImage(smokeDecodedImage, 366, 58, 92, 42);
+        } catch (error) {
+            if (!smokeImageDrawFailureReported) {
+                smokeImageDrawFailureReported = true;
+                reportStatus("webgpu-smoke:image-draw-failed:" + String(error));
+            }
+            return smokeCanvas;
+        }
+        ctx.fillStyle = "#102038";
+        ctx.font = "bold 20px " + smokeFontFamily;
+        ctx.fillText("PNG", 392, 116);
+
+        if (!smokeImageDrawReported) {
+            smokeImageDrawReported = true;
+            reportStatus("webgpu-smoke:image-drawn:" + String(smokeDecodedImage.width) + "x" + String(smokeDecodedImage.height));
+        }
+    }
+
     ctx.fillStyle = "#0a162c";
     ctx.fillRect(36, 360, 440, 116);
     ctx.fillStyle = "#bcdaff";
@@ -417,6 +560,9 @@ function uploadCanvasTexture(frameSeed) {
     if (ok && smokeNeedsFontRefreshUpload) {
         smokeNeedsFontRefreshUpload = false;
     }
+    if (ok && smokeNeedsImageDecodeUpload) {
+        smokeNeedsImageDecodeUpload = false;
+    }
     if (ok) {
         resolveSmokeReadySignal("canvas-texture-uploaded");
     }
@@ -483,6 +629,8 @@ async function createScene(engineArg) {
     var scene = new BABYLON.Scene(engineArg);
     scene.clearColor = new BABYLON.Color4(0.08, 0.2, 0.32, 1.0);
     ensureStandardQueueCopyPath();
+    ensureSmokeImageDecoded();
+    ensureInvalidSmokeImageRejected();
 
     var camera = new BABYLON.FreeCamera("camera", new BABYLON.Vector3(0, 0, -5), scene);
     camera.setTarget(BABYLON.Vector3.Zero());
@@ -517,7 +665,7 @@ async function createScene(engineArg) {
         // We only refresh when startup upload has not succeeded yet or when
         // late font registration requires a one-time texture rebuild.
         var shouldRefreshUpload = false;
-        if (smokeNeedsFontRefreshUpload) {
+        if (smokeNeedsFontRefreshUpload || smokeNeedsImageDecodeUpload) {
             shouldRefreshUpload = true;
         } else if (!smokeUploadSucceeded) {
             shouldRefreshUpload = smokeFrameCounter % 15 === 0;
