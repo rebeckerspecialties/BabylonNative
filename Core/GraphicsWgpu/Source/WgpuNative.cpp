@@ -111,6 +111,46 @@ namespace Babylon::Graphics
         return babylon_wgpu_render(m_context);
     }
 
+    bool WgpuNative::RequestScreenShot()
+    {
+        if (m_context == nullptr)
+        {
+            return false;
+        }
+
+#if defined(__APPLE__)
+        const ScopedAutoreleasePool pool{};
+#endif
+        return babylon_wgpu_request_screenshot(m_context);
+    }
+
+    std::vector<uint8_t> WgpuNative::CopyScreenShot() const
+    {
+        if (m_context == nullptr)
+        {
+            return {};
+        }
+
+#if defined(__APPLE__)
+        const ScopedAutoreleasePool pool{};
+#endif
+        uint32_t width{};
+        uint32_t height{};
+        size_t byteLen{};
+        if (!babylon_wgpu_get_screenshot_info(m_context, &width, &height, &byteLen) || byteLen == 0)
+        {
+            return {};
+        }
+
+        std::vector<uint8_t> result(byteLen);
+        if (!babylon_wgpu_copy_screenshot(m_context, result.data(), result.size()))
+        {
+            return {};
+        }
+
+        return result;
+    }
+
     WgpuBootstrapInfo WgpuNative::GetInfo() const
     {
 #if defined(__APPLE__)
