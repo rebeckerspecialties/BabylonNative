@@ -93,6 +93,7 @@ namespace Babylon::Polyfills::Internal
         void Dispose();
         bool SetFontFaceId();
         void EnsureLoadedFonts();
+        void EnsureFrame();
         void Flush(const Napi::CallbackInfo&);
 
         NativeCanvas* m_canvas;
@@ -119,6 +120,7 @@ namespace Babylon::Polyfills::Internal
         std::map<std::string, int> m_fonts;
         int m_currentFontId{-1};
 
+        bool m_frameActive{false};
         bool m_isClipped{false};
 
         struct RectangleClipping

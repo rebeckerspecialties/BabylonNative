@@ -118,6 +118,7 @@ TEST(JavaScript, All)
     loader.LoadScript("app:///Assets/babylonjs.materials.js");
     loader.LoadScript("app:///Assets/tests.javaScript.all.js");
 #elif defined(BABYLON_NATIVE_UNITTESTS_WITH_WEBGPU)
+    loader.LoadScript("app:///Assets/babylon.max.js");
     loader.LoadScript("app:///Assets/tests.wgpu.js");
 #else
 #error "UnitTests JavaScript suite requires NativeEngine or NativeWebGPU."
