@@ -39,6 +39,79 @@
         return context;
     }
 
+    function makeBabylonWebGPUCanvas(width, height) {
+        var context = navigator.gpu._createCanvasContext();
+        var canvas = {
+            width: width,
+            height: height,
+            clientWidth: width,
+            clientHeight: height,
+            style: { width: width + "px", height: height + "px" },
+            addEventListener: function () { },
+            removeEventListener: function () { },
+            setAttribute: function () { },
+            focus: function () { },
+            getBoundingClientRect: function () {
+                return {
+                    x: 0,
+                    y: 0,
+                    top: 0,
+                    left: 0,
+                    right: width,
+                    bottom: height,
+                    width: width,
+                    height: height
+                };
+            },
+            getContext: function (contextName) {
+                if (contextName === "webgpu") {
+                    context.canvas = canvas;
+                    return context;
+                }
+
+                return null;
+            }
+        };
+        return canvas;
+    }
+
+    function getUnsupportedNativeWebGPUEffectMessage(effect, context) {
+        if (!effect || !effect._engine || !effect._engine.isWebGPU || effect._shaderLanguage !== 0) {
+            return "";
+        }
+
+        var parts = [];
+        if (context) {
+            parts.push(context);
+        }
+        if (effect.name) {
+            parts.push("effect=" + String(effect.name));
+        }
+        if (effect._key) {
+            parts.push("key=" + String(effect._key));
+        }
+
+        return "BabylonJS requested a GLSL WebGPU effect without a compiled pipeline" +
+            (parts.length > 0 ? " (" + parts.join(",") + ")" : "") +
+            ". BabylonNative WebGPU does not ship the glslang/twgsl fallback. This BabylonJS path needs a WGSL implementation, a shaderLanguage=WGSL createEffect path, or a deliberate NativeWebGPU exclusion.";
+    }
+
+    function installUnsupportedGlslCreateEffectGuard(engine) {
+        expect(engine && engine.isWebGPU, "GLSL createEffect guard requires a WebGPU engine");
+        var originalCreateEffect = engine.createEffect;
+        expect(typeof originalCreateEffect === "function", "engine.createEffect missing");
+
+        engine.createEffect = function (baseName) {
+            var effect = originalCreateEffect.apply(this, arguments);
+            var shaderName = typeof baseName === "string" ? baseName : JSON.stringify(baseName);
+            var unsupportedMessage = getUnsupportedNativeWebGPUEffectMessage(effect, "createEffect=" + shaderName);
+            if (unsupportedMessage) {
+                throw new Error("NATIVE_WEBGPU_UNSUPPORTED_EFFECT: " + unsupportedMessage);
+            }
+            return effect;
+        };
+    }
+
     function clearTexture(device, texture, color) {
         var encoder = device.createCommandEncoder();
         var pass = encoder.beginRenderPass({
@@ -100,6 +173,29 @@
             var payload = destination.getCanvasTexture();
             expect(payload && payload.nativeTexture, "drawImage canvas source did not produce a native texture payload");
         }],
+        ["GPUQueue.copyExternalImageToTexture uploads CanvasWgpu 2D contents", async function () {
+            expect(typeof navigator.gpu._testReadTexturePixel === "function", "texture readback test hook missing");
+
+            var adapter = await navigator.gpu.requestAdapter();
+            var device = await adapter.requestDevice();
+
+            var source = new _native.Canvas();
+            source.width = 4;
+            source.height = 4;
+            var context = source.getContext("2d");
+            context.fillStyle = "rgb(0, 255, 0)";
+            context.fillRect(0, 0, 4, 4);
+
+            var texture = device.createTexture({
+                size: [4, 4, 1],
+                format: "rgba8unorm",
+                usage: GPUTextureUsage.COPY_SRC | GPUTextureUsage.COPY_DST | GPUTextureUsage.TEXTURE_BINDING
+            });
+            device.queue.copyExternalImageToTexture({ source: source }, { texture: texture }, { width: 4, height: 4 });
+            await device.queue.onSubmittedWorkDone();
+
+            expectPixel(navigator.gpu._testReadTexturePixel(texture, 1, 1), [0, 255, 0, 255], "CanvasWgpu 2D upload should include pre-flush draw commands");
+        }],
         ["Canvas.parseColor rejects malformed colors", function () {
             [
                 "unknownColor",
@@ -138,6 +234,29 @@
             expectEqual(image.height, 1, "decoded image height");
             expectEqual(image.naturalWidth, 2, "decoded naturalWidth");
             expectEqual(image.naturalHeight, 1, "decoded naturalHeight");
+        }],
+        ["Canvas 2D drawImage prefers native image data over canvas texture hooks", async function () {
+            var ImageCtor = _native.Image || (typeof Image !== "undefined" ? Image : null);
+            expect(!!ImageCtor, "Image constructor missing");
+
+            var image = new ImageCtor();
+            var loaded = await new Promise(function (resolve) {
+                image.onload = function () { resolve(true); };
+                image.onerror = function () { resolve(false); };
+                image.src = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAYAAAD0In+KAAAAEUlEQVR4nGP4z8Dwn6HhfwMAEPoD/o3Nc3sAAAAASUVORK5CYII=";
+            });
+            expect(loaded, "PNG data URL did not fire onload");
+
+            image.getCanvasTexture = function () {
+                throw new Error("drawImage incorrectly treated an image as a canvas texture source");
+            };
+
+            var destination = new _native.Canvas();
+            destination.width = 4;
+            destination.height = 4;
+            var context = destination.getContext("2d");
+            context.drawImage(image, 0, 0, 4, 2);
+            context.flush();
         }],
         ["Canvas Image rejects invalid data URLs", async function () {
             var ImageCtor = _native.Image || Image;
@@ -182,6 +301,161 @@
             expect(texture && typeof texture.createView === "function", "current texture view factory missing");
             expect(texture.createView(), "createView returned null");
             context.unconfigure();
+        }],
+        ["WebGPU render pipeline honors color target alpha blending", async function () {
+            expect(typeof navigator.gpu._testReadTexturePixel === "function", "texture readback test hook missing");
+
+            var adapter = await navigator.gpu.requestAdapter();
+            var device = await adapter.requestDevice();
+            var texture = device.createTexture({
+                size: [8, 8, 1],
+                format: "rgba8unorm",
+                usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC
+            });
+            var shader = device.createShaderModule({
+                code:
+                    "@vertex fn vsMain(@builtin(vertex_index) vertexIndex : u32) -> @builtin(position) vec4f {\n" +
+                    "  var positions = array<vec2f, 3>(vec2f(-1.0, -1.0), vec2f(3.0, -1.0), vec2f(-1.0, 3.0));\n" +
+                    "  return vec4f(positions[vertexIndex], 0.0, 1.0);\n" +
+                    "}\n" +
+                    "@fragment fn fsMain() -> @location(0) vec4f {\n" +
+                    "  return vec4f(1.0, 0.0, 0.0, 0.0);\n" +
+                    "}\n"
+            });
+            var pipeline = device.createRenderPipeline({
+                layout: "auto",
+                vertex: {
+                    module: shader,
+                    entryPoint: "vsMain"
+                },
+                fragment: {
+                    module: shader,
+                    entryPoint: "fsMain",
+                    targets: [{
+                        format: "rgba8unorm",
+                        blend: {
+                            color: {
+                                srcFactor: "src-alpha",
+                                dstFactor: "one-minus-src-alpha",
+                                operation: "add"
+                            },
+                            alpha: {
+                                srcFactor: "one",
+                                dstFactor: "one-minus-src-alpha",
+                                operation: "add"
+                            }
+                        }
+                    }]
+                },
+                primitive: { topology: "triangle-list" }
+            });
+
+            var encoder = device.createCommandEncoder();
+            var pass = encoder.beginRenderPass({
+                colorAttachments: [{
+                    view: texture.createView(),
+                    loadOp: "clear",
+                    storeOp: "store",
+                    clearValue: { r: 0, g: 0, b: 1, a: 1 }
+                }]
+            });
+            pass.setPipeline(pipeline);
+            pass.draw(3);
+            pass.end();
+            device.queue.submit([encoder.finish()]);
+            await device.queue.onSubmittedWorkDone();
+
+            expectPixel(navigator.gpu._testReadTexturePixel(texture, 4, 4), [0, 0, 255, 255], "transparent red fragment should blend over blue without writing red");
+        }],
+        ["BabylonJS WebGPU createEffect reports GLSL shader paths actionably", async function () {
+            expect(typeof BABYLON === "object", "BABYLON missing");
+            expect(typeof BABYLON.WebGPUEngine === "function", "BABYLON.WebGPUEngine missing");
+            expect(BABYLON.Effect && BABYLON.Effect.ShadersStore, "BABYLON.Effect shader store missing");
+
+            var engine = new BABYLON.WebGPUEngine(makeBabylonWebGPUCanvas(16, 16), {
+                antialias: false,
+                adaptToDeviceRatio: false
+            });
+            await engine.initAsync();
+            installUnsupportedGlslCreateEffectGuard(engine);
+
+            var shaderName = "nativeWebGPUUnsupportedGlslUnit";
+            BABYLON.Effect.ShadersStore[shaderName + "VertexShader"] =
+                "precision highp float;attribute vec3 position;uniform mat4 worldViewProjection;void main(void){gl_Position=worldViewProjection*vec4(position,1.0);}";
+            BABYLON.Effect.ShadersStore[shaderName + "PixelShader"] =
+                "precision highp float;void main(void){gl_FragColor=vec4(1.0,0.0,0.0,1.0);}";
+
+            var error = null;
+            try {
+                engine.createEffect(shaderName, {
+                    attributes: ["position"],
+                    uniformsNames: ["worldViewProjection"],
+                    samplers: [],
+                    defines: ""
+                });
+            } catch (e) {
+                error = e;
+            } finally {
+                engine.dispose();
+            }
+
+            expect(error, "GLSL createEffect on NativeWebGPU should throw an actionable JavaScript exception");
+            var message = String(error && error.message || error);
+            expect(message.indexOf("NATIVE_WEBGPU_UNSUPPORTED_EFFECT") !== -1, "missing NativeWebGPU unsupported-effect marker: " + message);
+            expect(message.indexOf("BabylonJS requested a GLSL WebGPU effect") !== -1, "missing GLSL WebGPU explanation: " + message);
+            expect(message.indexOf("createEffect=" + shaderName) !== -1, "missing createEffect shader name: " + message);
+            expect(message.indexOf("effect=" + shaderName) !== -1, "missing effect name: " + message);
+            expect(message.indexOf("does not ship the glslang/twgsl fallback") !== -1, "missing fallback explanation: " + message);
+            expect(message.indexOf("WGSL implementation") !== -1, "missing WGSL remediation: " + message);
+            expect(message.indexOf("shaderLanguage=WGSL") !== -1, "missing shaderLanguage remediation: " + message);
+            expect(message.indexOf("NativeWebGPU exclusion") !== -1, "missing exclusion remediation: " + message);
+        }],
+        ["BabylonJS WebGPU createEffect surfaces async preparation rejection actionably", async function () {
+            expect(typeof BABYLON === "object", "BABYLON missing");
+            expect(typeof BABYLON.WebGPUEngine === "function", "BABYLON.WebGPUEngine missing");
+            expect(BABYLON.ShaderLanguage && BABYLON.ShaderLanguage.WGSL !== undefined, "BABYLON.ShaderLanguage.WGSL missing");
+
+            var engine = new BABYLON.WebGPUEngine(makeBabylonWebGPUCanvas(16, 16), {
+                antialias: false,
+                adaptToDeviceRatio: false
+            });
+            await engine.initAsync();
+
+            var marker = "native async shader preparation sentinel";
+            var callbackError = "";
+            var observableError = null;
+            engine.onEffectErrorObservable.add(function (event) {
+                observableError = event;
+            });
+
+            var effect = engine.createEffect("nativeAsyncPreparationRejectUnit", {
+                attributes: [],
+                uniformsNames: [],
+                samplers: [],
+                defines: "",
+                shaderLanguage: BABYLON.ShaderLanguage.WGSL,
+                extraInitializationsAsync: function nativeAsyncPreparationRejectUnit() {
+                    return Promise.reject(new Error(marker));
+                },
+                onError: function (_effect, errors) {
+                    callbackError = String(errors || "");
+                }
+            });
+
+            await Promise.resolve();
+            await Promise.resolve();
+            await Promise.resolve();
+
+            var observableMessage = String(observableError && observableError.errors || "");
+            var compilationMessage = String(effect && effect.getCompilationError && effect.getCompilationError() || "");
+            var message = callbackError || observableMessage || compilationMessage;
+            engine.dispose();
+
+            expect(message.indexOf(marker) !== -1, "missing original async rejection reason: " + message);
+            expect(message.indexOf("Effect async shader preparation failed") !== -1, "missing async preparation context: " + message);
+            expect(message.indexOf("nativeAsyncPreparationRejectUnit") !== -1, "missing effect or stack context: " + message);
+            expect(callbackError.indexOf(marker) !== -1, "effect onError did not receive async rejection: " + callbackError);
+            expect(observableMessage.indexOf(marker) !== -1, "engine effect-error observable did not receive async rejection: " + observableMessage);
         }],
         ["GPUCanvasContext renders to distinct offscreen canvases with predictable lifetimes", async function () {
             expect(typeof navigator.gpu._testReadTexturePixel === "function", "texture readback test hook missing");
