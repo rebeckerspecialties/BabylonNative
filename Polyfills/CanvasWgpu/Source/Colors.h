@@ -1,5 +1,6 @@
 #pragma once
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <regex>
 #include <string>
@@ -251,6 +252,79 @@ namespace Babylon::Polyfills::Internal
                             static_cast<unsigned char>(std::clamp(std::stoi(rgbMatch[3]), 0, 255)));
                     }
                 }
+            }
+
+            // matches strings of the form hsl(#,#%,#%) or hsla(#,#%,#%,#)
+            static const std::regex hslRegex("hsla?\\(\\s*(-?\\d+(?:\\.\\d+)?)\\s*,\\s*(-?\\d+(?:\\.\\d+)?)%\\s*,\\s*(-?\\d+(?:\\.\\d+)?)%\\s*(?:,\\s*(-?\\d+(?:\\.\\d+)?%?)\\s*)?\\)");
+            std::smatch hslMatch;
+            if (std::regex_match(str, hslMatch, hslRegex))
+            {
+                auto hueToRgb = [](float p, float q, float t) {
+                    if (t < 0.f)
+                    {
+                        t += 1.f;
+                    }
+                    if (t > 1.f)
+                    {
+                        t -= 1.f;
+                    }
+                    if (t < 1.f / 6.f)
+                    {
+                        return p + (q - p) * 6.f * t;
+                    }
+                    if (t < 1.f / 2.f)
+                    {
+                        return q;
+                    }
+                    if (t < 2.f / 3.f)
+                    {
+                        return p + (q - p) * (2.f / 3.f - t) * 6.f;
+                    }
+                    return p;
+                };
+
+                auto h = std::fmod(std::stof(hslMatch[1]), 360.f);
+                if (h < 0.f)
+                {
+                    h += 360.f;
+                }
+                h /= 360.f;
+                const auto s = std::clamp(std::stof(hslMatch[2]) / 100.f, 0.f, 1.f);
+                const auto l = std::clamp(std::stof(hslMatch[3]) / 100.f, 0.f, 1.f);
+
+                float r = l;
+                float g = l;
+                float b = l;
+                if (s > 0.f)
+                {
+                    const auto q = l < 0.5f ? l * (1.f + s) : l + s - l * s;
+                    const auto p = 2.f * l - q;
+                    r = hueToRgb(p, q, h + 1.f / 3.f);
+                    g = hueToRgb(p, q, h);
+                    b = hueToRgb(p, q, h - 1.f / 3.f);
+                }
+
+                auto alpha = 255.f;
+                if (hslMatch[4].matched)
+                {
+                    auto alphaString = hslMatch[4].str();
+                    if (!alphaString.empty() && alphaString.back() == '%')
+                    {
+                        alphaString.pop_back();
+                        alpha = std::clamp(std::stof(alphaString) / 100.f, 0.f, 1.f) * 255.f;
+                    }
+                    else
+                    {
+                        const auto alphaValue = std::stof(alphaString);
+                        alpha = alphaValue <= 1.f ? std::clamp(alphaValue, 0.f, 1.f) * 255.f : std::clamp(alphaValue, 0.f, 255.f);
+                    }
+                }
+
+                return nvgRGBA(
+                    static_cast<unsigned char>(std::round(std::clamp(r, 0.f, 1.f) * 255.f)),
+                    static_cast<unsigned char>(std::round(std::clamp(g, 0.f, 1.f) * 255.f)),
+                    static_cast<unsigned char>(std::round(std::clamp(b, 0.f, 1.f) * 255.f)),
+                    static_cast<unsigned char>(std::round(alpha)));
             }
         }
         throw Napi::Error::New(env, std::string{"Unable to parse color: "} + str);
