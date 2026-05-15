@@ -1719,6 +1719,8 @@ mod upstream_wgpu_native {
 
     struct TextureViewResource {
         view: wgpu::TextureView,
+        width: u32,
+        height: u32,
     }
 
     struct SamplerResource {
@@ -1755,6 +1757,8 @@ mod upstream_wgpu_native {
         resolve_target: Option<wgpu::TextureView>,
         load: wgpu::LoadOp<wgpu::Color>,
         store: wgpu::StoreOp,
+        width: u32,
+        height: u32,
     }
 
     #[derive(Clone)]
@@ -1762,6 +1766,8 @@ mod upstream_wgpu_native {
         view: wgpu::TextureView,
         depth_ops: Option<wgpu::Operations<f32>>,
         stencil_ops: Option<wgpu::Operations<u32>>,
+        width: u32,
+        height: u32,
     }
 
     #[derive(Clone)]
@@ -2867,13 +2873,24 @@ mod upstream_wgpu_native {
                 })
                 .transpose()?;
             let dimension = map_texture_view_dimension(json_str(&descriptor, "dimension"));
+            let base_mip_level = json_u32(&descriptor, "baseMipLevel", 0);
+            let width = texture
+                .width
+                .checked_shr(base_mip_level)
+                .unwrap_or(0)
+                .max(1);
+            let height = texture
+                .height
+                .checked_shr(base_mip_level)
+                .unwrap_or(0)
+                .max(1);
             let view = texture.texture.create_view(&wgpu::TextureViewDescriptor {
                 label: json_str(&descriptor, "label"),
                 format,
                 dimension,
                 usage: None,
                 aspect: map_texture_aspect(json_str(&descriptor, "aspect")),
-                base_mip_level: json_u32(&descriptor, "baseMipLevel", 0),
+                base_mip_level,
                 mip_level_count: descriptor
                     .get("mipLevelCount")
                     .and_then(Value::as_u64)
@@ -2885,9 +2902,14 @@ mod upstream_wgpu_native {
                     .map(|raw| raw.min(u64::from(u32::MAX)) as u32),
             });
             let id = self.resources.next();
-            self.resources
-                .texture_views
-                .insert(id, TextureViewResource { view });
+            self.resources.texture_views.insert(
+                id,
+                TextureViewResource {
+                    view,
+                    width,
+                    height,
+                },
+            );
             Ok(id)
         }
 
@@ -3486,6 +3508,8 @@ mod upstream_wgpu_native {
                         resolve_target,
                         load,
                         store,
+                        width: view.width,
+                        height: view.height,
                     });
                 }
             }
@@ -3547,6 +3571,8 @@ mod upstream_wgpu_native {
                         view: view.view.clone(),
                         depth_ops,
                         stencil_ops,
+                        width: view.width,
+                        height: view.height,
                     })
                 })
                 .transpose()?;
@@ -4212,6 +4238,16 @@ mod upstream_wgpu_native {
                             depth_ops: attachment.depth_ops,
                             stencil_ops: attachment.stencil_ops,
                         });
+                    let render_target_extent = descriptor
+                        .color_attachments
+                        .first()
+                        .map(|attachment| (attachment.width, attachment.height))
+                        .or_else(|| {
+                            descriptor
+                                .depth_stencil_attachment
+                                .as_ref()
+                                .map(|attachment| (attachment.width, attachment.height))
+                        });
                     let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                         label: descriptor.label.as_deref(),
                         color_attachments: &color_attachments,
@@ -4275,7 +4311,20 @@ mod upstream_wgpu_native {
                                 y,
                                 width,
                                 height,
-                            } => pass.set_scissor_rect(*x, *y, *width, *height),
+                            } => {
+                                if let Some((target_width, target_height)) = render_target_extent {
+                                    let clamped_x = (*x).min(target_width);
+                                    let clamped_y = (*y).min(target_height);
+                                    pass.set_scissor_rect(
+                                        clamped_x,
+                                        clamped_y,
+                                        (*width).min(target_width.saturating_sub(clamped_x)),
+                                        (*height).min(target_height.saturating_sub(clamped_y)),
+                                    );
+                                } else {
+                                    pass.set_scissor_rect(*x, *y, *width, *height);
+                                }
+                            }
                             RenderPassCommand::SetBlendConstant(color) => {
                                 pass.set_blend_constant(*color)
                             }
