@@ -57,7 +57,7 @@ namespace Babylon::Polyfills::Internal
 
     NativeCanvas::~NativeCanvas()
     {
-        Dispose();
+        Dispose(false);
     }
 
     void NativeCanvas::FlushGraphicResources()
@@ -244,13 +244,21 @@ namespace Babylon::Polyfills::Internal
 
     void NativeCanvas::Dispose()
     {
+        Dispose(true);
+    }
+
+    void NativeCanvas::Dispose(bool invokeContextDispose)
+    {
         if (!m_contextObject.IsEmpty())
         {
-            auto contextObject = m_contextObject.Value();
-            auto disposeValue = contextObject.Get("dispose");
-            if (disposeValue.IsFunction())
+            if (invokeContextDispose)
             {
-                disposeValue.As<Napi::Function>().Call(contextObject, {});
+                auto contextObject = m_contextObject.Value();
+                auto disposeValue = contextObject.Get("dispose");
+                if (disposeValue.IsFunction())
+                {
+                    disposeValue.As<Napi::Function>().Call(contextObject, {});
+                }
             }
             m_contextObject.Reset();
         }

@@ -7,6 +7,7 @@
 #include <assert.h>
 #include "nanovg/nanovg.h"
 #include <cassert>
+#include <cstring>
 #include <napi/pointer.h>
 #include <basen.hpp>
 #include <cstdint>
@@ -21,6 +22,53 @@ extern "C"
         uint8_t** out_rgba,
         size_t* out_len);
     void babylon_canvas_free_bytes(uint8_t* data, size_t len);
+}
+
+namespace
+{
+    class ScopedNativeCanvasImageRef final
+    {
+    public:
+        struct AdoptTag
+        {
+        };
+
+        explicit ScopedNativeCanvasImageRef(Babylon::Polyfills::Internal::NativeCanvasImage& image)
+            : m_image{&image}
+        {
+            m_image->Ref();
+        }
+
+        ScopedNativeCanvasImageRef(Babylon::Polyfills::Internal::NativeCanvasImage& image, AdoptTag)
+            : m_image{&image}
+        {
+        }
+
+        ScopedNativeCanvasImageRef(const ScopedNativeCanvasImageRef&) = delete;
+        ScopedNativeCanvasImageRef& operator=(const ScopedNativeCanvasImageRef&) = delete;
+
+        ~ScopedNativeCanvasImageRef()
+        {
+            if (m_image != nullptr)
+            {
+                try
+                {
+                    m_image->Unref();
+                }
+                catch (...)
+                {
+                }
+            }
+        }
+
+        void Release()
+        {
+            m_image = nullptr;
+        }
+
+    private:
+        Babylon::Polyfills::Internal::NativeCanvasImage* m_image{};
+    };
 }
 
 namespace Babylon::Polyfills::Internal
@@ -42,6 +90,7 @@ namespace Babylon::Polyfills::Internal
                 InstanceAccessor("src", &NativeCanvasImage::GetSrc, &NativeCanvasImage::SetSrc),
                 InstanceAccessor("onload", nullptr, &NativeCanvasImage::SetOnload),
                 InstanceAccessor("onerror", nullptr, &NativeCanvasImage::SetOnerror),
+                InstanceMethod("_getNativeImageData", &NativeCanvasImage::GetNativeImageData),
                 // TODO: This should be set directly on the JS Object rather than via an instanceAccessor see: https://github.com/BabylonJS/BabylonNative/issues/1030
                 InstanceAccessor("_imageContainer", &NativeCanvasImage::GetImageContainer, nullptr),
             });
@@ -98,6 +147,23 @@ namespace Babylon::Polyfills::Internal
         return Env().Null();
     }
 
+    Napi::Value NativeCanvasImage::GetNativeImageData(const Napi::CallbackInfo& info)
+    {
+        if (m_rgbaData.empty() || m_width == 0 || m_height == 0)
+        {
+            return info.Env().Null();
+        }
+
+        auto buffer = Napi::ArrayBuffer::New(info.Env(), m_rgbaData.size());
+        std::memcpy(buffer.Data(), m_rgbaData.data(), m_rgbaData.size());
+
+        auto result = Napi::Object::New(info.Env());
+        result.Set("width", Napi::Number::From(info.Env(), m_width));
+        result.Set("height", Napi::Number::From(info.Env(), m_height));
+        result.Set("data", Napi::Uint8Array::New(info.Env(), m_rgbaData.size(), buffer, 0));
+        return result;
+    }
+
     bool NativeCanvasImage::SetBuffer(gsl::span<const std::byte> buffer)
     {
         const auto* encodedData = reinterpret_cast<const uint8_t*>(buffer.data());
@@ -149,7 +215,9 @@ namespace Babylon::Polyfills::Internal
         const auto pos = text.find(base64);
         if (pos != std::string::npos)
         {
+            ScopedNativeCanvasImageRef pendingLoadRef{*this};
             arcana::make_task(m_runtimeScheduler, *m_cancellationSource, [env{info.Env()}, this, text{std::move(text)}, pos]() {
+                ScopedNativeCanvasImageRef callbackLoadRef{*this, ScopedNativeCanvasImageRef::AdoptTag{}};
                 std::vector<uint8_t> base64Buffer;
                 bn::decode_b64(text.begin() + pos + base64.length(), text.end(), std::back_inserter(base64Buffer));
                 gsl::span<const std::byte> buffer = {reinterpret_cast<std::byte*>(base64Buffer.data()), base64Buffer.size()};
@@ -159,6 +227,7 @@ namespace Babylon::Polyfills::Internal
                     HandleLoadImageError(Napi::Error::New(env, "Unable to decode image with provided base64 source."));
                 }
             });
+            pendingLoadRef.Release();
             return;
         }
 
@@ -166,7 +235,9 @@ namespace Babylon::Polyfills::Internal
         UrlLib::UrlRequest request{};
         request.Open(UrlLib::UrlMethod::Get, text);
         request.ResponseType(UrlLib::UrlResponseType::Buffer);
+        ScopedNativeCanvasImageRef pendingLoadRef{*this};
         request.SendAsync().then(m_runtimeScheduler, *m_cancellationSource, [env{info.Env()}, this, cancellationSource{m_cancellationSource}, request{std::move(request)}](arcana::expected<void, std::exception_ptr> result) {
+            ScopedNativeCanvasImageRef callbackLoadRef{*this, ScopedNativeCanvasImageRef::AdoptTag{}};
             if (result.has_error())
             {
                 HandleLoadImageError(Napi::Error::New(env, result.error()));
@@ -189,6 +260,7 @@ namespace Babylon::Polyfills::Internal
                 HandleLoadImageError(Napi::Error::New(env, "Unable to decode image with provided source URL."));
             }
         });
+        pendingLoadRef.Release();
     }
 
     void NativeCanvasImage::SetOnload(const Napi::CallbackInfo&, const Napi::Value& value)
