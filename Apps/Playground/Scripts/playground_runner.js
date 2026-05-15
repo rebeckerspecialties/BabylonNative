@@ -119,7 +119,7 @@ var engine = null;
         var width = (typeof window !== "undefined" && window.innerWidth) ? window.innerWidth : 1280;
         var height = (typeof window !== "undefined" && window.innerHeight) ? window.innerHeight : 720;
         var gpuContext = navigator.gpu._createCanvasContext();
-        return {
+        var canvas = {
             style: {
                 width: width + "px",
                 height: height + "px"
@@ -149,12 +149,14 @@ var engine = null;
             },
             getContext: function (contextName) {
                 if (contextName === "webgpu") {
+                    gpuContext.canvas = canvas;
                     return gpuContext;
                 }
 
                 return null;
             }
         };
+        return canvas;
     }
 
     function assertNativeApis() {

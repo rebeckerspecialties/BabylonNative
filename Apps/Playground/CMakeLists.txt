@@ -16,6 +16,7 @@ set(SCRIPTS
     "Scripts/experience.js"
     "Scripts/playground_runner.js"
     "Scripts/validation_native.js"
+    "Scripts/validation_webgpu_native.js"
     "Scripts/webgpu_smoke.js"
     "Scripts/RobotoSlab.ttf"
     "Scripts/config.json")
@@ -167,6 +168,16 @@ if(TARGET Canvas)
     target_compile_definitions(Playground PRIVATE BABYLON_NATIVE_PLAYGROUND_HAS_CANVAS=1)
 endif()
 
+if(TARGET TestUtils)
+    target_link_libraries(Playground PRIVATE TestUtils)
+    target_compile_definitions(Playground PRIVATE BABYLON_NATIVE_PLAYGROUND_HAS_TESTUTILS=1)
+endif()
+
+if(TARGET NativeOptimizations)
+    target_link_libraries(Playground PRIVATE NativeOptimizations)
+    target_compile_definitions(Playground PRIVATE BABYLON_NATIVE_PLAYGROUND_HAS_NATIVEOPTIMIZATIONS=1)
+endif()
+
 # See https://gitlab.kitware.com/cmake/cmake/-/issues/23543
 # If we can set minimum required to 3.26+, then we can use the `copy -t` syntax instead.
 add_custom_command(TARGET Playground POST_BUILD
@@ -175,6 +186,8 @@ add_custom_command(TARGET Playground POST_BUILD
 if(APPLE)
     add_custom_command(TARGET Playground POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:Playground>/../Resources/Scripts")
+    add_custom_command(TARGET Playground POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:Playground>/../Resources/ReferenceImages")
 
     foreach(SCRIPT_PATH ${SCRIPTS} ${BABYLON_SCRIPTS} ${DEPENDENCIES})
         get_filename_component(SCRIPT_NAME "${SCRIPT_PATH}" NAME)
@@ -182,6 +195,14 @@ if(APPLE)
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 "${CMAKE_CURRENT_SOURCE_DIR}/${SCRIPT_PATH}"
                 "$<TARGET_FILE_DIR:Playground>/../Resources/Scripts/${SCRIPT_NAME}")
+    endforeach()
+
+    foreach(REFERENCE_IMAGE_PATH ${REFERENCE_IMAGES})
+        get_filename_component(REFERENCE_IMAGE_NAME "${REFERENCE_IMAGE_PATH}" NAME)
+        add_custom_command(TARGET Playground POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${CMAKE_CURRENT_SOURCE_DIR}/${REFERENCE_IMAGE_PATH}"
+                "$<TARGET_FILE_DIR:Playground>/../Resources/ReferenceImages/${REFERENCE_IMAGE_NAME}")
     endforeach()
 endif()
 
