@@ -21,9 +21,14 @@
 #include <Babylon/Plugins/NativeWebGPU.h>
 #endif
 
+#include <chrono>
 #include <cstdlib>
+#include <future>
+#include <optional>
 
 extern Babylon::Graphics::Configuration g_deviceConfig;
+
+using namespace std::chrono_literals;
 
 namespace
 {
@@ -50,11 +55,8 @@ TEST(JavaScript, All)
 
     Babylon::Graphics::Device device{g_deviceConfig};
 
-    // Start rendering a frame to unblock the JavaScript from queuing graphics
-    // commands. The frame is held open through script load and the test pump
-    // (which only ticks bgfx via Finish; Start) so the JS thread can submit
-    // at any time without racing the gate. A final Finish closes it after
-    // runtime teardown.
+    // Start a frame before loading tests so RAF-driven JS code can queue GPU
+    // work immediately. The pump below advances frames until Mocha reports.
     device.StartRenderingCurrentFrame();
 
     std::optional<Babylon::Polyfills::Canvas> nativeCanvas;
@@ -121,22 +123,79 @@ TEST(JavaScript, All)
 #error "UnitTests JavaScript suite requires NativeEngine or NativeWebGPU."
 #endif
 
-    // Pump frames while JS tests run — tests use RAF internally and
-    // SubmitCommands requires an active frame. The frame was opened
-    // immediately after device creation; the loop just ticks bgfx
-    // (Finish; Start) once per iteration so commands can advance.
     auto exitCodeFuture = exitCodePromise.get_future();
-    while (exitCodeFuture.wait_for(std::chrono::milliseconds(16)) != std::future_status::ready)
+    while (exitCodeFuture.wait_for(16ms) != std::future_status::ready)
     {
         device.FinishRenderingCurrentFrame();
         device.StartRenderingCurrentFrame();
     }
 
-    auto exitCode = exitCodeFuture.get();
+    auto exitCode{exitCodeFuture.get()};
     EXPECT_EQ(exitCode, 0);
 
-    // Runtime destructor joins the JS thread; must happen before Finish.
+    // Runtime destructor joins the JS thread; drop the canvas first, then close
+    // the frame that is still open from the last pump iteration.
     nativeCanvas.reset();
-
     device.FinishRenderingCurrentFrame();
 }
+
+#if defined(BABYLON_NATIVE_UNITTESTS_WITH_WEBGPU)
+TEST(JavaScript, CanvasWgpuLiveContextCanSurviveRuntimeTeardown)
+{
+    Babylon::Graphics::Device device{g_deviceConfig};
+    std::optional<Babylon::Polyfills::Canvas> nativeCanvas;
+    std::promise<void> scriptDonePromise;
+
+    {
+        Babylon::AppRuntime::Options options{};
+        options.UnhandledExceptionHandler = [](const Napi::Error& error) {
+            std::cerr << "[Uncaught Error] " << Napi::GetErrorString(error) << std::endl;
+            std::quick_exit(1);
+        };
+
+        Babylon::AppRuntime runtime{options};
+        runtime.Dispatch([&device, &nativeCanvas, &scriptDonePromise](Napi::Env env) {
+            device.AddToJavaScript(env);
+            Babylon::Polyfills::Console::Initialize(env, [](const char* message, Babylon::Polyfills::Console::LogLevel logLevel) {
+                std::cout << "[" << EnumToString(logLevel) << "] " << message << std::endl;
+            });
+            Babylon::Polyfills::Window::Initialize(env);
+            Babylon::Polyfills::Blob::Initialize(env);
+            nativeCanvas.emplace(Babylon::Polyfills::Canvas::Initialize(env));
+
+            env.Global().Set("__canvasWgpuTeardownTestDone", Napi::Function::New(env, [&scriptDonePromise](const Napi::CallbackInfo&) {
+                scriptDonePromise.set_value();
+            }));
+        });
+
+        Babylon::ScriptLoader loader{runtime};
+        device.StartRenderingCurrentFrame();
+        loader.Eval(R"JS(
+            const canvas = new _native.Canvas();
+            canvas.width = 16;
+            canvas.height = 16;
+            const context = canvas.getContext("2d");
+            context.fillStyle = "#ff0000";
+            context.fillRect(0, 0, 16, 16);
+            context.flush();
+            const payload = canvas.getCanvasTexture();
+            if (!payload || !payload.nativeTexture) {
+                throw new Error("CanvasWgpu teardown test did not produce a native texture payload.");
+            }
+
+            globalThis.__canvasWgpuLeakedCanvas = canvas;
+            globalThis.__canvasWgpuLeakedContext = context;
+            __canvasWgpuTeardownTestDone();
+        )JS", "canvaswgpu.teardown.test.js");
+        device.FinishRenderingCurrentFrame();
+
+        auto scriptDoneFuture = scriptDonePromise.get_future();
+        ASSERT_EQ(scriptDoneFuture.wait_for(30s), std::future_status::ready) << "CanvasWgpu teardown setup timed out.";
+    }
+
+    // The AppRuntime has been destroyed while JS still owned a Canvas and a 2D
+    // context. This used to crash in NativeCanvas::~NativeCanvas by dereferencing
+    // a persistent JS context reference during JavaScriptCore teardown.
+    nativeCanvas.reset();
+}
+#endif
