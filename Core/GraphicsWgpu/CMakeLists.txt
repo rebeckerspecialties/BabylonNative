@@ -267,6 +267,7 @@ else()
 endif()
 
 set(UPSTREAM_WGPU_NATIVE_TARGET "")
+set(RUST_CARGO_LOCKED_ARGS "--locked")
 
 if(BABYLON_NATIVE_WGPU_USE_UPSTREAM_NATIVE)
     if(NOT DEFINED wgpu_native_SOURCE_DIR OR wgpu_native_SOURCE_DIR STREQUAL "")
@@ -281,7 +282,7 @@ if(BABYLON_NATIVE_WGPU_USE_UPSTREAM_NATIVE)
         endif()
         set(WGPU_NATIVE_CARGO_PATCH_CONFIG
             "--config"
-            "patch.\"https://github.com/gfx-rs/wgpu-native.git\".wgpu-native.path=\"${wgpu_native_rlib_SOURCE_DIR}\"")
+            "paths=[\"${wgpu_native_rlib_SOURCE_DIR}\"]")
         set(WGPU_NATIVE_CARGO_FEATURES "--features" "wgpu-native-rlib")
     endif()
 endif()
@@ -314,8 +315,8 @@ if(BABYLON_NATIVE_MULTI_CONFIG)
         OUTPUT
             "${RUST_OUTPUT_LIB_DEBUG}"
             "${RUST_OUTPUT_LIB_RELEASE}"
-        COMMAND ${CMAKE_COMMAND} -E env ${RUST_BACKEND_ENV_DEBUG} ${CARGO_COMMAND} build --manifest-path "${RUST_CRATE_DIR}/Cargo.toml" --target-dir "${RUST_TARGET_DIR}" ${RUST_TARGET_FLAG} ${WGPU_NATIVE_CARGO_PATCH_CONFIG} ${WGPU_NATIVE_CARGO_FEATURES}
-        COMMAND ${CMAKE_COMMAND} -E env ${RUST_BACKEND_ENV_RELEASE} ${CARGO_COMMAND} build ${RUST_RELEASE_BUILD_STD_ARGS} --manifest-path "${RUST_CRATE_DIR}/Cargo.toml" --target-dir "${RUST_TARGET_DIR}" --release ${RUST_TARGET_FLAG} ${WGPU_NATIVE_CARGO_PATCH_CONFIG} ${WGPU_NATIVE_CARGO_FEATURES}
+        COMMAND ${CMAKE_COMMAND} -E env ${RUST_BACKEND_ENV_DEBUG} ${CARGO_COMMAND} build ${RUST_CARGO_LOCKED_ARGS} --manifest-path "${RUST_CRATE_DIR}/Cargo.toml" --target-dir "${RUST_TARGET_DIR}" ${RUST_TARGET_FLAG} ${WGPU_NATIVE_CARGO_PATCH_CONFIG} ${WGPU_NATIVE_CARGO_FEATURES}
+        COMMAND ${CMAKE_COMMAND} -E env ${RUST_BACKEND_ENV_RELEASE} ${CARGO_COMMAND} build ${RUST_CARGO_LOCKED_ARGS} ${RUST_RELEASE_BUILD_STD_ARGS} --manifest-path "${RUST_CRATE_DIR}/Cargo.toml" --target-dir "${RUST_TARGET_DIR}" --release ${RUST_TARGET_FLAG} ${WGPU_NATIVE_CARGO_PATCH_CONFIG} ${WGPU_NATIVE_CARGO_FEATURES}
         WORKING_DIRECTORY "${RUST_CRATE_DIR}"
         DEPENDS
             "${BABYLON_NATIVE_REPO_ROOT}/Cargo.toml"
@@ -344,7 +345,7 @@ else()
 
     add_custom_command(
         OUTPUT "${RUST_OUTPUT_LIB}"
-        COMMAND ${CMAKE_COMMAND} -E env ${RUST_BACKEND_ENV} ${CARGO_COMMAND} build ${RUST_RELEASE_BUILD_STD_ARGS} --manifest-path "${RUST_CRATE_DIR}/Cargo.toml" --target-dir "${RUST_TARGET_DIR}" ${RUST_BUILD_FLAG} ${RUST_TARGET_FLAG} ${WGPU_NATIVE_CARGO_PATCH_CONFIG} ${WGPU_NATIVE_CARGO_FEATURES}
+        COMMAND ${CMAKE_COMMAND} -E env ${RUST_BACKEND_ENV} ${CARGO_COMMAND} build ${RUST_CARGO_LOCKED_ARGS} ${RUST_RELEASE_BUILD_STD_ARGS} --manifest-path "${RUST_CRATE_DIR}/Cargo.toml" --target-dir "${RUST_TARGET_DIR}" ${RUST_BUILD_FLAG} ${RUST_TARGET_FLAG} ${WGPU_NATIVE_CARGO_PATCH_CONFIG} ${WGPU_NATIVE_CARGO_FEATURES}
         WORKING_DIRECTORY "${RUST_CRATE_DIR}"
         DEPENDS
             "${BABYLON_NATIVE_REPO_ROOT}/Cargo.toml"
