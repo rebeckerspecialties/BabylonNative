@@ -195,7 +195,7 @@ impl Backend {
         fill_paint.set_font_size(16.0);
         stroke_paint.set_font_size(16.0);
 
-        let mut backend = Self {
+        Ok(Self {
             device,
             queue,
             canvas,
@@ -232,10 +232,7 @@ impl Backend {
                 height: 0,
                 generation: 0,
             },
-        };
-
-        backend.refresh_interop_handle();
-        Ok(backend)
+        })
     }
 
     fn resize(&mut self, width: u32, height: u32, dpi: f32) {
@@ -479,7 +476,11 @@ fn with_ctx_ref<R>(ctx: *mut NVGcontext, default: R, f: impl FnOnce(&Backend) ->
 #[no_mangle]
 pub extern "C" fn nvgCreate(_flags: i32) -> *mut NVGcontext {
     match std::panic::catch_unwind(|| Backend::new(1, 1)) {
-        Ok(Ok(backend)) => Box::into_raw(Box::new(NVGcontext { backend })),
+        Ok(Ok(backend)) => {
+            let mut context = Box::new(NVGcontext { backend });
+            context.backend.refresh_interop_handle();
+            Box::into_raw(context)
+        }
         _ => ptr::null_mut(),
     }
 }
@@ -1154,6 +1155,12 @@ pub extern "C" fn nvgTextMetrics(
 }
 
 #[no_mangle]
+#[cfg(not(any(
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "visionos",
+    target_os = "android"
+)))]
 pub extern "C" fn babylon_canvas_decode_image_rgba(
     data: *const u8,
     len: usize,
@@ -1197,6 +1204,12 @@ pub extern "C" fn babylon_canvas_decode_image_rgba(
 }
 
 #[no_mangle]
+#[cfg(not(any(
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "visionos",
+    target_os = "android"
+)))]
 pub extern "C" fn babylon_canvas_free_bytes(data: *mut u8, len: usize) {
     if data.is_null() {
         return;

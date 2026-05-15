@@ -81,6 +81,7 @@ namespace Babylon::Polyfills::Internal
         void Remove(const Napi::CallbackInfo& info);
         void Dispose(const Napi::CallbackInfo& info);
         void Dispose();
+        void Dispose(bool invokeContextDispose);
 
         Napi::ObjectReference m_contextObject{};
         Napi::ObjectReference m_canvasTexturePayload{};
