@@ -78,6 +78,27 @@
             expectEqual(_native.Canvas.parseColor("snow"), 0xfffafaff, "named color");
             expectEqual(_native.Canvas.parseColor("rgb(16,32,48)"), 0xff302010, "rgb color");
             expectEqual(_native.Canvas.parseColor("rgba(16,32,48,64)"), 0x40302010, "rgba color");
+            expectEqual(_native.Canvas.parseColor("hsl(120, 100%, 50%)"), 0xff00ff00, "hsl color");
+            expectEqual(_native.Canvas.parseColor("hsla(0, 100%, 50%, 0.5)"), 0x800000ff, "hsla color");
+        }],
+        ["Canvas 2D drawImage accepts another native canvas source", function () {
+            var source = new _native.Canvas();
+            source.width = 4;
+            source.height = 4;
+            var sourceContext = source.getContext("2d");
+            sourceContext.fillStyle = "hsl(120, 100%, 50%)";
+            sourceContext.fillRect(0, 0, 4, 4);
+            sourceContext.flush();
+
+            var destination = new _native.Canvas();
+            destination.width = 4;
+            destination.height = 4;
+            var destinationContext = destination.getContext("2d");
+            destinationContext.drawImage(source, 0, 0);
+            destinationContext.flush();
+
+            var payload = destination.getCanvasTexture();
+            expect(payload && payload.nativeTexture, "drawImage canvas source did not produce a native texture payload");
         }],
         ["Canvas.parseColor rejects malformed colors", function () {
             [

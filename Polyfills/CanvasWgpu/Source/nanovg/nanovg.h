@@ -138,6 +138,7 @@ void nvgEllipse(NVGcontext* ctx, float cx, float cy, float rx, float ry);
 void nvgFillColor(NVGcontext* ctx, NVGcolor color);
 void nvgStrokeColor(NVGcontext* ctx, NVGcolor color);
 void nvgFillPaint(NVGcontext* ctx, NVGpaint paint);
+void nvgStrokePaint(NVGcontext* ctx, NVGpaint paint);
 void nvgStrokeWidth(NVGcontext* ctx, float width);
 void nvgLineCap(NVGcontext* ctx, NVGlineCap cap);
 void nvgLineJoin(NVGcontext* ctx, NVGlineCap join);
@@ -150,6 +151,7 @@ void nvgFill(NVGcontext* ctx);
 void nvgStroke(NVGcontext* ctx);
 
 int nvgCreateImageRGBA(NVGcontext* ctx, int w, int h, int imageFlags, const unsigned char* data);
+int nvgCreateImageFromNativeTexture(NVGcontext* ctx, const void* nativeTexture, int w, int h, int imageFlags);
 void nvgDeleteImage(NVGcontext* ctx, int image);
 NVGpaint nvgImagePattern(NVGcontext* ctx, float ox, float oy, float ex, float ey, float angle, int image, float alpha);
 const void* nvgGetRenderTexture(NVGcontext* ctx);

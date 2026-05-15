@@ -186,6 +186,8 @@ namespace Babylon::Polyfills::Internal
             return Env().Null();
         }
 
+        context->Flush();
+
         void* nativeTexture = context->GetNativeRenderTexture();
         if (nativeTexture == nullptr)
         {
