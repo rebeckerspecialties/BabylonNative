@@ -287,7 +287,6 @@ namespace
     }
 
 
-    // This function is not threadsafe because of static
     void sortSplats(const Napi::CallbackInfo& info)
     {
         const auto modelView{ info[0].As<Napi::Object>() };
@@ -307,7 +306,7 @@ namespace
 
         const auto splatCount = indices.ElementLength();
         float vp[3] = { m[2u], m[6u], m[10u] };
-        static std::vector<float> depthMix;
+        thread_local std::vector<float> depthMix;
 
         depthMix.resize(splatCount * 2);
 
