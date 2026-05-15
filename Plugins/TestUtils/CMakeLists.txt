@@ -25,6 +25,18 @@ if(BABYLON_NATIVE_PLUGIN_NATIVEENGINE_LOAD_IMAGES)
         PRIVATE bimg_decode)
 endif()
 
+if(TARGET babylon_graphics_backend)
+    target_compile_definitions(TestUtils PRIVATE BABYLON_NATIVE_TESTUTILS_WGPU)
+endif()
+
+if(APPLE AND TARGET babylon_graphics_backend AND NOT BABYLON_NATIVE_PLUGIN_NATIVEENGINE_LOAD_IMAGES)
+    target_compile_definitions(TestUtils PRIVATE BABYLON_NATIVE_TESTUTILS_SYSTEM_IMAGES)
+    target_link_libraries(TestUtils
+        PRIVATE "-framework CoreFoundation"
+        PRIVATE "-framework CoreGraphics"
+        PRIVATE "-framework ImageIO")
+endif()
+
 target_compile_definitions(TestUtils PRIVATE GRAPHICS_API=${GRAPHICS_API})
 
 if(APPLE)

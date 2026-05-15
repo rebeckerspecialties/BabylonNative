@@ -5,6 +5,125 @@
 
 #import <MetalKit/MTKView.h>
 
+#include <Shared/CommandLine.h>
+
+#include <cstdio>
+#include <sstream>
+#include <string>
+#include <string_view>
+#include <vector>
+
+namespace
+{
+    bool EndsWith(std::string_view value, std::string_view suffix)
+    {
+        return value.size() >= suffix.size() && value.compare(value.size() - suffix.size(), suffix.size(), suffix) == 0;
+    }
+
+    bool IsValidationScript(std::string_view script)
+    {
+        return EndsWith(script, "validation_native.js") || EndsWith(script, "validation_webgpu_native.js");
+    }
+
+    bool IsWebGPUValidationScript(std::string_view script)
+    {
+        return EndsWith(script, "validation_webgpu_native.js");
+    }
+
+    bool HasValidationIntent(const PlaygroundOptions& options)
+    {
+        return options.ListTests ||
+            options.BreakOnFail ||
+            options.GenerateReferences ||
+            options.RunOnce ||
+            options.IncludeExcluded ||
+            options.SaveResults.has_value() ||
+            options.CaptureFrame.has_value() ||
+            !options.TestFilters.empty() ||
+            !options.TestIndices.empty();
+    }
+
+    PlaygroundOptions ParsePlaygroundOptionsFromProcess()
+    {
+        NSArray* arguments = [[NSProcessInfo processInfo] arguments];
+        std::vector<std::string> storage{};
+        storage.reserve(arguments.count);
+        std::vector<const char*> argv{};
+        argv.reserve(arguments.count);
+
+        for (NSString* argument in arguments)
+        {
+            storage.emplace_back([argument UTF8String]);
+        }
+
+        for (const auto& argument : storage)
+        {
+            argv.emplace_back(argument.c_str());
+        }
+
+        return CommandLine::Parse(static_cast<int>(argv.size()), argv.data());
+    }
+
+    void AppendJsString(std::ostringstream& out, std::string_view value)
+    {
+        out << '"';
+        for (char ch : value)
+        {
+            switch (ch)
+            {
+                case '\\': out << "\\\\"; break;
+                case '"': out << "\\\""; break;
+                case '\n': out << "\\n"; break;
+                case '\r': out << "\\r"; break;
+                case '\t': out << "\\t"; break;
+                default: out << ch; break;
+            }
+        }
+        out << '"';
+    }
+
+    NSString* MakePlaygroundOptionsScript(const PlaygroundOptions& options)
+    {
+        std::ostringstream js{};
+        js << "globalThis._playgroundOptions={";
+        js << "listTests:" << (options.ListTests ? "true" : "false") << ',';
+        js << "headless:" << (options.Headless ? "true" : "false") << ',';
+        js << "breakOnFail:" << (options.BreakOnFail ? "true" : "false") << ',';
+        js << "generateReferences:" << (options.GenerateReferences ? "true" : "false") << ',';
+        js << "runOnce:" << (options.RunOnce ? "true" : "false") << ',';
+        js << "includeExcluded:" << (options.IncludeExcluded ? "true" : "false");
+        if (options.SaveResults.has_value())
+        {
+            js << ",saveResults:" << (*options.SaveResults ? "true" : "false");
+        }
+        if (options.CaptureFrame.has_value())
+        {
+            js << ",captureFrame:" << *options.CaptureFrame;
+        }
+        js << ",testFilters:[";
+        for (size_t index = 0; index < options.TestFilters.size(); ++index)
+        {
+            if (index != 0)
+            {
+                js << ',';
+            }
+            AppendJsString(js, options.TestFilters[index]);
+        }
+        js << "],testIndices:[";
+        for (size_t index = 0; index < options.TestIndices.size(); ++index)
+        {
+            if (index != 0)
+            {
+                js << ',';
+            }
+            js << options.TestIndices[index];
+        }
+        js << "]};";
+        const auto source = js.str();
+        return [NSString stringWithUTF8String:source.c_str()];
+    }
+}
+
 @implementation ViewController
 {
     BNRuntime* _runtime;
@@ -38,15 +157,31 @@
 - (void)refreshBabylon {
     [self uninitialize];
 
+    PlaygroundOptions playgroundOptions = ParsePlaygroundOptionsFromProcess();
+    if (playgroundOptions.ParseError)
+    {
+        fprintf(stderr, "Playground: %s\n", playgroundOptions.ErrorMessage.c_str());
+        CommandLine::PrintUsage([[[NSProcessInfo processInfo] processName] UTF8String]);
+        [NSApp terminate:nil];
+        return;
+    }
+
+    if (playgroundOptions.ShowHelp)
+    {
+        CommandLine::PrintUsage([[[NSProcessInfo processInfo] processName] UTF8String]);
+        [NSApp terminate:nil];
+        return;
+    }
+
     BNRuntimeOptions* options = [[BNRuntimeOptions alloc] init];
     options.enableDebugger = YES;
-    options.enableDebugTrace = YES;
+    options.enableDebugTrace = playgroundOptions.DebugTrace.value_or(true) ? YES : NO;
     _runtime = [[BNRuntime alloc] initWithOptions:options];
 
     [PlaygroundBootstrap loadScripts:_runtime];
+    [_runtime eval:MakePlaygroundOptionsScript(playgroundOptions) sourceURL:@"app:///Scripts/playground_options.js"];
 
-    NSArray* arguments = [[NSProcessInfo processInfo] arguments];
-    if (arguments.count == 1)
+    if (playgroundOptions.Scripts.empty() && !HasValidationIntent(playgroundOptions))
     {
         [_runtime eval:@"(function(){"
                        @"globalThis.createScene=undefined;"
@@ -58,13 +193,32 @@
         [_runtime loadScript:@"app:///Scripts/webgpu_smoke.js"];
         [_runtime loadScript:@"app:///Scripts/playground_runner.js"];
     }
+    else if (playgroundOptions.Scripts.empty())
+    {
+        [_runtime loadScript:@"app:///Scripts/validation_webgpu_native.js"];
+        [_runtime loadScript:@"app:///Scripts/validation_native.js"];
+    }
     else
     {
-        for (NSUInteger i = 1; i < arguments.count; i++)
+        bool validationScriptLoaded = false;
+        bool nativeValidationScriptLoaded = false;
+        for (const auto& script : playgroundOptions.Scripts)
         {
-            [_runtime loadScript:arguments[i]];
+            [_runtime loadScript:[NSString stringWithUTF8String:script.c_str()]];
+            validationScriptLoaded = validationScriptLoaded || IsValidationScript(script);
+            nativeValidationScriptLoaded = nativeValidationScriptLoaded || EndsWith(script, "validation_native.js");
+
+            if (IsWebGPUValidationScript(script) && !nativeValidationScriptLoaded)
+            {
+                [_runtime loadScript:@"app:///Scripts/validation_native.js"];
+                nativeValidationScriptLoaded = true;
+            }
         }
-        [_runtime loadScript:@"app:///Scripts/playground_runner.js"];
+
+        if (!validationScriptLoaded)
+        {
+            [_runtime loadScript:@"app:///Scripts/playground_runner.js"];
+        }
     }
 
     _mtkView = [[MTKView alloc] initWithFrame:[self view].frame device:nil];

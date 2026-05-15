@@ -6,8 +6,8 @@
 #pragma warning(disable : 4324) // 'bx::DirectoryReader': structure was padded due to alignment specifier
 #endif
 
-#include <bx/allocator.h>
 #ifdef BABYLON_NATIVE_PLUGIN_NATIVEENGINE_LOAD_IMAGES
+#include <bx/allocator.h>
 #include <bimg/bimg.h>
 #endif
 #include <Babylon/JsRuntime.h>
@@ -97,6 +97,10 @@ namespace Babylon::Plugins::Internal
             }
 #ifdef BABYLON_NATIVE_PLUGIN_NATIVEENGINE_LOAD_IMAGES
             bimg::ImageContainer* m_Image{};
+#elif defined(BABYLON_NATIVE_TESTUTILS_SYSTEM_IMAGES)
+            std::vector<uint8_t> m_Image{};
+            uint32_t m_Width{};
+            uint32_t m_Height{};
 #endif
         };
     };
