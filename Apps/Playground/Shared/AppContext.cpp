@@ -6,8 +6,14 @@
 #include <Babylon/Graphics/Device.h>
 #include <Babylon/ScriptLoader.h>
 
-#include <Babylon/Plugins/NativeWebGPU.h>
 #include <Babylon/Plugins/NativeInput.h>
+#if defined(BABYLON_NATIVE_PLAYGROUND_HAS_NATIVEOPTIMIZATIONS)
+#include <Babylon/Plugins/NativeOptimizations.h>
+#endif
+#include <Babylon/Plugins/NativeWebGPU.h>
+#if defined(BABYLON_NATIVE_PLAYGROUND_HAS_TESTUTILS)
+#include <Babylon/Plugins/TestUtils.h>
+#endif
 
 #include <Babylon/Polyfills/Blob.h>
 #include <Babylon/Polyfills/Console.h>
@@ -73,15 +79,14 @@ AppContext::AppContext(
     // Initialization ordering guarantee: AppRuntime::Dispatch uses a FIFO
     // WorkQueue. This callback runs on the JS thread before any ScriptLoader
     // work because ScriptLoader also dispatches through the same WorkQueue,
-    // and it is constructed after this Dispatch call (line 99). This means
-    // navigator.gpu, _native.Canvas, and all other N-API modules are fully
-    // available before any user JavaScript executes.
-    //
-    // Embedders do NOT need defensive polling loops or readiness promises to
-    // wait for these APIs. Simply call Initialize() in the Dispatch callback,
-    // then load scripts via ScriptLoader — the ordering is guaranteed.
-    m_runtime->Dispatch([this, debugLog, additionalInit = std::move(additionalInit)](Napi::Env env) {
+    // and it is constructed after this Dispatch call. This means navigator.gpu,
+    // _native.Canvas, and all other N-API modules are fully available before any
+    // user JavaScript executes.
+    m_runtime->Dispatch([this, window, debugLog, additionalInit = std::move(additionalInit), playgroundOptions = std::move(playgroundOptions)](Napi::Env env) {
         m_device->AddToJavaScript(env);
+#if defined(BABYLON_NATIVE_PLAYGROUND_HAS_TESTUTILS)
+        Babylon::Plugins::TestUtils::Initialize(env, window);
+#endif
 
         {
             auto js = Napi::Object::New(env);
@@ -151,7 +156,9 @@ AppContext::AppContext(
         Babylon::Polyfills::XMLHttpRequest::Initialize(env);
 
         m_input = &Babylon::Plugins::NativeInput::CreateForJavaScript(env);
-
+#if defined(BABYLON_NATIVE_PLAYGROUND_HAS_NATIVEOPTIMIZATIONS)
+        Babylon::Plugins::NativeOptimizations::Initialize(env);
+#endif
         Babylon::Plugins::NativeWebGPU::Initialize(env);
 
         if (additionalInit)

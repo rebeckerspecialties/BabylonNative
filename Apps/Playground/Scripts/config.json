@@ -94,7 +94,9 @@
         {
             "title": "GLTF Serializer multimaterial with raw texture",
             "playgroundId": "#KU72PX",
-            "referenceImage": "glTFSerializerMultimaterial.png"
+            "referenceImage": "glTFSerializerMultimaterial.png",
+            "excludeFromNativeWebGPU": true,
+            "reason": "Uses WebGL-only DumpData serialization helper."
         },
         {
             "title": "GLTF Extension KHR_materials_specular",
