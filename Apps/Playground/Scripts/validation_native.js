@@ -66,6 +66,8 @@
                 " views=" + String(stats.textureViewCreateCount || 0) +
                 " bindGroups=" + String(stats.bindGroupCreateCount || 0) +
                 " buffers=" + String(stats.bufferCreateCount || 0) +
+                " externalBorrowed=" + String(stats.externalImageUploadBorrowedCount || 0) +
+                " externalOwned=" + String(stats.externalImageUploadOwnedCount || 0) +
                 " drawPath=" + String(!!stats.drawPathActive) +
                 " lastError=" + String(stats.lastError || "")
             );
@@ -107,14 +109,16 @@
     }
 
     function getExclusionReason(t) {
-        if (t.onlyVisual) {
+        const isNativeWebGPU = !!globalThis.__babylonNativeValidationUseWebGPU;
+        const includeInNativeWebGPU = isNativeWebGPU && !!t.includeInNativeWebGPU;
+        if (t.excludeFromNativeWebGPU && isNativeWebGPU) {
+            return "excludeFromNativeWebGPU" + (t.reason ? ": " + t.reason : "");
+        }
+        if (t.onlyVisual && !includeInNativeWebGPU) {
             return "onlyVisual";
         }
-        if (t.excludeFromAutomaticTesting) {
+        if (t.excludeFromAutomaticTesting && !includeInNativeWebGPU) {
             return "excludeFromAutomaticTesting" + (t.reason ? ": " + t.reason : "");
-        }
-        if (t.excludeFromNativeWebGPU && globalThis.__babylonNativeValidationUseWebGPU) {
-            return "excludeFromNativeWebGPU" + (t.reason ? ": " + t.reason : "");
         }
         if (t.excludedGraphicsApis && t.excludedGraphicsApis.includes(TestUtils.getGraphicsApiName())) {
             return "excludedGraphicsApis: " + TestUtils.getGraphicsApiName();
@@ -396,8 +400,12 @@
     }
 
     function createValidationElement(type) {
-        if (String(type).toLowerCase() === "canvas") {
+        const tag = String(type).toLowerCase();
+        if (tag === "canvas") {
             return createOffscreenCanvas(64, 64);
+        }
+        if (tag === "img") {
+            return createValidationImageElement(0, 0);
         }
         return augmentValidationElement({}, type, 0, 0);
     }
@@ -521,9 +529,6 @@
                     reject(event && event.error ? event.error : new Error("Native image decode failed."));
                 });
             });
-        };
-        image.getCanvasTexture = image.getCanvasTexture || function () {
-            return canvasFromNativeImage(image).getCanvasTexture();
         };
         image.close = image.close || function () {
             if (typeof image.dispose === "function") {
@@ -962,6 +967,9 @@
             if (source instanceof ArrayBuffer || ArrayBuffer.isView(source)) {
                 return imageFromArrayBuffer(source);
             }
+            if (source && typeof source._getNativeImageData === "function") {
+                return Promise.resolve(source);
+            }
             if (source && typeof source.getCanvasTexture === "function") {
                 return Promise.resolve(source);
             }
@@ -1022,6 +1030,11 @@
                     reportError("Error while trying to load image: " + source, error);
                 });
                 return null;
+            }
+
+            if (source && typeof source._getNativeImageData === "function") {
+                onLoad(source);
+                return source;
             }
 
             if (source && typeof source.getCanvasTexture === "function") {
@@ -1609,6 +1622,28 @@
         bufferPrototype.__nativeValidationPreviousWorldFrameOrderInstalled = true;
     }
 
+    function installEffectPreparationDiagnostics(engine) {
+        if (!engine || !engine.isWebGPU || !BABYLON.Effect || !BABYLON.Effect.prototype || BABYLON.Effect.prototype.__nativeValidationEffectDiagnosticsInstalled) {
+            return;
+        }
+
+        const originalProcessShaderCodeAsync = BABYLON.Effect.prototype._processShaderCodeAsync;
+        if (typeof originalProcessShaderCodeAsync !== "function") {
+            return;
+        }
+
+        BABYLON.Effect.prototype._processShaderCodeAsync = async function () {
+            try {
+                return await originalProcessShaderCodeAsync.apply(this, arguments);
+            } catch (e) {
+                console.error("WEBGPU_EFFECT_PREPARATION_FAILED: " + getEffectReadinessDetails(this, "effect-preparation") + " error=" + formatLogArgument(e));
+                throw e;
+            }
+        };
+
+        BABYLON.Effect.prototype.__nativeValidationEffectDiagnosticsInstalled = true;
+    }
+
     function installWebGPUGui3DShaderLanguageShim(engine) {
         if (!engine || !engine.isWebGPU || !BABYLON.ShaderLanguage || engine.__nativeValidationGui3DShaderLanguageInstalled) {
             return;
@@ -1859,8 +1894,8 @@ fragmentOutputs.color=color;
     const validationEngine = await createValidationEngineAsync();
     const engine = validationEngine.engine;
     engine.getCaps().parallelShaderCompile = undefined;
+    installEffectPreparationDiagnostics(engine);
     installWebGPUPreviousWorldBufferFrameOrderShim(engine);
-    installWebGPUGui3DShaderLanguageShim(engine);
     if (engine.isWebGPU && typeof navigator !== "undefined" && navigator.gpu && typeof navigator.gpu._backendStats === "function") {
         try {
             const stats = navigator.gpu._backendStats();
@@ -2120,8 +2155,12 @@ fragmentOutputs.color=color;
                 readinessPump.stop();
                 readinessPump = null;
             }
-            console.error(formatLogArgument(error));
-            console.error("SCENE_READY_FAILED: Test '" + (test.title || "(unnamed)") + "' failed during readiness. " + getSceneFamilyReadinessDiagnostics(currentScene));
+            const errorText = formatLogArgument(error);
+            const failurePrefix = errorText.indexOf("NATIVE_WEBGPU_UNSUPPORTED_EFFECT") !== -1
+                ? "NATIVE_WEBGPU_UNSUPPORTED_EFFECT_READY_FAILED"
+                : "SCENE_READY_FAILED";
+            console.error(errorText);
+            console.error(failurePrefix + ": Test '" + (test.title || "(unnamed)") + "' failed during readiness. " + getSceneFamilyReadinessDiagnostics(currentScene));
             disposeCurrentSceneForFailure();
             failTest(done);
         });
