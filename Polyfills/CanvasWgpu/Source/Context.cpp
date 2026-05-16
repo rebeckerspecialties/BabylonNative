@@ -197,7 +197,7 @@ namespace Babylon::Polyfills::Internal
         }
     }
 
-    void Context::BindFillStyle(const Napi::CallbackInfo& info, float left, float, float width, float height)
+    void Context::BindFillStyle(const Napi::CallbackInfo& info, float, float, float, float)
     {
         EnsureFrame();
 
@@ -209,10 +209,7 @@ namespace Babylon::Polyfills::Internal
         else if (std::holds_alternative<CanvasGradient*>(m_fillStyle))
         {
             CanvasGradient* gradient = std::get<CanvasGradient*>(m_fillStyle);
-            gradient->UpdateCache();
-            // TODO: replace left/lop/width/height by context bounds
-            NVGpaint imagePaint = nvgImagePattern(*m_nvg, 0.f, 0.f, width + left, height, 0.f, gradient->CachedImage(), 1.f);
-            nvgFillPaint(*m_nvg, imagePaint);
+            nvgFillPaint(*m_nvg, gradient->Paint(static_cast<uint32_t>(m_canvas->GetWidth()), static_cast<uint32_t>(m_canvas->GetHeight())));
         }
         else
         {
@@ -220,7 +217,7 @@ namespace Babylon::Polyfills::Internal
         }
     }
 
-    void Context::BindStrokeStyle(const Napi::CallbackInfo& info, float left, float, float width, float height)
+    void Context::BindStrokeStyle(const Napi::CallbackInfo& info, float, float, float, float)
     {
         EnsureFrame();
 
@@ -232,9 +229,7 @@ namespace Babylon::Polyfills::Internal
         else if (std::holds_alternative<CanvasGradient*>(m_strokeStyle))
         {
             CanvasGradient* gradient = std::get<CanvasGradient*>(m_strokeStyle);
-            gradient->UpdateCache();
-            NVGpaint imagePaint = nvgImagePattern(*m_nvg, 0.f, 0.f, width + left, height, 0.f, gradient->CachedImage(), 1.f);
-            nvgStrokePaint(*m_nvg, imagePaint);
+            nvgStrokePaint(*m_nvg, gradient->Paint(static_cast<uint32_t>(m_canvas->GetWidth()), static_cast<uint32_t>(m_canvas->GetHeight())));
         }
         else
         {
@@ -260,11 +255,7 @@ namespace Babylon::Polyfills::Internal
         auto width = info[2].As<Napi::Number>().FloatValue();
         auto height = info[3].As<Napi::Number>().FloatValue();
 
-        if (!m_isClipped)
-        {
-            nvgBeginPath(*m_nvg);
-        }
-
+        nvgBeginPath(*m_nvg);
         nvgRect(*m_nvg, left, top, width, height);
 
         BindFillStyle(info, left, top, width, height);
@@ -296,10 +287,14 @@ namespace Babylon::Polyfills::Internal
             m_fillStyle = std::move(string);
             nvgFillColor(*m_nvg, color);
         }
+        else if (value.IsObject())
+        {
+            CanvasGradient* canvasGradient = CanvasGradient::Unwrap(value.As<Napi::Object>());
+            m_fillStyle = canvasGradient;
+        }
         else
         {
-            CanvasGradient* canvasGradient = CanvasGradient::Unwrap(info[0].As<Napi::Object>());
-            m_fillStyle = canvasGradient;
+            throw Napi::TypeError::New(info.Env(), "Context2D.fillStyle must be a color string or CanvasGradient.");
         }
     }
 
@@ -354,6 +349,7 @@ namespace Babylon::Polyfills::Internal
     {
         EnsureFrame();
 
+        BindFillStyle(info, 0.f, 0.f, static_cast<float>(m_canvas->GetWidth()), static_cast<float>(m_canvas->GetHeight()));
         SetFilterStack();
 
         const NativeCanvasPath2D* path = info.Length() >= 1 && info[0].IsObject()
@@ -374,6 +370,25 @@ namespace Babylon::Polyfills::Internal
     {
         EnsureFrame();
 
+        m_drawingStateStack.push_back(DrawingState{
+            m_font,
+            m_fillStyle,
+            m_strokeStyle,
+            m_lineCap,
+            m_lineJoin,
+            m_filter,
+            m_direction,
+            m_miterLimit,
+            m_lineWidth,
+            m_globalAlpha,
+            m_letterSpacing,
+            m_shadowColor,
+            m_shadowBlur,
+            m_shadowOffsetX,
+            m_shadowOffsetY,
+            m_currentFontId,
+            m_isClipped,
+            m_rectangleClipping});
         nvgSave(*m_nvg);
     }
 
@@ -382,7 +397,31 @@ namespace Babylon::Polyfills::Internal
         EnsureFrame();
 
         nvgRestore(*m_nvg);
-        m_isClipped = false;
+        if (m_drawingStateStack.empty())
+        {
+            return;
+        }
+
+        auto state = std::move(m_drawingStateStack.back());
+        m_drawingStateStack.pop_back();
+        m_font = std::move(state.font);
+        m_fillStyle = state.fillStyle;
+        m_strokeStyle = state.strokeStyle;
+        m_lineCap = state.lineCap;
+        m_lineJoin = state.lineJoin;
+        m_filter = std::move(state.filter);
+        m_direction = state.direction;
+        m_miterLimit = state.miterLimit;
+        m_lineWidth = state.lineWidth;
+        m_globalAlpha = state.globalAlpha;
+        m_letterSpacing = state.letterSpacing;
+        m_shadowColor = std::move(state.shadowColor);
+        m_shadowBlur = state.shadowBlur;
+        m_shadowOffsetX = state.shadowOffsetX;
+        m_shadowOffsetY = state.shadowOffsetY;
+        m_currentFontId = state.currentFontId;
+        m_isClipped = state.isClipped;
+        m_rectangleClipping = state.rectangleClipping;
     }
 
     void Context::ClearRect(const Napi::CallbackInfo& info)
@@ -397,17 +436,8 @@ namespace Babylon::Polyfills::Internal
         nvgSave(*m_nvg);
         nvgGlobalCompositeOperation(*m_nvg, NVG_COPY);
 
-        if (!m_isClipped)
-        {
-            nvgBeginPath(*m_nvg);
-        }
-
+        nvgBeginPath(*m_nvg);
         nvgRect(*m_nvg, x, y, width, height);
-
-        if (!m_isClipped)
-        {
-            nvgClosePath(*m_nvg);
-        }
 
         nvgFillColor(*m_nvg, TRANSPARENT_BLACK);
         nvgFill(*m_nvg);
@@ -560,11 +590,7 @@ namespace Babylon::Polyfills::Internal
         const auto width = info[2].As<Napi::Number>().FloatValue();
         const auto height = info[3].As<Napi::Number>().FloatValue();
 
-        if (!m_isClipped)
-        {
-            nvgBeginPath(*m_nvg);
-        }
-
+        nvgBeginPath(*m_nvg);
         nvgRect(*m_nvg, left, top, width, height);
         BindStrokeStyle(info, left, top, width, height);
         SetFilterStack();
@@ -764,7 +790,14 @@ namespace Babylon::Polyfills::Internal
 
         if (SetFontFaceId())
         {
-            BindFillStyle(info, 0.f, 0.f, x, y);
+            if (std::holds_alternative<CanvasGradient*>(m_fillStyle))
+            {
+                nvgFillColor(*m_nvg, std::get<CanvasGradient*>(m_fillStyle)->SampleColor(x, y));
+            }
+            else
+            {
+                BindFillStyle(info, 0.f, 0.f, x, y);
+            }
             nvgText(*m_nvg, x, y, text.c_str(), nullptr);
         }
     }
@@ -1084,6 +1117,10 @@ namespace Babylon::Polyfills::Internal
 
         if (SetFontFaceId())
         {
+            if (std::holds_alternative<CanvasGradient*>(m_strokeStyle))
+            {
+                nvgStrokeColor(*m_nvg, std::get<CanvasGradient*>(m_strokeStyle)->SampleColor(x, y));
+            }
             nvgStrokeText(*m_nvg, x, y, text.c_str(), nullptr);
         }
     }
