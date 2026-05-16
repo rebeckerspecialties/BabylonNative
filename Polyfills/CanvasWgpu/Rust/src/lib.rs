@@ -7,7 +7,7 @@ use std::sync::OnceLock;
 use femtovg::renderer::WGPURenderer;
 use femtovg::{
     Color, CompositeOperation, FontId, ImageFlags, ImageId, ImageInfo, LineCap, LineJoin, Paint,
-    Path, PixelFormat, Solidity, Transform2D,
+    Path, PixelFormat, Solidity, Transform2D, Verb,
 };
 use imgref::Img;
 use rgb::RGBA8;
@@ -36,6 +36,13 @@ pub struct NVGpaint {
     pub outer_color: NVGcolor,
 }
 
+#[repr(C)]
+#[derive(Copy, Clone, Default)]
+pub struct NVGgradientStop {
+    pub offset: f32,
+    pub color: NVGcolor,
+}
+
 #[derive(Clone)]
 struct StyleState {
     fill_paint: Paint,
@@ -49,6 +56,11 @@ struct StyleState {
     current_font_handle: i32,
     global_alpha: f32,
     filter_blur_sigma: f32,
+}
+
+struct PaintResource {
+    paint: Paint,
+    image: Option<ImageId>,
 }
 
 #[repr(C)]
@@ -84,6 +96,8 @@ struct Backend {
     style_stack: Vec<StyleState>,
     next_image_handle: i32,
     images: HashMap<i32, ImageId>,
+    next_paint_handle: i32,
+    paints: HashMap<i32, PaintResource>,
     next_font_handle: i32,
     fonts: HashMap<i32, FontId>,
     font_names: HashMap<String, i32>,
@@ -173,6 +187,123 @@ fn opaque_ptr_as_ref<T>(ptr: *const c_void) -> Option<&'static T> {
     Some(unsafe { &*(ptr as *const T) })
 }
 
+fn gradient_stops_from_raw(stops: *const NVGgradientStop, stop_count: usize) -> Vec<(f32, Color)> {
+    if stops.is_null() || stop_count == 0 {
+        return Vec::new();
+    }
+
+    // SAFETY: The C++ CanvasGradient cache passes a valid stop array for the
+    // duration of this FFI call.
+    let raw_stops = unsafe { slice::from_raw_parts(stops, stop_count) };
+    let mut converted = raw_stops
+        .iter()
+        .filter_map(|stop| {
+            if stop.offset.is_finite() {
+                Some((stop.offset.clamp(0.0, 1.0), Backend::to_color(stop.color)))
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>();
+    converted.sort_by(|a, b| a.0.total_cmp(&b.0));
+    converted
+}
+
+fn lerp_color(start: Color, end: Color, t: f32) -> Color {
+    let t = t.clamp(0.0, 1.0);
+    let alpha = start.a + (end.a - start.a) * t;
+    let premultiplied_r = start.r * start.a + (end.r * end.a - start.r * start.a) * t;
+    let premultiplied_g = start.g * start.a + (end.g * end.a - start.g * start.a) * t;
+    let premultiplied_b = start.b * start.a + (end.b * end.a - start.b * start.a) * t;
+
+    if alpha <= f32::EPSILON {
+        return Color::rgbaf(0.0, 0.0, 0.0, 0.0);
+    }
+
+    Color::rgbaf(
+        (premultiplied_r / alpha).clamp(0.0, 1.0),
+        (premultiplied_g / alpha).clamp(0.0, 1.0),
+        (premultiplied_b / alpha).clamp(0.0, 1.0),
+        alpha.clamp(0.0, 1.0),
+    )
+}
+
+fn sample_gradient(stops: &[(f32, Color)], offset: f32) -> Color {
+    if stops.is_empty() {
+        return Color::rgbaf(0.0, 0.0, 0.0, 0.0);
+    }
+
+    let offset = offset.clamp(0.0, 1.0);
+    if offset <= stops[0].0 {
+        return stops[0].1;
+    }
+
+    for pair in stops.windows(2) {
+        let (start_offset, start_color) = pair[0];
+        let (end_offset, end_color) = pair[1];
+        if offset <= end_offset {
+            let span = (end_offset - start_offset).max(f32::EPSILON);
+            return lerp_color(start_color, end_color, (offset - start_offset) / span);
+        }
+    }
+
+    stops[stops.len() - 1].1
+}
+
+fn linear_gradient_offset(px: f32, py: f32, x0: f32, y0: f32, x1: f32, y1: f32) -> f32 {
+    let dx = x1 - x0;
+    let dy = y1 - y0;
+    let denominator = dx * dx + dy * dy;
+    if denominator <= f32::EPSILON {
+        return 0.0;
+    }
+
+    (((px - x0) * dx + (py - y0) * dy) / denominator).clamp(0.0, 1.0)
+}
+
+fn radial_gradient_offset(
+    px: f32,
+    py: f32,
+    x0: f32,
+    y0: f32,
+    r0: f32,
+    x1: f32,
+    y1: f32,
+    r1: f32,
+) -> f32 {
+    let dx = x1 - x0;
+    let dy = y1 - y0;
+    let dr = r1 - r0;
+    let fx = x0 - px;
+    let fy = y0 - py;
+
+    let a = dx * dx + dy * dy - dr * dr;
+    let b = 2.0 * (fx * dx + fy * dy - r0 * dr);
+    let c = fx * fx + fy * fy - r0 * r0;
+    let mut best: Option<f32> = None;
+
+    if a.abs() <= f32::EPSILON {
+        if b.abs() > f32::EPSILON {
+            best = Some(-c / b);
+        }
+    } else {
+        let discriminant = b * b - 4.0 * a * c;
+        if discriminant >= 0.0 {
+            let root = discriminant.sqrt();
+            let t0 = (-b - root) / (2.0 * a);
+            let t1 = (-b + root) / (2.0 * a);
+            for t in [t0, t1] {
+                if t.is_finite() && t >= 0.0 {
+                    best = Some(best.map_or(t, |current| current.min(t)));
+                }
+            }
+        }
+    }
+
+    best.unwrap_or(if c <= 0.0 { 0.0 } else { 1.0 })
+        .clamp(0.0, 1.0)
+}
+
 fn create_render_texture(
     device: &wgpu::Device,
     width: u32,
@@ -238,6 +369,8 @@ impl Backend {
             style_stack: Vec::new(),
             next_image_handle: 1,
             images: HashMap::new(),
+            next_paint_handle: 1,
+            paints: HashMap::new(),
             next_font_handle: 1,
             fonts: HashMap::new(),
             font_names: HashMap::new(),
@@ -329,6 +462,61 @@ impl Backend {
         )
     }
 
+    fn color_to_rgba8(color: Color) -> RGBA8 {
+        RGBA8::new(
+            (color.r.clamp(0.0, 1.0) * 255.0).round() as u8,
+            (color.g.clamp(0.0, 1.0) * 255.0).round() as u8,
+            (color.b.clamp(0.0, 1.0) * 255.0).round() as u8,
+            (color.a.clamp(0.0, 1.0) * 255.0).round() as u8,
+        )
+    }
+
+    fn transparent_paint() -> NVGpaint {
+        NVGpaint {
+            image: -1,
+            alpha: 1.0,
+            kind: 0,
+            inner_color: NVGcolor {
+                r: 0.0,
+                g: 0.0,
+                b: 0.0,
+                a: 0.0,
+            },
+            outer_color: NVGcolor {
+                r: 0.0,
+                g: 0.0,
+                b: 0.0,
+                a: 0.0,
+            },
+            ..NVGpaint::default()
+        }
+    }
+
+    fn insert_paint_resource(&mut self, paint: Paint, image: Option<ImageId>) -> NVGpaint {
+        let handle = self.next_paint_handle;
+        self.next_paint_handle += 1;
+        self.paints.insert(handle, PaintResource { paint, image });
+
+        NVGpaint {
+            image: handle,
+            alpha: 1.0,
+            kind: 2,
+            inner_color: NVGcolor {
+                r: 1.0,
+                g: 1.0,
+                b: 1.0,
+                a: 1.0,
+            },
+            outer_color: NVGcolor {
+                r: 1.0,
+                g: 1.0,
+                b: 1.0,
+                a: 1.0,
+            },
+            ..NVGpaint::default()
+        }
+    }
+
     fn apply_stroke_style(&mut self) {
         self.stroke_paint.set_line_width(self.stroke_width.max(0.0));
         self.stroke_paint.set_line_cap(self.line_cap);
@@ -359,7 +547,156 @@ impl Backend {
             }
         }
 
+        if paint.kind == 2 {
+            if let Some(resource) = self.paints.get(&paint.image) {
+                return resource.paint.clone();
+            }
+        }
+
         Paint::color(Self::to_color(paint.inner_color))
+    }
+
+    fn transform_point(transform: Transform2D, x: f32, y: f32) -> (f32, f32) {
+        let Transform2D([a, b, c, d, e, f]) = transform;
+        (x * a + y * c + e, x * b + y * d + f)
+    }
+
+    fn transform_current_point(&self, x: f32, y: f32) -> (f32, f32) {
+        Self::transform_point(self.canvas.transform(), x, y)
+    }
+
+    fn append_transformed_path(
+        &mut self,
+        path: &Path,
+        transform: Transform2D,
+        connect_first_move: bool,
+    ) {
+        let mut first = true;
+        for verb in path.verbs() {
+            match verb {
+                Verb::MoveTo(x, y) => {
+                    let (x, y) = Self::transform_point(transform, x, y);
+                    if first && connect_first_move {
+                        self.current_path.line_to(x, y);
+                    } else {
+                        self.current_path.move_to(x, y);
+                    }
+                }
+                Verb::LineTo(x, y) => {
+                    let (x, y) = Self::transform_point(transform, x, y);
+                    self.current_path.line_to(x, y);
+                }
+                Verb::BezierTo(c1x, c1y, c2x, c2y, x, y) => {
+                    let (c1x, c1y) = Self::transform_point(transform, c1x, c1y);
+                    let (c2x, c2y) = Self::transform_point(transform, c2x, c2y);
+                    let (x, y) = Self::transform_point(transform, x, y);
+                    self.current_path.bezier_to(c1x, c1y, c2x, c2y, x, y);
+                }
+                Verb::Solid => self.current_path.solidity(Solidity::Solid),
+                Verb::Hole => self.current_path.solidity(Solidity::Hole),
+                Verb::Close => self.current_path.close(),
+            }
+            first = false;
+        }
+    }
+
+    fn append_transformed_shape(&mut self, build_shape: impl FnOnce(&mut Path)) {
+        let transform = self.canvas.transform();
+        let mut path = Path::new();
+        build_shape(&mut path);
+        self.append_transformed_path(&path, transform, false);
+    }
+
+    fn append_transformed_arc(
+        &mut self,
+        cx: f32,
+        cy: f32,
+        r: f32,
+        a0: f32,
+        a1: f32,
+        winding: Solidity,
+    ) {
+        let transform = self.canvas.transform();
+        let connect_first_move = !self.current_path.is_empty();
+        let mut path = Path::new();
+        path.arc(cx, cy, r.max(0.0), a0, a1, winding);
+        self.append_transformed_path(&path, transform, connect_first_move);
+    }
+
+    fn draw_device_path_with_blur(
+        &mut self,
+        path: &Path,
+        paint: &Paint,
+        mut draw_call: impl FnMut(&mut femtovg::Canvas<WGPURenderer>, &Path, &Paint),
+    ) {
+        // Non-CTS: blur() is approximated with weighted offset redraws.
+        let sigma = self.filter_blur_sigma.clamp(0.0, 48.0);
+        let radius = (sigma * 1.5).ceil().clamp(1.0, 8.0) as i32;
+        let sigma_sq_2 = (2.0 * sigma * sigma).max(0.0001);
+
+        let mut offsets = std::mem::take(&mut self.blur_offsets);
+        offsets.clear();
+        offsets.reserve(((radius * 2 + 1) * (radius * 2 + 1)) as usize);
+        let mut weight_sum = 0.0f32;
+        for y in -radius..=radius {
+            for x in -radius..=radius {
+                let distance_sq = (x * x + y * y) as f32;
+                let weight = (-distance_sq / sigma_sq_2).exp();
+                offsets.push((x as f32, y as f32, weight));
+                weight_sum += weight;
+            }
+        }
+
+        if weight_sum <= f32::EPSILON {
+            draw_call(&mut self.canvas, path, paint);
+        } else {
+            for (dx, dy, weight) in offsets.iter().copied() {
+                self.canvas.save();
+                self.canvas.translate(dx, dy);
+                self.canvas
+                    .set_global_alpha((self.global_alpha * (weight / weight_sum)).clamp(0.0, 1.0));
+                draw_call(&mut self.canvas, path, paint);
+                self.canvas.restore();
+            }
+
+            self.canvas.set_global_alpha(self.global_alpha);
+        }
+        self.blur_offsets = offsets;
+    }
+
+    fn fill_current_device_path(&mut self) {
+        self.canvas.save();
+        self.canvas.reset_transform();
+
+        if self.filter_blur_sigma <= f32::EPSILON {
+            self.canvas.fill_path(&self.current_path, &self.fill_paint);
+        } else {
+            let path = self.current_path.clone();
+            let paint = self.fill_paint.clone();
+            self.draw_device_path_with_blur(&path, &paint, |canvas, path, paint| {
+                canvas.fill_path(path, paint);
+            });
+        }
+
+        self.canvas.restore();
+    }
+
+    fn stroke_current_device_path(&mut self) {
+        self.canvas.save();
+        self.canvas.reset_transform();
+
+        if self.filter_blur_sigma <= f32::EPSILON {
+            self.canvas
+                .stroke_path(&self.current_path, &self.stroke_paint);
+        } else {
+            let path = self.current_path.clone();
+            let paint = self.stroke_paint.clone();
+            self.draw_device_path_with_blur(&path, &paint, |canvas, path, paint| {
+                canvas.stroke_path(path, paint);
+            });
+        }
+
+        self.canvas.restore();
     }
 
     fn push_style_state(&mut self) {
@@ -624,12 +961,18 @@ pub extern "C" fn nvgClosePath(ctx: *mut NVGcontext) {
 
 #[no_mangle]
 pub extern "C" fn nvgMoveTo(ctx: *mut NVGcontext, x: f32, y: f32) {
-    with_ctx_mut(ctx, (), |backend| backend.current_path.move_to(x, y));
+    with_ctx_mut(ctx, (), |backend| {
+        let (x, y) = backend.transform_current_point(x, y);
+        backend.current_path.move_to(x, y);
+    });
 }
 
 #[no_mangle]
 pub extern "C" fn nvgLineTo(ctx: *mut NVGcontext, x: f32, y: f32) {
-    with_ctx_mut(ctx, (), |backend| backend.current_path.line_to(x, y));
+    with_ctx_mut(ctx, (), |backend| {
+        let (x, y) = backend.transform_current_point(x, y);
+        backend.current_path.line_to(x, y);
+    });
 }
 
 #[no_mangle]
@@ -643,6 +986,9 @@ pub extern "C" fn nvgBezierTo(
     y: f32,
 ) {
     with_ctx_mut(ctx, (), |backend| {
+        let (c1x, c1y) = backend.transform_current_point(c1x, c1y);
+        let (c2x, c2y) = backend.transform_current_point(c2x, c2y);
+        let (x, y) = backend.transform_current_point(x, y);
         backend.current_path.bezier_to(c1x, c1y, c2x, c2y, x, y)
     });
 }
@@ -650,6 +996,8 @@ pub extern "C" fn nvgBezierTo(
 #[no_mangle]
 pub extern "C" fn nvgQuadTo(ctx: *mut NVGcontext, cx: f32, cy: f32, x: f32, y: f32) {
     with_ctx_mut(ctx, (), |backend| {
+        let (cx, cy) = backend.transform_current_point(cx, cy);
+        let (x, y) = backend.transform_current_point(x, y);
         backend.current_path.quad_to(cx, cy, x, y)
     });
 }
@@ -665,33 +1013,40 @@ pub extern "C" fn nvgArc(
     dir: i32,
 ) {
     with_ctx_mut(ctx, (), |backend| {
-        let winding = if dir == 1 {
+        let winding = if dir == 2 {
             Solidity::Hole
         } else {
             Solidity::Solid
         };
-        backend
-            .current_path
-            .arc(cx, cy, r.max(0.0), a0, a1, winding);
+        backend.append_transformed_arc(cx, cy, r, a0, a1, winding);
     });
 }
 
 #[no_mangle]
 pub extern "C" fn nvgArcTo(ctx: *mut NVGcontext, x1: f32, y1: f32, x2: f32, y2: f32, radius: f32) {
     with_ctx_mut(ctx, (), |backend| {
-        backend.current_path.arc_to(x1, y1, x2, y2, radius.max(0.0))
+        let transform = backend.canvas.transform();
+        let Transform2D([a, b, c, d, ..]) = transform;
+        let scale = (((a * a + b * b).sqrt() + (c * c + d * d).sqrt()) * 0.5).max(0.0);
+        let (x1, y1) = Backend::transform_point(transform, x1, y1);
+        let (x2, y2) = Backend::transform_point(transform, x2, y2);
+        backend
+            .current_path
+            .arc_to(x1, y1, x2, y2, (radius * scale).max(0.0))
     });
 }
 
 #[no_mangle]
 pub extern "C" fn nvgRect(ctx: *mut NVGcontext, x: f32, y: f32, w: f32, h: f32) {
-    with_ctx_mut(ctx, (), |backend| backend.current_path.rect(x, y, w, h));
+    with_ctx_mut(ctx, (), |backend| {
+        backend.append_transformed_shape(|path| path.rect(x, y, w, h));
+    });
 }
 
 #[no_mangle]
 pub extern "C" fn nvgRoundedRect(ctx: *mut NVGcontext, x: f32, y: f32, w: f32, h: f32, r: f32) {
     with_ctx_mut(ctx, (), |backend| {
-        backend.current_path.rounded_rect(x, y, w, h, r.max(0.0))
+        backend.append_transformed_shape(|path| path.rounded_rect(x, y, w, h, r.max(0.0)));
     });
 }
 
@@ -708,16 +1063,18 @@ pub extern "C" fn nvgRoundedRectVarying(
     rad_bottom_left: f32,
 ) {
     with_ctx_mut(ctx, (), |backend| {
-        backend.current_path.rounded_rect_varying(
-            x,
-            y,
-            w,
-            h,
-            rad_top_left.max(0.0),
-            rad_top_right.max(0.0),
-            rad_bottom_right.max(0.0),
-            rad_bottom_left.max(0.0),
-        );
+        backend.append_transformed_shape(|path| {
+            path.rounded_rect_varying(
+                x,
+                y,
+                w,
+                h,
+                rad_top_left.max(0.0),
+                rad_top_right.max(0.0),
+                rad_bottom_right.max(0.0),
+                rad_bottom_left.max(0.0),
+            );
+        });
     });
 }
 
@@ -740,25 +1097,25 @@ pub extern "C" fn nvgRoundedRectElliptic(
     with_ctx_mut(ctx, (), |backend| {
         // femtovg has varying rounded corners but no direct elliptic-per-corner primitive.
         // Approximate each corner by averaging the x/y radius pair.
-        backend.current_path.rounded_rect_varying(
-            x,
-            y,
-            w,
-            h,
-            ((rtlx.abs() + rtly.abs()) * 0.5).max(0.0),
-            ((rtrx.abs() + rtry.abs()) * 0.5).max(0.0),
-            ((rbrx.abs() + rbry.abs()) * 0.5).max(0.0),
-            ((rblx.abs() + rbly.abs()) * 0.5).max(0.0),
-        );
+        backend.append_transformed_shape(|path| {
+            path.rounded_rect_varying(
+                x,
+                y,
+                w,
+                h,
+                ((rtlx.abs() + rtly.abs()) * 0.5).max(0.0),
+                ((rtrx.abs() + rtry.abs()) * 0.5).max(0.0),
+                ((rbrx.abs() + rbry.abs()) * 0.5).max(0.0),
+                ((rblx.abs() + rbly.abs()) * 0.5).max(0.0),
+            );
+        });
     });
 }
 
 #[no_mangle]
 pub extern "C" fn nvgEllipse(ctx: *mut NVGcontext, cx: f32, cy: f32, rx: f32, ry: f32) {
     with_ctx_mut(ctx, (), |backend| {
-        backend
-            .current_path
-            .ellipse(cx, cy, rx.max(0.0), ry.max(0.0))
+        backend.append_transformed_shape(|path| path.ellipse(cx, cy, rx.max(0.0), ry.max(0.0)));
     });
 }
 
@@ -860,36 +1217,14 @@ pub extern "C" fn nvgGlobalCompositeOperation(ctx: *mut NVGcontext, op: i32) {
 #[no_mangle]
 pub extern "C" fn nvgFill(ctx: *mut NVGcontext) {
     with_ctx_mut(ctx, (), |backend| {
-        // Fast path: skip clone when blur is zero (the common case).
-        if backend.filter_blur_sigma <= f32::EPSILON {
-            backend
-                .canvas
-                .fill_path(&backend.current_path, &backend.fill_paint);
-        } else {
-            let path = backend.current_path.clone();
-            let paint = backend.fill_paint.clone();
-            backend.draw_with_blur(|inner| {
-                inner.canvas.fill_path(&path, &paint);
-            });
-        }
+        backend.fill_current_device_path();
     });
 }
 
 #[no_mangle]
 pub extern "C" fn nvgStroke(ctx: *mut NVGcontext) {
     with_ctx_mut(ctx, (), |backend| {
-        // Fast path: skip clone when blur is zero (the common case).
-        if backend.filter_blur_sigma <= f32::EPSILON {
-            backend
-                .canvas
-                .stroke_path(&backend.current_path, &backend.stroke_paint);
-        } else {
-            let path = backend.current_path.clone();
-            let paint = backend.stroke_paint.clone();
-            backend.draw_with_blur(|inner| {
-                inner.canvas.stroke_path(&path, &paint);
-            });
-        }
+        backend.stroke_current_device_path();
     });
 }
 
@@ -1005,6 +1340,17 @@ pub extern "C" fn nvgDeleteImage(ctx: *mut NVGcontext, image: i32) {
 }
 
 #[no_mangle]
+pub extern "C" fn nvgDeletePaint(ctx: *mut NVGcontext, paint: i32) {
+    with_ctx_mut(ctx, (), |backend| {
+        if let Some(resource) = backend.paints.remove(&paint) {
+            if let Some(image_id) = resource.image {
+                backend.canvas.delete_image(image_id);
+            }
+        }
+    });
+}
+
+#[no_mangle]
 pub extern "C" fn nvgImagePattern(
     _ctx: *mut NVGcontext,
     ox: f32,
@@ -1037,6 +1383,110 @@ pub extern "C" fn nvgImagePattern(
             a: alpha,
         },
     }
+}
+
+#[no_mangle]
+pub extern "C" fn nvgLinearGradientStops(
+    ctx: *mut NVGcontext,
+    canvas_width: i32,
+    canvas_height: i32,
+    x0: f32,
+    y0: f32,
+    x1: f32,
+    y1: f32,
+    stops: *const NVGgradientStop,
+    stop_count: usize,
+) -> NVGpaint {
+    with_ctx_mut(ctx, Backend::transparent_paint(), |backend| {
+        let stops = gradient_stops_from_raw(stops, stop_count);
+        match stops.len() {
+            0 => Backend::transparent_paint(),
+            1 => backend.insert_paint_resource(Paint::color(stops[0].1), None),
+            _ => {
+                let width = canvas_width.max(1) as usize;
+                let height = canvas_height.max(1) as usize;
+                let mut storage = vec![RGBA8::new(0, 0, 0, 0); width.saturating_mul(height)];
+                for y in 0..height {
+                    for x in 0..width {
+                        let offset =
+                            linear_gradient_offset(x as f32 + 0.5, y as f32 + 0.5, x0, y0, x1, y1);
+                        storage[y * width + x] =
+                            Backend::color_to_rgba8(sample_gradient(&stops, offset));
+                    }
+                }
+
+                let img = Img::new(storage.as_slice(), width, height);
+                match backend.canvas.create_image(img, ImageFlags::empty()) {
+                    Ok(image_id) => {
+                        let paint =
+                            Paint::image(image_id, 0.0, 0.0, width as f32, height as f32, 0.0, 1.0);
+                        backend.insert_paint_resource(paint, Some(image_id))
+                    }
+                    Err(_) => Backend::transparent_paint(),
+                }
+            }
+        }
+    })
+}
+
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub extern "C" fn nvgRadialGradientStops(
+    ctx: *mut NVGcontext,
+    canvas_width: i32,
+    canvas_height: i32,
+    x0: f32,
+    y0: f32,
+    r0: f32,
+    x1: f32,
+    y1: f32,
+    r1: f32,
+    stops: *const NVGgradientStop,
+    stop_count: usize,
+) -> NVGpaint {
+    with_ctx_mut(ctx, Backend::transparent_paint(), |backend| {
+        let stops = gradient_stops_from_raw(stops, stop_count);
+        if stops.is_empty() {
+            Backend::transparent_paint()
+        } else if stops.len() == 1 {
+            backend.insert_paint_resource(Paint::color(stops[0].1), None)
+        } else if (x0 - x1).abs() <= f32::EPSILON && (y0 - y1).abs() <= f32::EPSILON {
+            backend.insert_paint_resource(
+                Paint::radial_gradient_stops(x1, y1, r0.max(0.0), r1.max(0.0), stops),
+                None,
+            )
+        } else {
+            let width = canvas_width.max(1) as usize;
+            let height = canvas_height.max(1) as usize;
+            let mut storage = vec![RGBA8::new(0, 0, 0, 0); width.saturating_mul(height)];
+            for y in 0..height {
+                for x in 0..width {
+                    let offset = radial_gradient_offset(
+                        x as f32 + 0.5,
+                        y as f32 + 0.5,
+                        x0,
+                        y0,
+                        r0.max(0.0),
+                        x1,
+                        y1,
+                        r1.max(0.0),
+                    );
+                    storage[y * width + x] =
+                        Backend::color_to_rgba8(sample_gradient(&stops, offset));
+                }
+            }
+
+            let img = Img::new(storage.as_slice(), width, height);
+            match backend.canvas.create_image(img, ImageFlags::empty()) {
+                Ok(image_id) => {
+                    let paint =
+                        Paint::image(image_id, 0.0, 0.0, width as f32, height as f32, 0.0, 1.0);
+                    backend.insert_paint_resource(paint, Some(image_id))
+                }
+                Err(_) => Backend::transparent_paint(),
+            }
+        }
+    })
 }
 
 #[no_mangle]

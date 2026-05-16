@@ -5,7 +5,9 @@
 
 #include <algorithm>
 #include <cmath>
-#include <map>
+#include <iterator>
+#include <limits>
+#include <vector>
 
 #ifdef __GNUC__
 #pragma GCC diagnostic push
@@ -20,53 +22,97 @@
 
 namespace Babylon::Polyfills::Internal
 {
-    static const int GRADIENT_SAMPLES_L = 256;
-    static const int GRADIENT_SAMPLES_R = 256;
-
-    typedef struct LVGColorTransform
+    namespace
     {
-        float mul[4];
-        float add[4];
-    } LVGColorTransform;
-
-    struct ColorStop
-    {
-        float offset;
-        NVGcolor color;
-    };
-
-    float clampf(float a, float mn, float mx) { return a < mn ? mn : (a > mx ? mx : a); }
-
-    void gradientSpan(uint32_t* dst, NVGcolor color0, NVGcolor color1, float offset0, float offset1)
-    {
-        float s0o = clampf(offset0, 0.0f, 1.0f);
-        float s1o = clampf(offset1, 0.0f, 1.0f);
-        unsigned s = static_cast<unsigned>(s0o * static_cast<float>(GRADIENT_SAMPLES_L));
-        unsigned e = static_cast<unsigned>(s1o * static_cast<float>(GRADIENT_SAMPLES_L));
-        float r = color0.r;
-        float g = color0.g;
-        float b = color0.b;
-        float a = color0.a;
-        float dr = (color1.r - r) / (e - s);
-        float dg = (color1.g - g) / (e - s);
-        float db = (color1.b - b) / (e - s);
-        float da = (color1.a - a) / (e - s);
-        for (unsigned i = s; i < e; i++)
+        NVGpaint SolidPaint(NVGcolor color)
         {
-            unsigned ur = (unsigned)(r * 255); unsigned ug = (unsigned)(g * 255); unsigned ub = (unsigned)(b * 255); unsigned ua = (unsigned)(a * 255);
-            dst[i] = (ua << 24) | (ub << 16) | (ug << 8) | ur;
-            r += dr; g += dg; b += db; a += da;
+            NVGpaint paint{};
+            paint.image = -1;
+            paint.alpha = color.a;
+            paint.kind = 0;
+            paint.innerColor = color;
+            paint.outerColor = color;
+            return paint;
         }
-    }
 
-    NVGcolor transformColor(NVGcolor color, LVGColorTransform* x)
-    {
-        if (!x)
-            return color;
-        color = nvgRGBAf(color.r * x->mul[0], color.g * x->mul[1], color.b * x->mul[2], color.a * x->mul[3]);
-        color = nvgRGBAf(color.r + x->add[0], color.g + x->add[1], color.b + x->add[2], color.a + x->add[3]);
-        color = nvgRGBAf(std::max(0.0f, std::min(color.r, 1.0f)), std::max(0.0f, std::min(color.g, 1.0f)), std::max(0.0f, std::min(color.b, 1.0f)), std::max(0.0f, std::min(color.a, 1.0f)));
-        return color;
+        float LinearOffset(float px, float py, float x0, float y0, float x1, float y1)
+        {
+            const auto dx = x1 - x0;
+            const auto dy = y1 - y0;
+            const auto denominator = dx * dx + dy * dy;
+            if (denominator <= std::numeric_limits<float>::epsilon())
+            {
+                return 0.0f;
+            }
+
+            return std::clamp(((px - x0) * dx + (py - y0) * dy) / denominator, 0.0f, 1.0f);
+        }
+
+        float RadialOffset(float px, float py, float x0, float y0, float r0, float x1, float y1, float r1)
+        {
+            const auto dx = x1 - x0;
+            const auto dy = y1 - y0;
+            const auto dr = r1 - r0;
+            const auto fx = x0 - px;
+            const auto fy = y0 - py;
+
+            const auto a = dx * dx + dy * dy - dr * dr;
+            const auto b = 2.0f * (fx * dx + fy * dy - r0 * dr);
+            const auto c = fx * fx + fy * fy - r0 * r0;
+            auto best = std::numeric_limits<float>::quiet_NaN();
+
+            if (std::abs(a) <= std::numeric_limits<float>::epsilon())
+            {
+                if (std::abs(b) > std::numeric_limits<float>::epsilon())
+                {
+                    best = -c / b;
+                }
+            }
+            else
+            {
+                const auto discriminant = b * b - 4.0f * a * c;
+                if (discriminant >= 0.0f)
+                {
+                    const auto root = std::sqrt(discriminant);
+                    const float candidates[] = {
+                        (-b - root) / (2.0f * a),
+                        (-b + root) / (2.0f * a),
+                    };
+                    for (const auto candidate : candidates)
+                    {
+                        if (std::isfinite(candidate) && candidate >= 0.0f)
+                        {
+                            best = std::isfinite(best) ? std::min(best, candidate) : candidate;
+                        }
+                    }
+                }
+            }
+
+            if (!std::isfinite(best))
+            {
+                best = c <= 0.0f ? 0.0f : 1.0f;
+            }
+            return std::clamp(best, 0.0f, 1.0f);
+        }
+
+        NVGcolor LerpColor(NVGcolor start, NVGcolor end, float t)
+        {
+            t = std::clamp(t, 0.0f, 1.0f);
+            const auto alpha = start.a + (end.a - start.a) * t;
+            if (alpha <= std::numeric_limits<float>::epsilon())
+            {
+                return nvgRGBAf(0.0f, 0.0f, 0.0f, 0.0f);
+            }
+
+            const auto premultipliedR = start.r * start.a + (end.r * end.a - start.r * start.a) * t;
+            const auto premultipliedG = start.g * start.a + (end.g * end.a - start.g * start.a) * t;
+            const auto premultipliedB = start.b * start.a + (end.b * end.a - start.b * start.a) * t;
+            return nvgRGBAf(
+                std::clamp(premultipliedR / alpha, 0.0f, 1.0f),
+                std::clamp(premultipliedG / alpha, 0.0f, 1.0f),
+                std::clamp(premultipliedB / alpha, 0.0f, 1.0f),
+                std::clamp(alpha, 0.0f, 1.0f));
+        }
     }
 
     static constexpr auto JS_CANVAS_GRADIENT_CONSTRUCTOR_NAME = "CanvasGradient";
@@ -127,19 +173,25 @@ namespace Babylon::Polyfills::Internal
 
     void CanvasGradient::Dispose()
     {
-        if (cachedImage >= 0)
+        if (cachedPaintHandle >= 0)
         {
-            if (context.lock())
+            if (auto nvgContext = context.lock())
             {
-                nvgDeleteImage(*context.lock(), cachedImage);
+                nvgDeletePaint(*nvgContext, cachedPaintHandle);
             }
-            cachedImage = -1;
+            cachedPaintHandle = -1;
         }
+        cachedPaint = SolidPaint(TRANSPARENT_BLACK);
+        dirty = true;
     }
 
     void CanvasGradient::AddColorStop(const Napi::CallbackInfo& info)
     {
         const auto offset = info[0].As<Napi::Number>().FloatValue();
+        if (!std::isfinite(offset) || offset < 0.0f || offset > 1.0f)
+        {
+            throw Napi::RangeError::New(info.Env(), "CanvasGradient.addColorStop offset must be a finite number between 0 and 1.");
+        }
 
         std::string colorString{ info[1].As<Napi::String>() };
         const auto color = StringToColor(info.Env(), colorString);
@@ -147,211 +199,77 @@ namespace Babylon::Polyfills::Internal
         dirty = true;
     }
 
-    int CanvasGradient::LinearGradientStops(LVGColorTransform* x)
+    NVGpaint CanvasGradient::Paint(uint32_t canvasWidth, uint32_t canvasHeight)
     {
-        size_t nstops = colors.size();
-        if (!nstops)
-        {
-            return 0;
-        }
-        uint32_t data[GRADIENT_SAMPLES_L];
-        int stopIndex{};
-        std::vector<ColorStop> colorStops(nstops);
-        for (auto& stop : colors)
-        {
-            colorStops[stopIndex++] = { stop.first, stop.second };
-        }
-        if (colorStops[0].offset > 0.0f)
-        {
-            NVGcolor s0 = transformColor(colorStops[0].color, x);
-            gradientSpan(data, s0, s0, 0.0f, colorStops[0].offset);
-        }
-        for (unsigned i = 0; i < (nstops - 1); i++)
-        {
-            gradientSpan(data, transformColor(colorStops[i].color, x),
-                transformColor(colorStops[i + 1].color, x),
-                colorStops[i].offset,
-                colorStops[i + 1].offset);
-        }
-        if (colorStops[nstops - 1].offset < 1.0f)
-        {
-            NVGcolor s0 = transformColor(colorStops[nstops - 1].color, x);
-            gradientSpan(data, s0, s0, colorStops[nstops - 1].offset, 1.0f);
-        }
-        return nvgCreateImageRGBA(*context.lock(), GRADIENT_SAMPLES_L, 1, 0, (unsigned char*)data);
+        UpdateCache(canvasWidth, canvasHeight);
+        return cachedPaint;
     }
 
-    NVGcolor lerpColor(NVGcolor color0, NVGcolor color1, float offset0, float offset1, float g)
+    NVGcolor CanvasGradient::SampleColor(float x, float y) const
     {
-        NVGcolor dst;
-        float den = std::max(0.00001f, offset1 - offset0);
-        dst.r = color0.r + (color1.r - color0.r) * (g - offset0) / den;
-        dst.g = color0.g + (color1.g - color0.g) * (g - offset0) / den;
-        dst.b = color0.b + (color1.b - color0.b) * (g - offset0) / den;
-        dst.a = color0.a + (color1.a - color0.a) * (g - offset0) / den;
-        dst = nvgRGBAf(std::max(0.0f, std::min(dst.r, 1.0f)), std::max(0.0f, std::min(dst.g, 1.0f)), std::max(0.0f, std::min(dst.b, 1.0f)), std::max(0.0f, std::min(dst.a, 1.0f)));
-        return dst;
+        if (colors.empty())
+        {
+            return TRANSPARENT_BLACK;
+        }
+
+        const auto offset = gradientType == GradientType::Linear ?
+            LinearOffset(x + 0.5f, y + 0.5f, x0, y0, x1, y1) :
+            RadialOffset(x + 0.5f, y + 0.5f, x0, y0, std::max(r0, 0.0f), x1, y1, std::max(r1, 0.0f));
+
+        auto next = colors.lower_bound(offset);
+        if (next == colors.begin())
+        {
+            return next->second;
+        }
+        if (next == colors.end())
+        {
+            return colors.rbegin()->second;
+        }
+
+        const auto previous = std::prev(next);
+        const auto span = std::max(next->first - previous->first, std::numeric_limits<float>::epsilon());
+        return LerpColor(previous->second, next->second, (offset - previous->first) / span);
     }
 
-    void calcStops(const std::vector<ColorStop>& gradient, LVGColorTransform* x, NVGcolor* color0, NVGcolor* color1, float* stop0, float* stop1, float g)
+    void CanvasGradient::UpdateCache(uint32_t canvasWidth, uint32_t canvasHeight)
     {
-        const float* s0{};
-        const float* s1{};
-        for (size_t i = 0; i < gradient.size() && !s1; i++)
-        {
-            const float* curr = &gradient[i].offset;
-            if (g >= curr[0])
-            {
-                s0 = curr;
-                *color0 = transformColor(gradient[i].color, x);
-            }
-            else if (s0 && g <= curr[0])
-            {
-                s1 = curr;
-                *color1 = transformColor(gradient[i].color, x);
-            }
-        }
-        if (!s0)
-        {
-            s0 = &gradient[0].offset;
-            *color0 = transformColor(gradient[0].color, x);
-        }
-        if (!s1)
-        {
-            s1 = &gradient[gradient.size() - 1].offset;
-            *color1 = transformColor(gradient[gradient.size() - 1].color, x);
-        }
-        *stop0 = s0[0];
-        *stop1 = s1[0];
-    }
-
-    int CanvasGradient::RadialGradientStops(LVGColorTransform* cxform)
-    {
-        const int width = GRADIENT_SAMPLES_R, height = GRADIENT_SAMPLES_R;
-        uint32_t* image = (unsigned int*)malloc(width * height * sizeof(uint32_t));
-        static const int SPREAD_PAD = 0;
-        static const int SPREAD_REPEAT = 1;
-        static const int SPREAD_REFLECT = 2;
-
-        size_t nstops = colors.size();
-        int stopIndex{};
-        std::vector<ColorStop> colorStops(nstops);
-        for (auto& stop : colors)
-        {
-            colorStops[stopIndex++] = { stop.first, stop.second };
-        }
-        int spreadMode = 0;
-
-        float fxn = width / 2;
-        float fyn = height / 2;
-        float fxp = 0;
-        float fyp = 0;
-        float rn = width / 2 - 1.0001f;
-        float denominator = (rn * rn) - (fxp * fxp + fyp * fyp);
-
-        for (int x = 0; x < width; x++)
-        {
-            float dx = x - fxn;
-            for (int y = 0; y < height; y++)
-            {
-                float dy = y - fyn;
-
-                float numerator = (dx * fxp + dy * fyp);
-                float df = dx * fyp - dy * fxp;
-                numerator += std::sqrt((rn * rn) * (dx * dx + dy * dy) - (df * df));
-                float g = numerator / denominator;
-
-                // color = c0 + (c1 - c0)(g - x0)/(x1 - x0)
-                // where c0 = stop color 0, c1 = stop color 1
-                // where x0 = stop offset 0, x1 = stop offset 1
-                NVGcolor finalcolor;
-                float stop0, stop1;
-                NVGcolor color0, color1;
-
-                if (spreadMode == SPREAD_PAD)
-                {
-                    if (g < 0.0f)
-                    {
-                        finalcolor = transformColor(colorStops[0].color, cxform);
-                    }
-                    else if (g > 1.0f)
-                    {
-                        finalcolor = transformColor(colorStops[nstops - 1].color, cxform);
-                    }
-                    else
-                    {
-                        calcStops(colorStops, cxform, &color0, &color1, &stop0, &stop1, g);
-                        finalcolor = lerpColor(color0, color1, stop0, stop1, g);
-                    }
-                }
-                else
-                {
-                    int w = (int)std::fabs(g);
-                    if (spreadMode == SPREAD_REPEAT)
-                    {
-                        if (g < 0)
-                        {
-                            g = 1 - (std::fabs(g) - w);
-                        }
-                        else
-                        {
-                            g = g - w;
-                        }
-                    }
-                    else if (spreadMode == SPREAD_REFLECT)
-                    {
-                        if (g < 0)
-                        {
-                            if (w % 2 == 0)
-                            {   // even
-                                g = (std::fabs(g) - w);
-                            }
-                            else
-                            {   // odd
-                                g = (1 - (std::fabs(g) - w));
-                            }
-                        }
-                        else
-                        {
-                            if (w % 2 == 0)
-                            {   // even
-                                g = g - w;
-                            }
-                            else
-                            {   // odd
-                                g = 1 - (g - w);
-                            }
-                        }
-                    }
-                    // clamp
-                    if (g > 1)
-                        g = 1;
-                    if (g < 0)
-                        g = 0;
-                    calcStops(colorStops, cxform, &color0, &color1, &stop0, &stop1, g);
-                    finalcolor = lerpColor(color0, color1, stop0, stop1, g);
-                }
-                uint32_t color = ((uint32_t)(finalcolor.a * 255) << 24) | ((uint32_t)(finalcolor.b * 255) << 16) |
-                    ((uint32_t)(finalcolor.g * 255) << 8) | (uint32_t)(finalcolor.r * 255);
-                image[(y * width) + x] = color;
-            }
-        }
-        int img = nvgCreateImageRGBA(*context.lock(), width, height, 0, (unsigned char*)image);
-        free(image);
-        return img;
-    }
-
-    void CanvasGradient::UpdateCache()
-    {
-        if (!dirty)
+        if (!dirty && cachedCanvasWidth == canvasWidth && cachedCanvasHeight == canvasHeight)
         {
             return;
         }
-        if (cachedImage >= 0)
+
+        if (cachedPaintHandle >= 0)
         {
-            nvgDeleteImage(*context.lock(), cachedImage);
+            if (auto nvgContext = context.lock())
+            {
+                nvgDeletePaint(*nvgContext, cachedPaintHandle);
+            }
+            cachedPaintHandle = -1;
         }
-        cachedImage = gradientType == GradientType::Linear ? LinearGradientStops(nullptr) : RadialGradientStops(nullptr);
+
+        auto nvgContext = context.lock();
+        if (!nvgContext || colors.empty())
+        {
+            cachedPaint = SolidPaint(TRANSPARENT_BLACK);
+            cachedCanvasWidth = canvasWidth;
+            cachedCanvasHeight = canvasHeight;
+            dirty = false;
+            return;
+        }
+
+        std::vector<NVGgradientStop> stops;
+        stops.reserve(colors.size());
+        for (const auto& [offset, color] : colors)
+        {
+            stops.push_back({ offset, color });
+        }
+
+        cachedPaint = gradientType == GradientType::Linear ?
+            nvgLinearGradientStops(*nvgContext, static_cast<int>(canvasWidth), static_cast<int>(canvasHeight), x0, y0, x1, y1, stops.data(), stops.size()) :
+            nvgRadialGradientStops(*nvgContext, static_cast<int>(canvasWidth), static_cast<int>(canvasHeight), x0, y0, r0, x1, y1, r1, stops.data(), stops.size());
+        cachedPaintHandle = cachedPaint.kind == 2 ? cachedPaint.image : -1;
+        cachedCanvasWidth = canvasWidth;
+        cachedCanvasHeight = canvasHeight;
         dirty = false;
     }
 }

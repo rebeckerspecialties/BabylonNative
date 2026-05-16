@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <unordered_map>
 #include <variant>
+#include <vector>
 #include "Image.h"
 #include "Path2D.h"
 #include "Font.h"
@@ -127,6 +128,30 @@ namespace Babylon::Polyfills::Internal
         {
             float left, top, width, height;
         } m_rectangleClipping{};
+
+        struct DrawingState
+        {
+            Font font;
+            std::variant<std::string, CanvasGradient*> fillStyle;
+            std::variant<std::string, CanvasGradient*> strokeStyle;
+            NVGlineCap lineCap;
+            NVGlineCap lineJoin;
+            std::string filter;
+            Direction direction;
+            float miterLimit;
+            float lineWidth;
+            float globalAlpha;
+            float letterSpacing;
+            std::string shadowColor;
+            float shadowBlur;
+            float shadowOffsetX;
+            float shadowOffsetY;
+            int currentFontId;
+            bool isClipped;
+            RectangleClipping rectangleClipping;
+        };
+
+        std::vector<DrawingState> m_drawingStateStack;
 
         struct CanvasTextureImageEntry
         {
