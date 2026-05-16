@@ -399,6 +399,80 @@
         return canvasElement;
     }
 
+    const validationFontOffsetCache = {};
+
+    function parseCssPixelFontSize(font) {
+        const match = /(?:^|\s)([0-9]+(?:\.[0-9]+)?)px(?:\s|$)/.exec(String(font || ""));
+        return match ? Number(match[1]) : 16;
+    }
+
+    function fallbackFontOffset(font) {
+        const size = Math.max(1, parseCssPixelFontSize(font));
+        const ascent = size * 0.8;
+        const descent = size * 0.2;
+        return {
+            ascent: ascent,
+            height: ascent + descent,
+            descent: descent
+        };
+    }
+
+    function measureNativeFontOffset(font) {
+        const key = String(font || "");
+        if (validationFontOffsetCache[key]) {
+            return validationFontOffsetCache[key];
+        }
+
+        let canvas = null;
+        try {
+            canvas = createOffscreenCanvas(64, 64);
+            const context = canvas && typeof canvas.getContext === "function" ? canvas.getContext("2d") : null;
+            if (context && typeof context.measureText === "function") {
+                if (typeof context.font === "string") {
+                    context.font = key;
+                }
+                const metrics = context.measureText("Hg");
+                const ascent = Number(metrics && metrics.fontBoundingBoxAscent);
+                const descent = Number(metrics && metrics.fontBoundingBoxDescent);
+                const height = ascent + descent;
+                if (Number.isFinite(ascent) && Number.isFinite(descent) && Number.isFinite(height) && height > 0) {
+                    return validationFontOffsetCache[key] = {
+                        ascent: ascent,
+                        height: height,
+                        descent: descent
+                    };
+                }
+            }
+        } catch (e) {
+            // Fall through to the CSS-size approximation below.
+        } finally {
+            if (canvas && typeof canvas.dispose === "function") {
+                canvas.dispose();
+            }
+        }
+
+        return validationFontOffsetCache[key] = fallbackFontOffset(key);
+    }
+
+    function installNativeFontOffsetShim(engine) {
+        if (!engine || engine.__nativeValidationFontOffsetInstalled) {
+            return;
+        }
+
+        const originalGetFontOffset = typeof engine.getFontOffset === "function" ? engine.getFontOffset : null;
+        engine.getFontOffset = function (font) {
+            try {
+                return measureNativeFontOffset(font);
+            } catch (e) {
+                if (originalGetFontOffset) {
+                    return originalGetFontOffset.apply(this, arguments);
+                }
+                return fallbackFontOffset(font);
+            }
+        };
+        engine.__nativeValidationFontOffsetInstalled = true;
+    }
+
     function createValidationElement(type) {
         const tag = String(type).toLowerCase();
         if (tag === "canvas") {
@@ -1893,6 +1967,7 @@ fragmentOutputs.color=color;
 
     const validationEngine = await createValidationEngineAsync();
     const engine = validationEngine.engine;
+    installNativeFontOffsetShim(engine);
     engine.getCaps().parallelShaderCompile = undefined;
     installEffectPreparationDiagnostics(engine);
     installWebGPUPreviousWorldBufferFrameOrderShim(engine);
@@ -1970,7 +2045,7 @@ fragmentOutputs.color=color;
             }
 
             if (differencesCount === 0) {
-                console.log(`First pixel off at ${index}: Value: (${renderData[index]}, ${renderData[index + 1]}, ${renderData[index] + 2}) - Expected: (${referenceData[index]}, ${referenceData[index + 1]}, ${referenceData[index + 2]}) `);
+                console.log(`First pixel off at ${index}: Value: (${renderData[index]}, ${renderData[index + 1]}, ${renderData[index + 2]}) - Expected: (${referenceData[index]}, ${referenceData[index + 1]}, ${referenceData[index + 2]}) `);
             }
 
             referenceData[index] = 255;

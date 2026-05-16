@@ -40,6 +40,12 @@ typedef struct NVGpaint
     NVGcolor outerColor;
 } NVGpaint;
 
+typedef struct NVGgradientStop
+{
+    float offset;
+    NVGcolor color;
+} NVGgradientStop;
+
 typedef enum NVGwinding
 {
     NVG_CCW = 1,
@@ -153,7 +159,10 @@ void nvgStroke(NVGcontext* ctx);
 int nvgCreateImageRGBA(NVGcontext* ctx, int w, int h, int imageFlags, const unsigned char* data);
 int nvgCreateImageFromNativeTexture(NVGcontext* ctx, const void* nativeTexture, int w, int h, int imageFlags);
 void nvgDeleteImage(NVGcontext* ctx, int image);
+void nvgDeletePaint(NVGcontext* ctx, int paint);
 NVGpaint nvgImagePattern(NVGcontext* ctx, float ox, float oy, float ex, float ey, float angle, int image, float alpha);
+NVGpaint nvgLinearGradientStops(NVGcontext* ctx, int canvasWidth, int canvasHeight, float x0, float y0, float x1, float y1, const NVGgradientStop* stops, size_t stopCount);
+NVGpaint nvgRadialGradientStops(NVGcontext* ctx, int canvasWidth, int canvasHeight, float x0, float y0, float r0, float x1, float y1, float r1, const NVGgradientStop* stops, size_t stopCount);
 const void* nvgGetRenderTexture(NVGcontext* ctx);
 
 #ifdef __cplusplus
