@@ -27,10 +27,23 @@ Those bundle files are local validation inputs and may be ignored by git; the du
 
 ## Current Screenshot Test State
 
-- GUI3D now validates through real Babylon.js WGSL paths, not the old validation shim:
+- GUI3D now compiles through real Babylon.js WGSL paths, not the old validation shim:
   - `26` GUI3D SpherePanel
-  - `176` GUI Slate
   - `177` GUI Near Menu
+- `176` GUI Slate is still not visually accepted. The native screenshot diff is
+  concentrated in the slate header/top-right controls: `377` pixels
+  (`0.157%`) differ at threshold `25`, and `renderCount=120/240` produced the
+  same result. Keep `errorRatio: 0.1` so this remains an automated failure
+  instead of a manual-inspection miss.
+- Browser visual tests now imported into the native catalog:
+  - `Texture Repetition - Standard Material` currently passes natively with
+    `2` differing pixels.
+  - `Texture Repetition - PBR Material` currently has a real native mismatch
+    (`7,808` pixels, about `3.25%`), so its native `errorRatio` is tightened to
+    `1.0` to keep it failing until root-caused.
+- `Lighting Volume` was force-run with NativeWebGPU and only differed by
+  `22` pixels; do not tighten it without new visual evidence of missing
+  semantic content.
 - Refraction and material-plugin coverage now has useful NativeWebGPU signal:
   - `131` Simple refraction
   - `249` PBR refraction
@@ -63,6 +76,13 @@ Focused screenshot smoke after Babylon.js/WebGPU material changes:
 
 ```sh
 ./build_wgpu_29_asan_ubsan/Apps/Playground/Playground.app/Contents/MacOS/Playground --test-index 26,176,177,131,249,314,315,337,376,656 --save-results true
+```
+
+Failure-driving checks for the current visual TODOs:
+
+```sh
+./build_wgpu_29_asan_ubsan/Apps/Playground/Playground.app/Contents/MacOS/Playground --test-index 176 --once --save-results true
+./build_wgpu_29_asan_ubsan/Apps/Playground/Playground.app/Contents/MacOS/Playground --test "Texture Repetition - PBR Material" --once --save-results true
 ```
 
 JavaScript unit sweep:

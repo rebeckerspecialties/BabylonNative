@@ -469,6 +469,35 @@
   - ThreadSanitizer: `ctest --test-dir build_wgpu_29_tsan -R UnitTests`
     passed and `NativeWebGPUAsyncTests` passed with
     `TSAN_OPTIONS=halt_on_error=1`.
+- macOS NativeWebGPU screenshot evidence from the ASan+UBSan Playground
+  (`build_wgpu_29_asan_ubsan`, Apple M4 Max Metal backend, May 16, 2026):
+  - `GUI Slate` previously passed only because `errorRatio: 0.25` allowed the
+    `377`-pixel diff (`0.157%`). Magnified crops show the slate header and
+    top-right controls are materially dimmer than the reference. Re-running
+    with temporary `renderCount=120` and `renderCount=240` produced the same
+    `377`-pixel diff, so this is not a frame-wait issue. The config now uses
+    `errorRatio: 0.1` so the visual mismatch fails automatically.
+  - `Texture Repetition - Standard Material` was imported from the Babylon.js
+    visual catalog with its reference image and passed natively with only
+    `2` differing pixels.
+  - `Texture Repetition - PBR Material` was imported from the Babylon.js
+    visual catalog with its reference image. NativeWebGPU produced `7,808`
+    differing pixels, about `3.25%`, under the upstream browser-side
+    `errorRatio: 7.5`; the native config now uses `errorRatio: 1.0` so this
+    remains a failure-driving test.
+  - `Lighting Volume` was force-run despite its existing native quarantine and
+    differed by only `22` pixels. No clear semantic missing-content issue was
+    found in the current native result, so its threshold was not tightened.
+  - Other nearby force-run results: `Default pipeline` passed with `1`
+    differing pixel, and `Prepass SSAO + default pipeline` passed with `0`
+    differing pixels, so their old native quarantine notes are likely stale.
+  - `Fluid rendering particle system` still fails with a real NativeWebGPU
+    validation issue: `wgpu` rejects binding
+    `RenderPipeline_nooutput_depth32float_samples1_textureState1` because the
+    render pass and render pipeline color attachment formats are incompatible.
+  - `GLTF Serializer un/compressed texture roundtrip` timed out after `120s`;
+    the first actionable symptom is KTX2 transcoding trying to load WASM via
+    `fetch`, which is not currently available in the native JS environment.
 - Device validation status:
   - `devicectl list devices` currently reports the requested iPhone XS entry as
     `unavailable` (`C7A1D5AD-C89D-5E03-99B9-5E65EEC30486`). The visible iPhone XS
@@ -476,10 +505,11 @@
   - `adb devices` reports no running Android devices. The API 31 Vulkan AVD
     exists as `BN_API_31_GA_VK`, but the visible Android smoke run has not been
     completed in this pass.
-  - The current upstream screenshot comparison harness
-    (`Apps/Playground/Scripts/validation_native.js`) still targets
-    `BABYLON.NativeEngine()`, not the WebGPU engine path, so the screenshot
-    comparison suite is not yet a valid WebGPU-path acceptance signal.
+  - The macOS Playground validation path now loads
+    `validation_webgpu_native.js` before `validation_native.js` for CLI
+    validation intent, so filtered screenshot runs are a useful NativeWebGPU
+    diagnostic signal. The catalog still contains many legacy quarantine notes
+    that must be rechecked as WebGPU coverage improves.
 
 ## Current Spike Reality (as of this branch)
 - `Core/GraphicsWgpu/Rust/src/lib.rs` is now the single GraphicsWgpu Rust
@@ -532,6 +562,15 @@
 - [ ] Windows validation snapshot — no Win32 D3D12 data in current results.
 - [ ] Vulkan-backend CI coverage on Windows (currently D3D12 only).
 - [ ] Android runtime test automation (currently commented out in CI).
+- [ ] Fix `GUI Slate` NativeWebGPU header/control opacity mismatch now exposed
+  by `errorRatio: 0.1`.
+- [ ] Fix `Texture Repetition - PBR Material` NativeWebGPU mismatch now exposed
+  by `errorRatio: 1.0`.
+- [ ] Add native `fetch` / KTX2 transcoder loading support or otherwise provide
+  a browser-compatible path for `GLTF Serializer un/compressed texture
+  roundtrip`.
+- [ ] Fix depth/no-color render-pass compatibility for `Fluid rendering
+  particle system`.
 
 ## Known API / Fidelity Gaps
 | Area | Gap | Severity |
