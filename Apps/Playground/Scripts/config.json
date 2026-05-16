@@ -1146,7 +1146,7 @@
             "excludeFromAutomaticTesting": true,
             "reason": "Pixel comparison fails (more than 20% pixels differ)",
             "includeInNativeWebGPU": true,
-            "errorRatio": 0.25,
+            "errorRatio": 0.1,
             "referenceImage": "guiSlate.png"
         },
         {
@@ -4273,6 +4273,23 @@
             "excludeFromAutomaticTesting": true,
             "reason": "Pixel comparison fails (more than 20% pixels differ)",
             "referenceImage": "Lighting-Volume.png"
+        },
+        {
+            "title": "Texture Repetition - Standard Material",
+            "playgroundId": "#ESP440#0",
+            "renderCount": 1,
+            "referenceImage": "texture-repetition-standard-material.png",
+            "excludedEngines": ["webgl1"],
+            "dependsOn": ["Materials", "Textures"]
+        },
+        {
+            "title": "Texture Repetition - PBR Material",
+            "playgroundId": "#6EPUUH#0",
+            "renderCount": 1,
+            "errorRatio": 1.0,
+            "referenceImage": "texture-repetition-pbr-material.png",
+            "excludedEngines": ["webgl1"],
+            "dependsOn": ["PBR", "Textures"]
         },
         {
             "title": "Havok FloatingOrigin Multi-Region",
