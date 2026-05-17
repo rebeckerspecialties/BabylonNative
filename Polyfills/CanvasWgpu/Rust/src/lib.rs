@@ -86,6 +86,7 @@ struct Backend {
     height: u32,
     dpi: f32,
     current_path: Path,
+    current_path_has_non_translation_transform: bool,
     fill_paint: Paint,
     stroke_paint: Paint,
     stroke_width: f32,
@@ -373,6 +374,7 @@ impl Backend {
             height: height.max(1),
             dpi,
             current_path: Path::new(),
+            current_path_has_non_translation_transform: false,
             fill_paint,
             stroke_paint,
             stroke_width: 1.0,
@@ -586,12 +588,21 @@ impl Backend {
         Self::transform_point(self.canvas.transform(), x, y)
     }
 
+    fn note_path_transform(&mut self, transform: Transform2D) {
+        let Transform2D([a, b, c, d, ..]) = transform;
+        if (a - 1.0).abs() >= 1e-3 || b.abs() >= 1e-3 || c.abs() >= 1e-3 || (d - 1.0).abs() >= 1e-3
+        {
+            self.current_path_has_non_translation_transform = true;
+        }
+    }
+
     fn append_transformed_path(
         &mut self,
         path: &Path,
         transform: Transform2D,
         connect_first_move: bool,
     ) {
+        self.note_path_transform(transform);
         let mut first = true;
         for verb in path.verbs() {
             match verb {
@@ -688,6 +699,8 @@ impl Backend {
     fn fill_current_device_path(&mut self) {
         self.canvas.save();
         self.canvas.reset_transform();
+        self.current_path
+            .set_reduced_fill_fringe(self.current_path_has_non_translation_transform);
 
         if self.filter_blur_sigma <= f32::EPSILON {
             self.canvas.fill_path(&self.current_path, &self.fill_paint);
@@ -705,6 +718,7 @@ impl Backend {
     fn stroke_current_device_path(&mut self) {
         self.canvas.save();
         self.canvas.reset_transform();
+        self.current_path.set_reduced_fill_fringe(false);
 
         if self.filter_blur_sigma <= f32::EPSILON {
             self.canvas
@@ -1001,8 +1015,36 @@ pub extern "C" fn nvgIntersectScissor(ctx: *mut NVGcontext, x: f32, y: f32, w: f
 }
 
 #[no_mangle]
+pub extern "C" fn nvgRoundedScissor(ctx: *mut NVGcontext, x: f32, y: f32, w: f32, h: f32, r: f32) {
+    with_ctx_mut(ctx, (), |backend| {
+        backend
+            .canvas
+            .rounded_scissor(x, y, w.max(0.0), h.max(0.0), r.max(0.0))
+    });
+}
+
+#[no_mangle]
+pub extern "C" fn nvgIntersectRoundedScissor(
+    ctx: *mut NVGcontext,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    r: f32,
+) {
+    with_ctx_mut(ctx, (), |backend| {
+        backend
+            .canvas
+            .intersect_rounded_scissor(x, y, w.max(0.0), h.max(0.0), r.max(0.0))
+    });
+}
+
+#[no_mangle]
 pub extern "C" fn nvgBeginPath(ctx: *mut NVGcontext) {
-    with_ctx_mut(ctx, (), |backend| backend.current_path = Path::new());
+    with_ctx_mut(ctx, (), |backend| {
+        backend.current_path = Path::new();
+        backend.current_path_has_non_translation_transform = false;
+    });
 }
 
 #[no_mangle]
@@ -1013,6 +1055,7 @@ pub extern "C" fn nvgClosePath(ctx: *mut NVGcontext) {
 #[no_mangle]
 pub extern "C" fn nvgMoveTo(ctx: *mut NVGcontext, x: f32, y: f32) {
     with_ctx_mut(ctx, (), |backend| {
+        backend.note_path_transform(backend.canvas.transform());
         let (x, y) = backend.transform_current_point(x, y);
         backend.current_path.move_to(x, y);
     });
@@ -1021,6 +1064,7 @@ pub extern "C" fn nvgMoveTo(ctx: *mut NVGcontext, x: f32, y: f32) {
 #[no_mangle]
 pub extern "C" fn nvgLineTo(ctx: *mut NVGcontext, x: f32, y: f32) {
     with_ctx_mut(ctx, (), |backend| {
+        backend.note_path_transform(backend.canvas.transform());
         let (x, y) = backend.transform_current_point(x, y);
         backend.current_path.line_to(x, y);
     });
@@ -1037,6 +1081,7 @@ pub extern "C" fn nvgBezierTo(
     y: f32,
 ) {
     with_ctx_mut(ctx, (), |backend| {
+        backend.note_path_transform(backend.canvas.transform());
         let (c1x, c1y) = backend.transform_current_point(c1x, c1y);
         let (c2x, c2y) = backend.transform_current_point(c2x, c2y);
         let (x, y) = backend.transform_current_point(x, y);
@@ -1047,6 +1092,7 @@ pub extern "C" fn nvgBezierTo(
 #[no_mangle]
 pub extern "C" fn nvgQuadTo(ctx: *mut NVGcontext, cx: f32, cy: f32, x: f32, y: f32) {
     with_ctx_mut(ctx, (), |backend| {
+        backend.note_path_transform(backend.canvas.transform());
         let (cx, cy) = backend.transform_current_point(cx, cy);
         let (x, y) = backend.transform_current_point(x, y);
         backend.current_path.quad_to(cx, cy, x, y)
@@ -1377,7 +1423,7 @@ pub extern "C" fn nvgCreateImageFromNativeTexture(
             native_handle.height
         }
         .max(1) as usize;
-        let info = ImageInfo::new(ImageFlags::empty(), width, height, PixelFormat::Rgba8);
+        let info = ImageInfo::new(ImageFlags::PREMULTIPLIED, width, height, PixelFormat::Rgba8);
 
         match backend
             .canvas
