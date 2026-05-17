@@ -75,6 +75,21 @@
         return canvas;
     }
 
+    async function readCanvasPixel(source, width, height, x, y) {
+        expect(typeof navigator.gpu._testReadTexturePixel === "function", "texture readback test hook missing");
+
+        var adapter = await navigator.gpu.requestAdapter();
+        var device = await adapter.requestDevice();
+        var texture = device.createTexture({
+            size: [width, height, 1],
+            format: "rgba8unorm",
+            usage: GPUTextureUsage.COPY_SRC | GPUTextureUsage.COPY_DST | GPUTextureUsage.TEXTURE_BINDING
+        });
+        device.queue.copyExternalImageToTexture({ source: source }, { texture: texture }, { width: width, height: height });
+        await device.queue.onSubmittedWorkDone();
+        return navigator.gpu._testReadTexturePixel(texture, x, y);
+    }
+
     function getUnsupportedNativeWebGPUEffectMessage(effect, context) {
         if (!effect || !effect._engine || !effect._engine.isWebGPU || effect._shaderLanguage !== 0) {
             return "";
@@ -195,6 +210,37 @@
             await device.queue.onSubmittedWorkDone();
 
             expectPixel(navigator.gpu._testReadTexturePixel(texture, 1, 1), [0, 255, 0, 255], "CanvasWgpu 2D upload should include pre-flush draw commands");
+        }],
+        ["CanvasGradient renders into CanvasWgpu WebGPU uploads", async function () {
+            var linear = new _native.Canvas();
+            linear.width = 8;
+            linear.height = 4;
+            var linearContext = linear.getContext("2d");
+            var linearGradient = linearContext.createLinearGradient(0, 0, 8, 0);
+            linearGradient.addColorStop(0, "hsl(0, 100%, 50%)");
+            linearGradient.addColorStop(0.49, "hsl(0, 100%, 50%)");
+            linearGradient.addColorStop(0.51, "hsl(240, 100%, 50%)");
+            linearGradient.addColorStop(1, "hsl(240, 100%, 50%)");
+            linearContext.fillStyle = linearGradient;
+            linearContext.fillRect(0, 0, 8, 4);
+
+            expectPixel(await readCanvasPixel(linear, 8, 4, 1, 2), [255, 0, 0, 255], "linear gradient left stop");
+            expectPixel(await readCanvasPixel(linear, 8, 4, 6, 2), [0, 0, 255, 255], "linear gradient right stop");
+
+            var radial = new _native.Canvas();
+            radial.width = 8;
+            radial.height = 8;
+            var radialContext = radial.getContext("2d");
+            var radialGradient = radialContext.createRadialGradient(4, 4, 0, 4, 4, 4);
+            radialGradient.addColorStop(0, "hsla(120, 100%, 50%, 1)");
+            radialGradient.addColorStop(0.49, "hsla(120, 100%, 50%, 1)");
+            radialGradient.addColorStop(0.51, "rgba(0, 0, 0, 255)");
+            radialGradient.addColorStop(1, "rgba(0, 0, 0, 255)");
+            radialContext.fillStyle = radialGradient;
+            radialContext.fillRect(0, 0, 8, 8);
+
+            expectPixel(await readCanvasPixel(radial, 8, 8, 4, 4), [0, 255, 0, 255], "radial gradient center stop");
+            expectPixel(await readCanvasPixel(radial, 8, 8, 0, 0), [0, 0, 0, 255], "radial gradient outer stop");
         }],
         ["Canvas.parseColor rejects malformed colors", function () {
             [
@@ -366,6 +412,64 @@
             await device.queue.onSubmittedWorkDone();
 
             expectPixel(navigator.gpu._testReadTexturePixel(texture, 4, 4), [0, 0, 255, 255], "transparent red fragment should blend over blue without writing red");
+        }],
+        ["WebGPU depth-only render pass preserves null color attachments", async function () {
+            expect(typeof navigator.gpu._testResetDebugStats === "function", "debug stat reset hook missing");
+            expect(typeof navigator.gpu._backendStats === "function", "backend stats hook missing");
+
+            navigator.gpu._testResetDebugStats();
+            var adapter = await navigator.gpu.requestAdapter();
+            var device = await adapter.requestDevice();
+            var depth = device.createTexture({
+                size: [8, 8, 1],
+                format: "depth32float",
+                usage: GPUTextureUsage.RENDER_ATTACHMENT
+            });
+            var shader = device.createShaderModule({
+                code:
+                    "@vertex fn vsMain(@builtin(vertex_index) vertexIndex : u32) -> @builtin(position) vec4f {\n" +
+                    "  var positions = array<vec2f, 3>(vec2f(-1.0, -1.0), vec2f(3.0, -1.0), vec2f(-1.0, 3.0));\n" +
+                    "  return vec4f(positions[vertexIndex], 0.0, 1.0);\n" +
+                    "}\n" +
+                    "@fragment fn fsMain() {}\n"
+            });
+            var pipeline = device.createRenderPipeline({
+                layout: "auto",
+                vertex: {
+                    module: shader,
+                    entryPoint: "vsMain"
+                },
+                fragment: {
+                    module: shader,
+                    entryPoint: "fsMain",
+                    targets: [null]
+                },
+                primitive: { topology: "triangle-list" },
+                depthStencil: {
+                    format: "depth32float",
+                    depthWriteEnabled: true,
+                    depthCompare: "less"
+                }
+            });
+
+            var encoder = device.createCommandEncoder();
+            var pass = encoder.beginRenderPass({
+                colorAttachments: [null],
+                depthStencilAttachment: {
+                    view: depth.createView(),
+                    depthLoadOp: "clear",
+                    depthClearValue: 1,
+                    depthStoreOp: "store"
+                }
+            });
+            pass.setPipeline(pipeline);
+            pass.draw(3);
+            pass.end();
+            device.queue.submit([encoder.finish()]);
+            await device.queue.onSubmittedWorkDone();
+
+            var lastError = navigator.gpu._backendStats().lastError;
+            expect(!lastError, "depth-only null color attachment pass produced backend error: " + lastError);
         }],
         ["BabylonJS WebGPU createEffect reports GLSL shader paths actionably", async function () {
             expect(typeof BABYLON === "object", "BABYLON missing");
