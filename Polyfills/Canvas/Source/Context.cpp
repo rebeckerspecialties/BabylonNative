@@ -2,6 +2,7 @@
 #include <map>
 #include <algorithm>
 #include <cassert>
+#include <cmath>
 #include <regex>
 
 #ifdef __GNUC__
@@ -84,7 +85,7 @@ namespace Babylon::Polyfills::Internal
                 InstanceAccessor("letterSpacing", &Context::GetLetterSpacing, &Context::SetLetterSpacing),
                 InstanceAccessor("strokeStyle", &Context::GetStrokeStyle, &Context::SetStrokeStyle),
                 InstanceAccessor("fillStyle", &Context::GetFillStyle, &Context::SetFillStyle),
-                InstanceAccessor("globalAlpha", nullptr, &Context::SetGlobalAlpha),
+                InstanceAccessor("globalAlpha", &Context::GetGlobalAlpha, &Context::SetGlobalAlpha),
                 InstanceAccessor("shadowColor", &Context::GetShadowColor, &Context::SetShadowColor),
                 InstanceAccessor("shadowBlur", &Context::GetShadowBlur, &Context::SetShadowBlur),
                 InstanceAccessor("shadowOffsetX", &Context::GetShadowOffsetX, &Context::SetShadowOffsetX),
@@ -278,7 +279,7 @@ namespace Babylon::Polyfills::Internal
         // Track our wrapper-side fillStyle/strokeStyle alongside the nvg state stack so that
         // ctx.restore() correctly rewinds them — otherwise FillText/BindFillStyle would re-bind
         // a stale color from after a fillStyle change that nvg has since popped.
-        m_savedStyles.push_back({m_fillStyle, m_strokeStyle});
+        m_savedStyles.push_back({m_fillStyle, m_strokeStyle, m_globalAlpha});
     }
 
     void Context::Restore(const Napi::CallbackInfo&)
@@ -289,6 +290,7 @@ namespace Babylon::Polyfills::Internal
             const auto& saved = m_savedStyles.back();
             m_fillStyle = saved.fillStyle;
             m_strokeStyle = saved.strokeStyle;
+            m_globalAlpha = saved.globalAlpha;
             m_savedStyles.pop_back();
         }
         m_isClipped = false;
@@ -1046,10 +1048,22 @@ namespace Babylon::Polyfills::Internal
         nvgTextLetterSpacing(*m_nvg, m_letterSpacing);
     }
 
+    Napi::Value Context::GetGlobalAlpha(const Napi::CallbackInfo&)
+    {
+        return Napi::Value::From(Env(), m_globalAlpha);
+    }
+
     void Context::SetGlobalAlpha(const Napi::CallbackInfo& info, const Napi::Value& value)
     {
+        (void)info;
         const float alpha = value.As<Napi::Number>().FloatValue();
-        nvgGlobalAlpha(*m_nvg, alpha);
+        if (!std::isfinite(alpha) || alpha < 0.f || alpha > 1.f)
+        {
+            return;
+        }
+
+        m_globalAlpha = alpha;
+        nvgGlobalAlpha(*m_nvg, m_globalAlpha);
     }
 
     Napi::Value Context::GetShadowColor(const Napi::CallbackInfo& info)
