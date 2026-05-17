@@ -101,6 +101,9 @@ namespace Babylon::Polyfills::Internal
         void EnsureLoadedFonts();
         void EnsureFrame();
         void Flush(const Napi::CallbackInfo&);
+        void ResetCurrentPathBounds();
+        void IncludeCurrentPathPoint(float x, float y);
+        void IncludeCurrentPathRect(float left, float top, float width, float height);
 
         NativeCanvas* m_canvas;
         // Compatibility nvg* context handle backed by CanvasWgpu Rust/femtovg.
@@ -135,6 +138,8 @@ namespace Babylon::Polyfills::Internal
         {
             float left, top, width, height;
         } m_rectangleClipping{};
+        RectangleClipping m_currentPathBounds{};
+        bool m_hasCurrentPathBounds{false};
 
         struct DrawingState
         {
@@ -158,6 +163,8 @@ namespace Babylon::Polyfills::Internal
             int currentFontId;
             bool isClipped;
             RectangleClipping rectangleClipping;
+            RectangleClipping currentPathBounds;
+            bool hasCurrentPathBounds;
         };
 
         std::vector<DrawingState> m_drawingStateStack;

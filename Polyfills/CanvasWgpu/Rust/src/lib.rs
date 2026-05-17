@@ -963,6 +963,15 @@ pub extern "C" fn nvgScissor(ctx: *mut NVGcontext, x: f32, y: f32, w: f32, h: f3
 }
 
 #[no_mangle]
+pub extern "C" fn nvgIntersectScissor(ctx: *mut NVGcontext, x: f32, y: f32, w: f32, h: f32) {
+    with_ctx_mut(ctx, (), |backend| {
+        backend
+            .canvas
+            .intersect_scissor(x, y, w.max(0.0), h.max(0.0))
+    });
+}
+
+#[no_mangle]
 pub extern "C" fn nvgBeginPath(ctx: *mut NVGcontext) {
     with_ctx_mut(ctx, (), |backend| backend.current_path = Path::new());
 }
