@@ -2334,51 +2334,57 @@ fragmentOutputs.color=color;
                 BABYLON.Tools.BaseUrl = config.root + test.specificRoot;
             }
 
-            const request = new XMLHttpRequest();
-            request.open('GET', config.root + test.scriptToRun, true);
+            const scriptUrl = test.scriptToRun.indexOf("://") >= 0 ? test.scriptToRun : config.root + test.scriptToRun;
 
-            request.onreadystatechange = function () {
-                if (request.readyState === 4) {
-                    try {
-                        request.onreadystatechange = null;
+            BABYLON.Tools.LoadFile(scriptUrl, function (responseText) {
+                try {
+                    let scriptToRun = responseText.replace(/..\/..\/assets\//g, config.root + "/Assets/");
+                    scriptToRun = scriptToRun.replace(/..\/..\/Assets\//g, config.root + "/Assets/");
+                    scriptToRun = scriptToRun.replace(/\/assets\//g, config.root + "/Assets/");
 
-                        let scriptToRun = request.responseText.replace(/..\/..\/assets\//g, config.root + "/Assets/");
-                        scriptToRun = scriptToRun.replace(/..\/..\/Assets\//g, config.root + "/Assets/");
-                        scriptToRun = scriptToRun.replace(/\/assets\//g, config.root + "/Assets/");
-
-                        if (test.replace) {
-                            const split = test.replace.split(",");
-                            for (let i = 0; i < split.length; i += 2) {
-                                const source = split[i].trim();
-                                const destination = split[i + 1].trim();
-                                scriptToRun = scriptToRun.replace(source, destination);
-                            }
+                    if (test.replace) {
+                        const split = test.replace.split(",");
+                        for (let i = 0; i < split.length; i += 2) {
+                            const source = split[i].trim();
+                            const destination = split[i + 1].trim();
+                            scriptToRun = scriptToRun.replace(source, destination);
                         }
+                    }
 
-                        if (test.replaceUrl) {
-                            const split = test.replaceUrl.split(",");
-                            for (let i = 0; i < split.length; i++) {
-                                const source = split[i].trim();
-                                const regex = new RegExp(source, "g");
-                                scriptToRun = scriptToRun.replace(regex, config.root + test.rootPath + source);
-                            }
+                    if (test.replaceUrl) {
+                        const split = test.replaceUrl.split(",");
+                        for (let i = 0; i < split.length; i++) {
+                            const source = split[i].trim();
+                            const regex = new RegExp(source, "g");
+                            scriptToRun = scriptToRun.replace(regex, config.root + test.rootPath + source);
                         }
+                    }
 
-                        currentScene = eval(scriptToRun + test.functionToCall + "(engine)");
+                    currentScene = eval(scriptToRun + test.functionToCall + "(engine)");
+                    if (currentScene && currentScene.then) {
+                        currentScene.then(function (scene) {
+                            currentScene = scene;
+                            processCurrentScene(test, referenceImage, done, compareFunction);
+                        }).catch(function (e) {
+                            console.error(e);
+                            failTest(done);
+                        });
+                    } else {
                         processCurrentScene(test, referenceImage, done, compareFunction);
                     }
-                    catch (e) {
-                        console.error(e);
-                        failTest(done);
-                    }
                 }
-            };
-            request.onerror = function () {
-                console.error("Network error during test load.");
+                catch (e) {
+                    console.error(e);
+                    failTest(done);
+                }
+            }, undefined, undefined, false, function (request, exception) {
+                const status = request ? (request.status + " " + request.statusText) : "no response";
+                console.error("Failed to load test script " + scriptUrl + ": " + status);
+                if (exception) {
+                    console.error(exception);
+                }
                 failTest(done);
-            }
-
-            request.send(null);
+            });
         }
     }
     function runTest(index, done) {
