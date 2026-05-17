@@ -51,6 +51,8 @@ struct StyleState {
     line_cap: LineCap,
     line_join: LineJoin,
     miter_limit: f32,
+    line_dash: Vec<f32>,
+    line_dash_offset: f32,
     font_size: f32,
     letter_spacing: f32,
     current_font_handle: i32,
@@ -90,6 +92,8 @@ struct Backend {
     line_cap: LineCap,
     line_join: LineJoin,
     miter_limit: f32,
+    line_dash: Vec<f32>,
+    line_dash_offset: f32,
     font_size: f32,
     letter_spacing: f32,
     current_font_handle: i32,
@@ -363,6 +367,8 @@ impl Backend {
             line_cap: LineCap::Butt,
             line_join: LineJoin::Miter,
             miter_limit: 10.0,
+            line_dash: Vec::new(),
+            line_dash_offset: 0.0,
             font_size: 16.0,
             letter_spacing: 0.0,
             current_font_handle: -1,
@@ -522,6 +528,9 @@ impl Backend {
         self.stroke_paint.set_line_cap(self.line_cap);
         self.stroke_paint.set_line_join(self.line_join);
         self.stroke_paint.set_miter_limit(self.miter_limit.max(0.0));
+        self.stroke_paint.set_line_dash(&self.line_dash);
+        self.stroke_paint
+            .set_line_dash_offset(self.line_dash_offset);
     }
 
     fn apply_text_style(&self, paint: &mut Paint) {
@@ -707,6 +716,8 @@ impl Backend {
             line_cap: self.line_cap,
             line_join: self.line_join,
             miter_limit: self.miter_limit,
+            line_dash: self.line_dash.clone(),
+            line_dash_offset: self.line_dash_offset,
             font_size: self.font_size,
             letter_spacing: self.letter_spacing,
             current_font_handle: self.current_font_handle,
@@ -723,6 +734,8 @@ impl Backend {
             self.line_cap = style.line_cap;
             self.line_join = style.line_join;
             self.miter_limit = style.miter_limit;
+            self.line_dash = style.line_dash;
+            self.line_dash_offset = style.line_dash_offset;
             self.font_size = style.font_size;
             self.letter_spacing = style.letter_spacing;
             self.current_font_handle = style.current_font_handle;
@@ -1193,6 +1206,19 @@ pub extern "C" fn nvgLineJoin(ctx: *mut NVGcontext, join: i32) {
 pub extern "C" fn nvgMiterLimit(ctx: *mut NVGcontext, limit: f32) {
     with_ctx_mut(ctx, (), |backend| {
         backend.miter_limit = limit.max(0.0);
+        backend.apply_stroke_style();
+    });
+}
+
+#[no_mangle]
+pub extern "C" fn nvgLineDash(ctx: *mut NVGcontext, dashes: *const f32, count: usize, offset: f32) {
+    with_ctx_mut(ctx, (), |backend| {
+        backend.line_dash.clear();
+        if !dashes.is_null() && count > 0 {
+            let dashes = unsafe { slice::from_raw_parts(dashes, count) };
+            backend.line_dash.extend_from_slice(dashes);
+        }
+        backend.line_dash_offset = if offset.is_finite() { offset } else { 0.0 };
         backend.apply_stroke_style();
     });
 }

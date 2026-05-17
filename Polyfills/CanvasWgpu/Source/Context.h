@@ -54,6 +54,7 @@ namespace Babylon::Polyfills::Internal
         void DrawImage(const Napi::CallbackInfo&);
         Napi::Value GetImageData(const Napi::CallbackInfo&);
         void SetLineDash(const Napi::CallbackInfo&);
+        Napi::Value GetLineDash(const Napi::CallbackInfo&);
         void StrokeText(const Napi::CallbackInfo&);
         Napi::Value CreateLinearGradient(const Napi::CallbackInfo&);
         Napi::Value CreateRadialGradient(const Napi::CallbackInfo&);
@@ -73,6 +74,8 @@ namespace Babylon::Polyfills::Internal
         void SetLineJoin(const Napi::CallbackInfo&, const Napi::Value& value);
         Napi::Value GetMiterLimit(const Napi::CallbackInfo&);
         void SetMiterLimit(const Napi::CallbackInfo&, const Napi::Value& value);
+        Napi::Value GetLineDashOffset(const Napi::CallbackInfo&);
+        void SetLineDashOffset(const Napi::CallbackInfo&, const Napi::Value& value);
         Napi::Value GetFilter(const Napi::CallbackInfo& info);
         void SetFilter(const Napi::CallbackInfo& info, const Napi::Value& value);
         Napi::Value GetDirection(const Napi::CallbackInfo&);
@@ -92,6 +95,7 @@ namespace Babylon::Polyfills::Internal
         void SetShadowOffsetY(const Napi::CallbackInfo&, const Napi::Value& value);
         void Dispose(const Napi::CallbackInfo&);
         void Dispose();
+        void DeleteTransientImages();
         bool SetFontFaceId();
         void EnsureLoadedFonts();
         void EnsureFrame();
@@ -111,6 +115,8 @@ namespace Babylon::Polyfills::Internal
         Direction m_direction{Direction::LTR};
         float m_miterLimit{0.f};
         float m_lineWidth{0.f};
+        std::vector<float> m_lineDash{};
+        float m_lineDashOffset{0.f};
         float m_globalAlpha{1.f};
         float m_letterSpacing{0.f};
         std::string m_shadowColor{"rgba(0, 0, 0, 0)"};
@@ -140,6 +146,8 @@ namespace Babylon::Polyfills::Internal
             Direction direction;
             float miterLimit;
             float lineWidth;
+            std::vector<float> lineDash;
+            float lineDashOffset;
             float globalAlpha;
             float letterSpacing;
             std::string shadowColor;
@@ -166,6 +174,7 @@ namespace Babylon::Polyfills::Internal
 
         std::unordered_map<const NativeCanvasImage*, int> m_nvgImageIndices;
         std::unordered_map<const void*, CanvasTextureImageEntry> m_canvasTextureImageIndices;
+        std::vector<int> m_transientImageIndices;
         void BindFillStyle(const Napi::CallbackInfo& info, float left, float top, float width, float height);
         void BindStrokeStyle(const Napi::CallbackInfo& info, float left, float top, float width, float height);
         void FlushGraphicResources() override;
