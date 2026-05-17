@@ -88,7 +88,7 @@ namespace Babylon::Polyfills::Internal
                 InstanceAccessor("letterSpacing", &Context::GetLetterSpacing, &Context::SetLetterSpacing),
                 InstanceAccessor("strokeStyle", &Context::GetStrokeStyle, &Context::SetStrokeStyle),
                 InstanceAccessor("fillStyle", &Context::GetFillStyle, &Context::SetFillStyle),
-                InstanceAccessor("globalAlpha", nullptr, &Context::SetGlobalAlpha),
+                InstanceAccessor("globalAlpha", &Context::GetGlobalAlpha, &Context::SetGlobalAlpha),
                 InstanceAccessor("shadowColor", &Context::GetShadowColor, &Context::SetShadowColor),
                 InstanceAccessor("shadowBlur", &Context::GetShadowBlur, &Context::SetShadowBlur),
                 InstanceAccessor("shadowOffsetX", &Context::GetShadowOffsetX, &Context::SetShadowOffsetX),
@@ -1446,12 +1446,23 @@ namespace Babylon::Polyfills::Internal
         nvgTextLetterSpacing(*m_nvg, m_letterSpacing);
     }
 
+    Napi::Value Context::GetGlobalAlpha(const Napi::CallbackInfo&)
+    {
+        return Napi::Value::From(Env(), m_globalAlpha);
+    }
+
     void Context::SetGlobalAlpha(const Napi::CallbackInfo& info, const Napi::Value& value)
     {
         (void)info;
         EnsureFrame();
 
-        m_globalAlpha = value.As<Napi::Number>().FloatValue();
+        const float alpha = value.As<Napi::Number>().FloatValue();
+        if (!std::isfinite(alpha) || alpha < 0.f || alpha > 1.f)
+        {
+            return;
+        }
+
+        m_globalAlpha = alpha;
         nvgGlobalAlpha(*m_nvg, m_globalAlpha);
     }
 

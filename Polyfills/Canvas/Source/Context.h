@@ -79,6 +79,7 @@ namespace Babylon::Polyfills::Internal
         void SetFont(const Napi::CallbackInfo&, const Napi::Value& value);
         Napi::Value GetLetterSpacing(const Napi::CallbackInfo&);
         void SetLetterSpacing(const Napi::CallbackInfo&, const Napi::Value& value);
+        Napi::Value GetGlobalAlpha(const Napi::CallbackInfo&);
         void SetGlobalAlpha(const Napi::CallbackInfo&, const Napi::Value& value);
         Napi::Value GetShadowColor(const Napi::CallbackInfo&);
         void SetShadowColor(const Napi::CallbackInfo&, const Napi::Value& value);
@@ -116,6 +117,7 @@ namespace Babylon::Polyfills::Internal
         {
             std::variant<std::string, CanvasGradient*> fillStyle;
             std::string strokeStyle;
+            float globalAlpha;
         };
         std::vector<SavedStyle> m_savedStyles;
 
