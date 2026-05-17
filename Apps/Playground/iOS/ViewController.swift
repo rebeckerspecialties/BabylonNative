@@ -6,6 +6,23 @@ class ViewController: UIViewController {
     var mtkView: MTKView!
     var xrView: MTKView!
 
+    private var isValidationRun: Bool {
+        let arguments = CommandLine.arguments
+        return arguments.contains("--test")
+            || arguments.contains("--test-index")
+            || arguments.contains("--save-results")
+            || arguments.contains("--once")
+            || arguments.contains("--include-excluded")
+    }
+
+    override var supportedInterfaceOrientations: UIInterfaceOrientationMask {
+        return isValidationRun ? .landscape : .all
+    }
+
+    override var preferredInterfaceOrientationForPresentation: UIInterfaceOrientation {
+        return .landscapeRight
+    }
+
     override func viewDidLoad() {
         super.viewDidLoad()
     }
@@ -16,6 +33,13 @@ class ViewController: UIViewController {
             let appDelegate = UIApplication.shared.delegate as? AppDelegate,
             let bridge = appDelegate._bridge
         else { return }
+
+        if isValidationRun {
+            if #available(iOS 16.0, *) {
+                setNeedsUpdateOfSupportedInterfaceOrientations()
+                view.window?.windowScene?.requestGeometryUpdate(.iOS(interfaceOrientations: .landscapeRight))
+            }
+        }
         
         setupViews()
         
