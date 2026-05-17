@@ -149,6 +149,7 @@ void nvgStrokeWidth(NVGcontext* ctx, float width);
 void nvgLineCap(NVGcontext* ctx, NVGlineCap cap);
 void nvgLineJoin(NVGcontext* ctx, NVGlineCap join);
 void nvgMiterLimit(NVGcontext* ctx, float limit);
+void nvgLineDash(NVGcontext* ctx, const float* dashes, size_t count, float offset);
 void nvgGlobalAlpha(NVGcontext* ctx, float alpha);
 void nvgGlobalCompositeOperation(NVGcontext* ctx, int op);
 void nvgSetFilterBlur(NVGcontext* ctx, float sigma);

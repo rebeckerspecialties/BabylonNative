@@ -18,5 +18,6 @@ namespace Babylon::Polyfills::Internal
 
         uint32_t m_width{};
         uint32_t m_height{};
+        Napi::Reference<Napi::Uint8Array> m_data{};
     };
 }

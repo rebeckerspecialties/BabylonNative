@@ -266,8 +266,7 @@ dependencies = [
 [[package]]
 name = "femtovg"
 version = "0.25.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e0ffe2b7481ac709026ea4c5f7168ff5f64fe75bcbf114f5d60eb7dbe21a5e08"
+source = "git+https://github.com/rebeckerspecialties/femtovg.git?branch=update-wgpu-29.0.3#8d19f80bb29a241979eb6a962c44cec5570d82c2"
 dependencies = [
  "bitflags",
  "bytemuck",
