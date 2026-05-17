@@ -102,6 +102,7 @@ static inline NVGcolor nvgRGBAf(float r, float g, float b, float a)
 }
 
 NVGcontext* nvgCreate(int flags);
+const char* nvgLastCreateError();
 void nvgDelete(NVGcontext* ctx);
 
 int nvgCreateFontMem(NVGcontext* ctx, const char* name, unsigned char* data, int size, int freeData);
