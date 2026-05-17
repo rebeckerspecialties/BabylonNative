@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <cassert>
 #include <cmath>
+#include <cstdint>
 #include <fstream>
 #include <iterator>
 #include <optional>
@@ -219,6 +220,15 @@ namespace Babylon::Polyfills::Internal
         , m_cancellationSource{std::make_shared<arcana::cancellation_source>()}
         , m_runtimeScheduler{Babylon::JsRuntime::GetFromJavaScript(info.Env())}
     {
+        if (!m_nvg || *m_nvg == nullptr)
+        {
+            const char* error = nvgLastCreateError();
+            LogNativeWarning(
+                info.Env(),
+                std::string{"CanvasWgpu failed to create a rendering context"} +
+                    (error != nullptr && error[0] != '\0' ? std::string{": "} + error : "."));
+        }
+
         // TODO: commented code doesn't compile with napi-jsi. Using non read-only property for now
         //info.This().ToObject().DefineProperty(Napi::PropertyDescriptor::Value("canvas", info[0], napi_enumerable));
         info.This().ToObject().Set("canvas", info[0]);
@@ -1088,6 +1098,12 @@ namespace Babylon::Polyfills::Internal
         const auto imageHandle = nvgCreateImageRGBA(*m_nvg, static_cast<int>(width), static_cast<int>(height), 0, bytes);
         if (imageHandle == -1)
         {
+            LogNativeWarning(
+                info.Env(),
+                    "Context2D.putImageData failed to create an intermediate image"
+                    " width=" + std::to_string(width) +
+                        " height=" + std::to_string(height) +
+                        " bytes=" + std::to_string(data.ByteLength()));
             throw Napi::Error::New(info.Env(), "Context2D.putImageData failed to create an intermediate image.");
         }
 
@@ -1209,6 +1225,13 @@ namespace Babylon::Polyfills::Internal
                     0);
                 if (imageIndex == -1)
                 {
+                    LogNativeWarning(
+                        info.Env(),
+                        "Context2D.drawImage could not import canvas source texture"
+                        " width=" + std::to_string(sourceWidth) +
+                            " height=" + std::to_string(sourceHeight) +
+                            " generation=" + std::to_string(generation) +
+                            " nativeTexture=" + std::to_string(reinterpret_cast<uintptr_t>(nativeTexture)));
                     Napi::Error::New(info.Env(), "Context2D.drawImage could not import the canvas source texture into CanvasWgpu.").ThrowAsJavaScriptException();
                     return;
                 }
