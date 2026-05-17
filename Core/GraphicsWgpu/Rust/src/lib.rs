@@ -1773,7 +1773,7 @@ mod upstream_wgpu_native {
     #[derive(Clone)]
     struct RenderPassDescriptorCommand {
         label: Option<String>,
-        color_attachments: Vec<ColorAttachmentCommand>,
+        color_attachments: Vec<Option<ColorAttachmentCommand>>,
         depth_stencil_attachment: Option<DepthStencilAttachmentCommand>,
     }
 
@@ -3496,6 +3496,7 @@ mod upstream_wgpu_native {
             if let Some(array) = descriptor.get("colorAttachments").and_then(Value::as_array) {
                 for attachment in array {
                     if attachment.is_null() {
+                        color_attachments.push(None);
                         continue;
                     }
                     let view_id = attachment
@@ -3526,14 +3527,14 @@ mod upstream_wgpu_native {
                         "discard" => wgpu::StoreOp::Discard,
                         _ => wgpu::StoreOp::Store,
                     };
-                    color_attachments.push(ColorAttachmentCommand {
+                    color_attachments.push(Some(ColorAttachmentCommand {
                         view: view.view.clone(),
                         resolve_target,
                         load,
                         store,
                         width: view.width,
                         height: view.height,
-                    });
+                    }));
                 }
             }
 
@@ -4242,7 +4243,7 @@ mod upstream_wgpu_native {
                         .color_attachments
                         .iter()
                         .map(|attachment| {
-                            Some(wgpu::RenderPassColorAttachment {
+                            attachment.as_ref().map(|attachment| wgpu::RenderPassColorAttachment {
                                 view: &attachment.view,
                                 depth_slice: None,
                                 resolve_target: attachment.resolve_target.as_ref(),
@@ -4263,8 +4264,12 @@ mod upstream_wgpu_native {
                         });
                     let render_target_extent = descriptor
                         .color_attachments
-                        .first()
-                        .map(|attachment| (attachment.width, attachment.height))
+                        .iter()
+                        .find_map(|attachment| {
+                            attachment
+                                .as_ref()
+                                .map(|attachment| (attachment.width, attachment.height))
+                        })
                         .or_else(|| {
                             descriptor
                                 .depth_stencil_attachment
