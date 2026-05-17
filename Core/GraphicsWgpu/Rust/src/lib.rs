@@ -2186,6 +2186,48 @@ mod upstream_wgpu_native {
         sign | ((exponent as u16) << 10) | (((mantissa + 0x1000) >> 13) as u16)
     }
 
+    fn premultiply_u8(value: u8, alpha: u8) -> u8 {
+        ((u32::from(value) * u32::from(alpha) + 127) / 255) as u8
+    }
+
+    fn unpremultiply_u8(value: u8, alpha: u8) -> u8 {
+        if alpha == 0 {
+            return 0;
+        }
+
+        let unpremultiplied = (u32::from(value) * 255 + u32::from(alpha) / 2) / u32::from(alpha);
+        unpremultiplied.min(255) as u8
+    }
+
+    fn convert_alpha_mode(
+        r: u8,
+        g: u8,
+        b: u8,
+        a: u8,
+        source_premultiplied_alpha: bool,
+        destination_premultiplied_alpha: bool,
+    ) -> [u8; 4] {
+        if source_premultiplied_alpha == destination_premultiplied_alpha {
+            return [r, g, b, a];
+        }
+
+        if destination_premultiplied_alpha {
+            [
+                premultiply_u8(r, a),
+                premultiply_u8(g, a),
+                premultiply_u8(b, a),
+                a,
+            ]
+        } else {
+            [
+                unpremultiply_u8(r, a),
+                unpremultiply_u8(g, a),
+                unpremultiply_u8(b, a),
+                a,
+            ]
+        }
+    }
+
     fn encode_external_image_upload(
         rgba: &[u8],
         source_width: u32,
@@ -2194,6 +2236,8 @@ mod upstream_wgpu_native {
         copy_width: u32,
         copy_height: u32,
         flip_y: bool,
+        source_premultiplied_alpha: bool,
+        destination_premultiplied_alpha: bool,
         format: wgpu::TextureFormat,
     ) -> Result<(Cow<'_, [u8]>, u32), String> {
         let source_stride = source_width as usize * 4;
@@ -2206,6 +2250,7 @@ mod upstream_wgpu_native {
             && source_origin_x == 0
             && source_origin_y == 0
             && copy_width == source_width
+            && source_premultiplied_alpha == destination_premultiplied_alpha
             && matches!(
                 format,
                 wgpu::TextureFormat::Rgba8Unorm | wgpu::TextureFormat::Rgba8UnormSrgb
@@ -2237,6 +2282,14 @@ mod upstream_wgpu_native {
                 let g = rgba[src + 1];
                 let b = rgba[src + 2];
                 let a = rgba[src + 3];
+                let [r, g, b, a] = convert_alpha_mode(
+                    r,
+                    g,
+                    b,
+                    a,
+                    source_premultiplied_alpha,
+                    destination_premultiplied_alpha,
+                );
                 match format {
                     wgpu::TextureFormat::Rgba8Unorm | wgpu::TextureFormat::Rgba8UnormSrgb => {
                         upload[dst..dst + 4].copy_from_slice(&[r, g, b, a]);
@@ -4691,6 +4744,9 @@ mod upstream_wgpu_native {
             size_json: &str,
         ) -> Result<(), String> {
             let size = parse_extent3d(&parse_json(size_json)?);
+            let destination = parse_json(destination_json)?;
+            let destination_premultiplied_alpha =
+                json_bool(&destination, "premultipliedAlpha", false);
             let mut rgba = Vec::new();
             let (width, height) = import_native_texture_rgba_into(
                 native_texture,
@@ -4698,7 +4754,6 @@ mod upstream_wgpu_native {
                 source_height.max(size.height),
                 &mut rgba,
             )?;
-            let destination = parse_json(destination_json)?;
             let texture_id = destination
                 .get("texture")
                 .and_then(native_id)
@@ -4726,6 +4781,8 @@ mod upstream_wgpu_native {
                 copy_width,
                 copy_height,
                 true,
+                true,
+                destination_premultiplied_alpha,
                 texture_format,
             )?;
             self.runtime.queue.write_texture(
@@ -4774,6 +4831,8 @@ mod upstream_wgpu_native {
 
             let size = parse_extent3d(&parse_json(size_json)?);
             let destination = parse_json(destination_json)?;
+            let destination_premultiplied_alpha =
+                json_bool(&destination, "premultipliedAlpha", false);
             let texture_id = destination
                 .get("texture")
                 .and_then(native_id)
@@ -4803,6 +4862,8 @@ mod upstream_wgpu_native {
                 copy_width,
                 copy_height,
                 flip_y,
+                false,
+                destination_premultiplied_alpha,
                 texture_format,
             )?;
             self.runtime.queue.write_texture(
