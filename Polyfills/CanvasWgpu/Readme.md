@@ -20,15 +20,15 @@ From upstream `femtovg` docs and source:
 - `femtovg` supports: path fill/stroke, line caps/joins/miter, global alpha,
   composite operations, scissor/intersect scissor, transforms, linear/radial/box
   gradients, text fill/stroke, shaping, letter spacing, and a wgpu renderer.
-- `femtovg` does **not** support: stroke dashing, path scissoring, custom shaders,
-  and 3D transforms.
+- `femtovg` does **not** support: path scissoring, custom shaders, and 3D
+  transforms.
 
 Compared to the current Canvas implementation in `Polyfills/Canvas`:
 
-- `setLineDash` is currently not implemented already.
+- `setLineDash` is implemented through femtovg dashed stroke support.
 - Shadow accessors are currently not implemented already.
-- `putImageData` is currently not implemented already.
-- `getImageData().data` currently returns zeroed data (stubbed).
+- `putImageData` is implemented for ImageData payloads created by CanvasWgpu.
+- Full canvas readback for `getImageData()` remains stubbed.
 
 Potential gaps to handle explicitly during port:
 

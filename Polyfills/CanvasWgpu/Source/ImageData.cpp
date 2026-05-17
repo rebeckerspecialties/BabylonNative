@@ -39,6 +39,10 @@ namespace Babylon::Polyfills::Internal
         auto height{info[2].As<Napi::Number>().Uint32Value()};
         m_width = width;
         m_height = height;
+        const auto size{m_width * m_height * 4};
+        auto data{Napi::Uint8Array::New(info.Env(), size)};
+        memset(data.Data(), 0, size);
+        m_data = Napi::Persistent(data);
     }
 
     Napi::Value ImageData::GetWidth(const Napi::CallbackInfo&)
@@ -59,9 +63,7 @@ namespace Babylon::Polyfills::Internal
         // buffer, map it to CPU memory, and fill the returned Uint8Array with
         // the RGBA pixel values. This is needed for any JS code that inspects
         // canvas contents (e.g. hit-testing, image processing, snapshots).
-        const auto size{m_width * m_height * 4};
-        auto data{Napi::Uint8Array::New(info.Env(), size)};
-        memset(data.Data(), 0, size);
-        return Napi::Value::From(info.Env(), data);
+        (void)info;
+        return m_data.Value();
     }
 }
