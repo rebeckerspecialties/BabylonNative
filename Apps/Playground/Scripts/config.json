@@ -1561,10 +1561,11 @@
         },
         {
             "title": "GLTF Serializer un/compressed texture roundtrip",
-            "playgroundId": "#8NTR5X#8",
+            "scriptToRun": "app:///Scripts/gltf_serializer_texture_roundtrip_native.js",
+            "functionToCall": "createScene",
             "replace": "//options//, roundtrip = true;",
             "excludeFromAutomaticTesting": true,
-            "reason": "Pixel comparison fails (more than 20% pixels differ)",
+            "reason": "Native local variant avoids snippet/texture network fetches; KTX2 transcode still needs follow-up native decoder/fetch support.",
             "referenceImage": "glTFSerializerTextureExport.png"
         },
         {
