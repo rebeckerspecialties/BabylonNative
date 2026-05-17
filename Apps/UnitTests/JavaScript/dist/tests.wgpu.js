@@ -19,6 +19,7 @@
         expect(actual && actual.length === 4, message + ": pixel readback did not return four channels");
         for (var i = 0; i < 4; i++) {
             if (Math.abs(Number(actual[i]) - expected[i]) > 2) {
+                console.error(message + ": expected [" + expected.join(",") + "], got [" + Array.prototype.join.call(actual, ",") + "]");
                 fail(message + ": expected [" + expected.join(",") + "], got [" + Array.prototype.join.call(actual, ",") + "]");
             }
         }
@@ -188,6 +189,34 @@
             var payload = destination.getCanvasTexture();
             expect(payload && payload.nativeTexture, "drawImage canvas source did not produce a native texture payload");
         }],
+        ["Canvas 2D putImageData survives drawImage canvas copies", async function () {
+            var source = new _native.Canvas();
+            source.width = 4;
+            source.height = 4;
+            var sourceContext = source.getContext("2d");
+            var imageData = sourceContext.getImageData(0, 0, 4, 4);
+            var pixels = imageData.data;
+            for (var y = 0; y < 4; y++) {
+                for (var x = 1; x <= 2; x++) {
+                    var redPixel = (x + y * 4) * 4;
+                    pixels[redPixel] = 255;
+                    pixels[redPixel + 1] = 0;
+                    pixels[redPixel + 2] = 0;
+                    pixels[redPixel + 3] = 255;
+                }
+            }
+            sourceContext.putImageData(imageData, 0, 0);
+            expectPixel(await readCanvasPixel(source, 4, 4, 1, 1), [255, 0, 0, 255], "putImageData source canvas pixel");
+            expectPixel(await readCanvasPixel(source, 4, 4, 0, 0), [0, 0, 0, 0], "putImageData source transparent pixel");
+
+            var destination = new _native.Canvas();
+            destination.width = 8;
+            destination.height = 8;
+            var destinationContext = destination.getContext("2d");
+            destinationContext.drawImage(source, 2, 3);
+            expectPixel(await readCanvasPixel(destination, 8, 8, 3, 4), [255, 0, 0, 255], "drawImage copied putImageData canvas pixel");
+            expectPixel(await readCanvasPixel(destination, 8, 8, 1, 1), [0, 0, 0, 0], "drawImage offset left destination transparent");
+        }],
         ["GPUQueue.copyExternalImageToTexture uploads CanvasWgpu 2D contents", async function () {
             expect(typeof navigator.gpu._testReadTexturePixel === "function", "texture readback test hook missing");
 
@@ -241,6 +270,35 @@
 
             expectPixel(await readCanvasPixel(radial, 8, 8, 4, 4), [0, 255, 0, 255], "radial gradient center stop");
             expectPixel(await readCanvasPixel(radial, 8, 8, 0, 0), [0, 0, 0, 255], "radial gradient outer stop");
+        }],
+        ["Canvas 2D dashed strokes render and preserve drawing state", async function () {
+            var canvas = new _native.Canvas();
+            canvas.width = 12;
+            canvas.height = 5;
+            var context = canvas.getContext("2d");
+
+            context.setLineDash([4, 2, 1]);
+            expectEqual(context.getLineDash().join(","), "4,2,1,4,2,1", "odd dash pattern should repeat");
+            context.lineDashOffset = 2;
+            context.save();
+            context.setLineDash([]);
+            context.lineDashOffset = 0;
+            context.restore();
+            expectEqual(context.getLineDash().join(","), "4,2,1,4,2,1", "save/restore should preserve dash pattern");
+            expectEqual(context.lineDashOffset, 2, "save/restore should preserve dash offset");
+
+            context.strokeStyle = "rgb(255, 0, 0)";
+            context.lineWidth = 2;
+            context.setLineDash([4, 4]);
+            context.lineDashOffset = 0;
+            context.beginPath();
+            context.moveTo(0, 2);
+            context.lineTo(12, 2);
+            context.stroke();
+
+            expectPixel(await readCanvasPixel(canvas, 12, 5, 1, 2), [255, 0, 0, 255], "dashed stroke first visible interval");
+            expectPixel(await readCanvasPixel(canvas, 12, 5, 6, 2), [0, 0, 0, 0], "dashed stroke hidden interval");
+            expectPixel(await readCanvasPixel(canvas, 12, 5, 9, 2), [255, 0, 0, 255], "dashed stroke second visible interval");
         }],
         ["Canvas.parseColor rejects malformed colors", function () {
             [

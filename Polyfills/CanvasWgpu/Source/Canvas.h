@@ -67,6 +67,7 @@ namespace Babylon::Polyfills::Internal
         // CanvasWgpu currently renders to an internal femtovg/wgpu target.
         // The return value indicates whether the next flush should clear first.
         bool UpdateRenderTarget();
+        bool HasPendingRenderTargetUpdate() const { return m_clear || m_dirty; }
 
     private:
         Napi::Value GetContext(const Napi::CallbackInfo&);

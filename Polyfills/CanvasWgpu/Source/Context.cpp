@@ -1,6 +1,7 @@
 #include <map>
 #include <algorithm>
 #include <cassert>
+#include <cmath>
 #include <regex>
 
 #ifdef _MSC_VER
@@ -66,6 +67,7 @@ namespace Babylon::Polyfills::Internal
                 InstanceMethod("drawImage", &Context::DrawImage),
                 InstanceMethod("getImageData", &Context::GetImageData),
                 InstanceMethod("setLineDash", &Context::SetLineDash),
+                InstanceMethod("getLineDash", &Context::GetLineDash),
                 InstanceMethod("fillText", &Context::FillText),
                 InstanceMethod("strokeText", &Context::StrokeText),
                 InstanceMethod("createLinearGradient", &Context::CreateLinearGradient),
@@ -79,6 +81,7 @@ namespace Babylon::Polyfills::Internal
                 InstanceAccessor("lineCap", &Context::GetLineCap, &Context::SetLineCap),
                 InstanceAccessor("lineJoin", &Context::GetLineJoin, &Context::SetLineJoin),
                 InstanceAccessor("miterLimit", &Context::GetMiterLimit, &Context::SetMiterLimit),
+                InstanceAccessor("lineDashOffset", &Context::GetLineDashOffset, &Context::SetLineDashOffset),
                 InstanceAccessor("filter", &Context::GetFilter, &Context::SetFilter),
                 InstanceAccessor("direction", &Context::GetDirection, &Context::SetDirection),
                 InstanceAccessor("font", &Context::GetFont, &Context::SetFont),
@@ -150,6 +153,7 @@ namespace Babylon::Polyfills::Internal
                 nvgEndFrame(*m_nvg);
                 m_frameActive = false;
             }
+            DeleteTransientImages();
 
             for (auto& image : m_nvgImageIndices)
             {
@@ -165,10 +169,26 @@ namespace Babylon::Polyfills::Internal
 
         m_nvgImageIndices.clear();
         m_canvasTextureImageIndices.clear();
+        m_transientImageIndices.clear();
         m_fonts.clear();
         m_currentFontId = -1;
         m_frameActive = false;
         m_isClipped = false;
+    }
+
+    void Context::DeleteTransientImages()
+    {
+        if (!m_nvg)
+        {
+            m_transientImageIndices.clear();
+            return;
+        }
+
+        for (const auto imageIndex : m_transientImageIndices)
+        {
+            nvgDeleteImage(*m_nvg, imageIndex);
+        }
+        m_transientImageIndices.clear();
     }
 
     void Context::EnsureFrame()
@@ -380,6 +400,8 @@ namespace Babylon::Polyfills::Internal
             m_direction,
             m_miterLimit,
             m_lineWidth,
+            m_lineDash,
+            m_lineDashOffset,
             m_globalAlpha,
             m_letterSpacing,
             m_shadowColor,
@@ -413,6 +435,8 @@ namespace Babylon::Polyfills::Internal
         m_direction = state.direction;
         m_miterLimit = state.miterLimit;
         m_lineWidth = state.lineWidth;
+        m_lineDash = std::move(state.lineDash);
+        m_lineDashOffset = state.lineDashOffset;
         m_globalAlpha = state.globalAlpha;
         m_letterSpacing = state.letterSpacing;
         m_shadowColor = std::move(state.shadowColor);
@@ -809,8 +833,12 @@ namespace Babylon::Polyfills::Internal
 
     void Context::Flush()
     {
-        EnsureFrame();
-        if (m_frameActive)
+        if (!m_frameActive && m_nvg && m_canvas->HasPendingRenderTargetUpdate())
+        {
+            EnsureFrame();
+        }
+
+        if (m_frameActive && m_nvg)
         {
             nvgEndFrame(*m_nvg);
             m_frameActive = false;
@@ -864,7 +892,7 @@ namespace Babylon::Polyfills::Internal
         nvgFillPaint(*m_nvg, imagePaint);
         nvgFill(*m_nvg);
         nvgRestore(*m_nvg);
-        nvgDeleteImage(*m_nvg, imageHandle);
+        m_transientImageIndices.push_back(imageHandle);
     }
 
     void Context::Arc(const Napi::CallbackInfo& info)
@@ -1006,7 +1034,7 @@ namespace Babylon::Polyfills::Internal
             const auto width = static_cast<float>(sourceWidth);
             const auto height = static_cast<float>(sourceHeight);
 
-            NVGpaint imagePaint = nvgImagePattern(*m_nvg, 0.f, 0.f, width, height, 0.f, imageIndex, 1.f);
+            NVGpaint imagePaint = nvgImagePattern(*m_nvg, dx, dy, width, height, 0.f, imageIndex, 1.f);
 
             if (!m_isClipped)
             {
@@ -1094,10 +1122,62 @@ namespace Babylon::Polyfills::Internal
 
     void Context::SetLineDash(const Napi::CallbackInfo& info)
     {
-        // femtovg does not currently expose dashed stroke rendering. Accept the
-        // browser API call so GUI layout/rendering paths that set a dash pattern
-        // continue to execute instead of failing before visual comparison.
-        (void)info;
+        EnsureFrame();
+
+        if (info.Length() < 1 || !info[0].IsArray())
+        {
+            throw Napi::TypeError::New(info.Env(), "Context2D.setLineDash expects an array.");
+        }
+
+        auto dashArray = info[0].As<Napi::Array>();
+        std::vector<float> dashes{};
+        dashes.reserve(dashArray.Length());
+        float sum = 0.f;
+
+        for (uint32_t i = 0; i < dashArray.Length(); ++i)
+        {
+            auto value = dashArray.Get(i);
+            if (!value.IsNumber())
+            {
+                throw Napi::TypeError::New(info.Env(), "Context2D.setLineDash entries must be numbers.");
+            }
+
+            auto dash = value.As<Napi::Number>().FloatValue();
+            if (!std::isfinite(dash) || dash < 0.f)
+            {
+                throw Napi::Error::New(info.Env(), "Context2D.setLineDash entries must be finite and non-negative.");
+            }
+
+            dashes.push_back(dash);
+            sum += dash;
+        }
+
+        if (sum <= 0.f)
+        {
+            dashes.clear();
+        }
+        else if (dashes.size() % 2 == 1)
+        {
+            const auto originalSize = dashes.size();
+            dashes.reserve(originalSize * 2);
+            for (size_t i = 0; i < originalSize; ++i)
+            {
+                dashes.push_back(dashes[i]);
+            }
+        }
+
+        m_lineDash = std::move(dashes);
+        nvgLineDash(*m_nvg, m_lineDash.empty() ? nullptr : m_lineDash.data(), m_lineDash.size(), m_lineDashOffset);
+    }
+
+    Napi::Value Context::GetLineDash(const Napi::CallbackInfo& info)
+    {
+        auto result = Napi::Array::New(info.Env(), m_lineDash.size());
+        for (uint32_t i = 0; i < m_lineDash.size(); ++i)
+        {
+            result.Set(i, Napi::Value::From(info.Env(), m_lineDash[i]));
+        }
+        return result;
     }
 
     void Context::StrokeText(const Napi::CallbackInfo& info)
@@ -1255,6 +1335,24 @@ namespace Babylon::Polyfills::Internal
 
         m_miterLimit = value.As<Napi::Number>().FloatValue();
         nvgMiterLimit(*m_nvg, m_miterLimit);
+    }
+
+    Napi::Value Context::GetLineDashOffset(const Napi::CallbackInfo&)
+    {
+        return Napi::Value::From(Env(), m_lineDashOffset);
+    }
+
+    void Context::SetLineDashOffset(const Napi::CallbackInfo&, const Napi::Value& value)
+    {
+        auto offset = value.As<Napi::Number>().FloatValue();
+        if (!std::isfinite(offset))
+        {
+            return;
+        }
+
+        EnsureFrame();
+        m_lineDashOffset = offset;
+        nvgLineDash(*m_nvg, m_lineDash.empty() ? nullptr : m_lineDash.data(), m_lineDash.size(), m_lineDashOffset);
     }
 
     Napi::Value Context::GetFilter(const Napi::CallbackInfo& info)
