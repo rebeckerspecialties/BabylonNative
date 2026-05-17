@@ -1,8 +1,8 @@
 use std::collections::HashMap;
-use std::ffi::{c_char, c_void, CStr};
+use std::ffi::{c_char, c_void, CStr, CString};
 use std::ptr;
 use std::slice;
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 
 use femtovg::renderer::WGPURenderer;
 use femtovg::{
@@ -161,7 +161,7 @@ fn create_device() -> Result<(wgpu::Device, wgpu::Queue), String> {
     let descriptor = wgpu::DeviceDescriptor {
         label: Some("babylon-canvas-wgpu.device"),
         required_features: wgpu::Features::empty(),
-        required_limits: wgpu::Limits::default(),
+        required_limits: adapter.limits(),
         experimental_features: wgpu::ExperimentalFeatures::disabled(),
         memory_hints: wgpu::MemoryHints::default(),
         trace: wgpu::Trace::default(),
@@ -169,6 +169,18 @@ fn create_device() -> Result<(wgpu::Device, wgpu::Queue), String> {
 
     pollster::block_on(adapter.request_device(&descriptor))
         .map_err(|err| format!("request_device failed: {err}"))
+}
+
+static LAST_CREATE_ERROR: Mutex<Option<CString>> = Mutex::new(None);
+
+fn set_last_create_error(message: Option<String>) {
+    let Ok(mut slot) = LAST_CREATE_ERROR.lock() else {
+        return;
+    };
+
+    *slot = message.map(|message| {
+        CString::new(message).unwrap_or_else(|_| CString::new("CanvasWgpu nvgCreate failed").unwrap())
+    });
 }
 
 fn shared_device() -> Result<(wgpu::Device, wgpu::Queue), String> {
@@ -848,12 +860,29 @@ fn with_ctx_ref<R>(ctx: *mut NVGcontext, default: R, f: impl FnOnce(&Backend) ->
 pub extern "C" fn nvgCreate(_flags: i32) -> *mut NVGcontext {
     match std::panic::catch_unwind(|| Backend::new(1, 1)) {
         Ok(Ok(backend)) => {
+            set_last_create_error(None);
             let mut context = Box::new(NVGcontext { backend });
             context.backend.refresh_interop_handle();
             Box::into_raw(context)
         }
-        _ => ptr::null_mut(),
+        Ok(Err(err)) => {
+            set_last_create_error(Some(err));
+            ptr::null_mut()
+        }
+        Err(_) => {
+            set_last_create_error(Some("CanvasWgpu nvgCreate panicked".to_string()));
+            ptr::null_mut()
+        }
     }
+}
+
+#[no_mangle]
+pub extern "C" fn nvgLastCreateError() -> *const c_char {
+    let Ok(slot) = LAST_CREATE_ERROR.lock() else {
+        return ptr::null();
+    };
+
+    slot.as_ref().map_or(ptr::null(), |message| message.as_ptr())
 }
 
 #[no_mangle]
