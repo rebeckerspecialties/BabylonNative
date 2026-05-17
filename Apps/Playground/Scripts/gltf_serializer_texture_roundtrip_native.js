@@ -66,30 +66,50 @@ var createScene = async function (engine) {
         useSRGBBuffer: true,
     };
 
+    const rejectTextureLoad = (url, methodIndex, reject) => (message, exception) => {
+        const exceptionMessage = exception && (exception.message || exception.toString && exception.toString());
+        reject(new Error(`Failed to load ${url} via method ${methodIndex}: ${message || exceptionMessage || "unknown texture load error"}`));
+    };
+
     const textureCreationMethods = [
         (url) => {
-            return new Promise((resolve) => {
+            return new Promise((resolve, reject) => {
                 let texture;
-                texture = new BABYLON.Texture(url, scene, { onLoad: () => resolve(texture), ...commonTextureOptions });
+                texture = new BABYLON.Texture(url, scene, {
+                    onLoad: () => resolve(texture),
+                    onError: rejectTextureLoad(url, 0, reject),
+                    ...commonTextureOptions,
+                });
             });
         },
         (url) => {
-            const texture = new BABYLON.Texture(null, scene, commonTextureOptions);
-            return new Promise((resolve) => {
+            return new Promise((resolve, reject) => {
+                const texture = new BABYLON.Texture(null, scene, {
+                    onError: rejectTextureLoad(url, 1, reject),
+                    ...commonTextureOptions,
+                });
                 texture.updateURL(url, undefined, () => resolve(texture));
             });
         },
         async (url) => {
-            const texture = new BABYLON.Texture(null, scene, { mimeType: BABYLON.GetMimeType(url), ...commonTextureOptions });
             const data = await BABYLON.Tools.LoadFileAsync(url);
-            return new Promise((resolve) => {
+            return new Promise((resolve, reject) => {
+                const texture = new BABYLON.Texture(null, scene, {
+                    mimeType: BABYLON.GetMimeType(url),
+                    onError: rejectTextureLoad(url, 2, reject),
+                    ...commonTextureOptions,
+                });
                 texture.updateURL(`data:foo/${url}`, data, () => resolve(texture));
             });
         },
         async (url) => {
-            const texture = new BABYLON.Texture(null, scene, { mimeType: BABYLON.GetMimeType(url), ...commonTextureOptions });
             const data = await BABYLON.Tools.LoadFileAsync(url);
-            return new Promise((resolve) => {
+            return new Promise((resolve, reject) => {
+                const texture = new BABYLON.Texture(null, scene, {
+                    mimeType: BABYLON.GetMimeType(url),
+                    onError: rejectTextureLoad(url, 3, reject),
+                    ...commonTextureOptions,
+                });
                 texture.updateURL(`data:foo/${BABYLON.Tools.RandomId()}`, data, () => resolve(texture));
             });
         },
