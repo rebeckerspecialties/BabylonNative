@@ -663,6 +663,41 @@
             expectPixel(await readCanvasPixel(destination, 8, 8, 3, 4), [255, 0, 0, 255], "drawImage copied putImageData canvas pixel");
             expectPixel(await readCanvasPixel(destination, 8, 8, 1, 1), [0, 0, 0, 0], "drawImage offset left destination transparent");
         }],
+        ["Canvas 2D drawImage applies the current transform to image paints", async function () {
+            var source = new _native.Canvas();
+            source.width = 4;
+            source.height = 4;
+            var sourceContext = source.getContext("2d");
+            var imageData = sourceContext.getImageData(0, 0, 4, 4);
+            for (var y = 0; y < 4; y++) {
+                for (var x = 0; x < 4; x++) {
+                    var pixel = (x + y * 4) * 4;
+                    imageData.data[pixel + 0] = x < 2 ? 255 : 0;
+                    imageData.data[pixel + 1] = 0;
+                    imageData.data[pixel + 2] = x < 2 ? 0 : 255;
+                    imageData.data[pixel + 3] = 255;
+                }
+            }
+            sourceContext.putImageData(imageData, 0, 0);
+
+            var destination = new _native.Canvas();
+            destination.width = 8;
+            destination.height = 8;
+            var destinationContext = destination.getContext("2d");
+            destinationContext.scale(2, 2);
+            destinationContext.drawImage(source, 0, 0);
+
+            var scaledLeftHalf = await readCanvasPixel(destination, 8, 8, 3, 2);
+            expect(
+                scaledLeftHalf[0] > scaledLeftHalf[2],
+                "scaled drawImage should preserve the source left half: got [" + Array.prototype.join.call(scaledLeftHalf, ",") + "]"
+            );
+            var scaledRightHalf = await readCanvasPixel(destination, 8, 8, 5, 2);
+            expect(
+                scaledRightHalf[2] > scaledRightHalf[0],
+                "scaled drawImage should preserve the source right half: got [" + Array.prototype.join.call(scaledRightHalf, ",") + "]"
+            );
+        }],
         ["Canvas 2D drawImage preserves semi-transparent CanvasWgpu sources", async function () {
             var source = new _native.Canvas();
             source.width = 2;
