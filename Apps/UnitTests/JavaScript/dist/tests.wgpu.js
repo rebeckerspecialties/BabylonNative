@@ -471,6 +471,207 @@
             var lastError = navigator.gpu._backendStats().lastError;
             expect(!lastError, "depth-only null color attachment pass produced backend error: " + lastError);
         }],
+        ["WebGPU render pipeline preserves null vertex buffer layout slots", async function () {
+            expect(typeof navigator.gpu._testResetDebugStats === "function", "debug stat reset hook missing");
+            expect(typeof navigator.gpu._backendStats === "function", "backend stats hook missing");
+
+            navigator.gpu._testResetDebugStats();
+            var adapter = await navigator.gpu.requestAdapter();
+            var device = await adapter.requestDevice();
+            var texture = device.createTexture({
+                size: [8, 8, 1],
+                format: "rgba8unorm",
+                usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC
+            });
+            var vertexBuffer = createFloatBuffer(device, [
+                -1, -1,
+                3, -1,
+                -1, 3
+            ], GPUBufferUsage.VERTEX);
+            var shader = device.createShaderModule({
+                code:
+                    "@vertex fn vsMain(@location(0) position : vec2f) -> @builtin(position) vec4f {\n" +
+                    "  return vec4f(position, 0.0, 1.0);\n" +
+                    "}\n" +
+                    "@fragment fn fsMain() -> @location(0) vec4f {\n" +
+                    "  return vec4f(1.0, 0.0, 0.0, 1.0);\n" +
+                    "}\n"
+            });
+            var pipeline = device.createRenderPipeline({
+                layout: "auto",
+                vertex: {
+                    module: shader,
+                    entryPoint: "vsMain",
+                    buffers: [
+                        null,
+                        {
+                            arrayStride: 8,
+                            attributes: [{ shaderLocation: 0, offset: 0, format: "float32x2" }]
+                        }
+                    ]
+                },
+                fragment: {
+                    module: shader,
+                    entryPoint: "fsMain",
+                    targets: [{ format: "rgba8unorm" }]
+                },
+                primitive: { topology: "triangle-list" }
+            });
+
+            var encoder = device.createCommandEncoder();
+            var pass = encoder.beginRenderPass({
+                colorAttachments: [{
+                    view: texture.createView(),
+                    loadOp: "clear",
+                    clearValue: [0, 0, 0, 1],
+                    storeOp: "store"
+                }]
+            });
+            pass.setPipeline(pipeline);
+            pass.setVertexBuffer(1, vertexBuffer);
+            pass.draw(3);
+            pass.end();
+            device.queue.submit([encoder.finish()]);
+            await device.queue.onSubmittedWorkDone();
+
+            var lastError = navigator.gpu._backendStats().lastError;
+            expect(!lastError, "null vertex buffer layout slot produced backend error: " + lastError);
+            expectPixel(navigator.gpu._testReadTexturePixel(texture, 4, 4), [255, 0, 0, 255], "null vertex buffer slot should not shift slot 1 attributes into slot 0");
+        }],
+        ["WebGPU descriptors preserve explicit null optional pipeline and pass states", async function () {
+            expect(typeof navigator.gpu._testResetDebugStats === "function", "debug stat reset hook missing");
+            expect(typeof navigator.gpu._backendStats === "function", "backend stats hook missing");
+
+            navigator.gpu._testResetDebugStats();
+            var adapter = await navigator.gpu.requestAdapter();
+            var device = await adapter.requestDevice();
+            var color = device.createTexture({
+                size: [8, 8, 1],
+                format: "rgba8unorm",
+                usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC
+            });
+            var depth = device.createTexture({
+                size: [8, 8, 1],
+                format: "depth32float",
+                usage: GPUTextureUsage.RENDER_ATTACHMENT
+            });
+            var colorShader = device.createShaderModule({
+                code:
+                    "@vertex fn vsMain(@builtin(vertex_index) vertexIndex : u32) -> @builtin(position) vec4f {\n" +
+                    "  var positions = array<vec2f, 3>(vec2f(-1.0, -1.0), vec2f(3.0, -1.0), vec2f(-1.0, 3.0));\n" +
+                    "  return vec4f(positions[vertexIndex], 0.0, 1.0);\n" +
+                    "}\n" +
+                    "@fragment fn fsMain() -> @location(0) vec4f {\n" +
+                    "  return vec4f(0.0, 1.0, 0.0, 1.0);\n" +
+                    "}\n"
+            });
+            var colorPipeline = device.createRenderPipeline({
+                layout: "auto",
+                vertex: {
+                    module: colorShader,
+                    entryPoint: "vsMain"
+                },
+                fragment: {
+                    module: colorShader,
+                    entryPoint: "fsMain",
+                    targets: [{ format: "rgba8unorm" }]
+                },
+                depthStencil: null
+            });
+
+            var colorEncoder = device.createCommandEncoder();
+            var colorPass = colorEncoder.beginRenderPass({
+                colorAttachments: [{
+                    view: color.createView(),
+                    loadOp: "clear",
+                    clearValue: [0, 0, 0, 1],
+                    storeOp: "store"
+                }],
+                depthStencilAttachment: null
+            });
+            colorPass.setPipeline(colorPipeline);
+            colorPass.draw(3);
+            colorPass.end();
+            device.queue.submit([colorEncoder.finish()]);
+            await device.queue.onSubmittedWorkDone();
+            expectPixel(navigator.gpu._testReadTexturePixel(color, 4, 4), [0, 255, 0, 255], "null depthStencil/depthStencilAttachment should behave as omitted");
+
+            var depthShader = device.createShaderModule({
+                code:
+                    "@vertex fn vsMain(@builtin(vertex_index) vertexIndex : u32) -> @builtin(position) vec4f {\n" +
+                    "  var positions = array<vec2f, 3>(vec2f(-1.0, -1.0), vec2f(3.0, -1.0), vec2f(-1.0, 3.0));\n" +
+                    "  return vec4f(positions[vertexIndex], 0.0, 1.0);\n" +
+                    "}\n"
+            });
+            var depthPipeline = device.createRenderPipeline({
+                layout: "auto",
+                vertex: {
+                    module: depthShader,
+                    entryPoint: "vsMain"
+                },
+                fragment: null,
+                depthStencil: {
+                    format: "depth32float",
+                    depthWriteEnabled: true,
+                    depthCompare: "less"
+                }
+            });
+            var depthEncoder = device.createCommandEncoder();
+            var depthPass = depthEncoder.beginRenderPass({
+                colorAttachments: [null],
+                depthStencilAttachment: {
+                    view: depth.createView(),
+                    depthLoadOp: "clear",
+                    depthClearValue: 1,
+                    depthStoreOp: "store"
+                }
+            });
+            depthPass.setPipeline(depthPipeline);
+            depthPass.draw(3);
+            depthPass.end();
+            device.queue.submit([depthEncoder.finish()]);
+            await device.queue.onSubmittedWorkDone();
+
+            var lastError = navigator.gpu._backendStats().lastError;
+            expect(!lastError, "explicit null optional descriptor states produced backend error: " + lastError);
+        }],
+        ["WebGPU pass encoders preserve null bind group unbinds", async function () {
+            expect(typeof navigator.gpu._testResetDebugStats === "function", "debug stat reset hook missing");
+            expect(typeof navigator.gpu._backendStats === "function", "backend stats hook missing");
+
+            navigator.gpu._testResetDebugStats();
+            var adapter = await navigator.gpu.requestAdapter();
+            var device = await adapter.requestDevice();
+            var texture = device.createTexture({
+                size: [4, 4, 1],
+                format: "rgba8unorm",
+                usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC
+            });
+            var layout = device.createBindGroupLayout({ entries: [] });
+            var bindGroup = device.createBindGroup({ layout: layout, entries: [] });
+            var encoder = device.createCommandEncoder();
+            var renderPass = encoder.beginRenderPass({
+                colorAttachments: [{
+                    view: texture.createView(),
+                    loadOp: "clear",
+                    clearValue: [0, 0, 0, 1],
+                    storeOp: "store"
+                }]
+            });
+            renderPass.setBindGroup(0, bindGroup);
+            renderPass.setBindGroup(0, null);
+            renderPass.end();
+
+            var computePass = encoder.beginComputePass();
+            computePass.setBindGroup(0, bindGroup);
+            computePass.setBindGroup(0, null);
+            computePass.end();
+            device.queue.submit([encoder.finish()]);
+            await device.queue.onSubmittedWorkDone();
+
+            var lastError = navigator.gpu._backendStats().lastError;
+            expect(!lastError, "null bind group unbind produced backend error: " + lastError);
+        }],
         ["BabylonJS WebGPU createEffect reports GLSL shader paths actionably", async function () {
             expect(typeof BABYLON === "object", "BABYLON missing");
             expect(typeof BABYLON.WebGPUEngine === "function", "BABYLON.WebGPUEngine missing");

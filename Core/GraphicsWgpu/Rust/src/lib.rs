@@ -1745,6 +1745,7 @@ mod upstream_wgpu_native {
 
     struct RenderPipelineResource {
         pipeline: wgpu::RenderPipeline,
+        vertex_buffer_slot_map: Option<Vec<(u32, u32)>>,
     }
 
     struct ComputePipelineResource {
@@ -1782,11 +1783,12 @@ mod upstream_wgpu_native {
         SetPipeline {
             id: u64,
             pipeline: wgpu::RenderPipeline,
+            vertex_buffer_slot_map: Option<Vec<(u32, u32)>>,
         },
         SetBindGroup {
             index: u32,
             id: u64,
-            bind_group: wgpu::BindGroup,
+            bind_group: Option<wgpu::BindGroup>,
             dynamic_offsets: Vec<u32>,
         },
         SetVertexBuffer {
@@ -1849,7 +1851,7 @@ mod upstream_wgpu_native {
         SetPipeline(wgpu::ComputePipeline),
         SetBindGroup {
             index: u32,
-            bind_group: wgpu::BindGroup,
+            bind_group: Option<wgpu::BindGroup>,
             dynamic_offsets: Vec<u32>,
         },
         DispatchWorkgroups {
@@ -3228,9 +3230,12 @@ mod upstream_wgpu_native {
 
             let mut attribute_storage: Vec<Vec<wgpu::VertexAttribute>> = Vec::new();
             let mut layout_specs: Vec<(u64, wgpu::VertexStepMode, usize)> = Vec::new();
+            let mut vertex_buffer_slot_map = Vec::new();
+            let mut has_null_vertex_slots = false;
             if let Some(buffers) = vertex.get("buffers").and_then(Value::as_array) {
-                for buffer in buffers {
+                for (slot, buffer) in buffers.iter().enumerate() {
                     if buffer.is_null() {
+                        has_null_vertex_slots = true;
                         continue;
                     }
                     let mut attributes = Vec::new();
@@ -3260,6 +3265,7 @@ mod upstream_wgpu_native {
                         map_step_mode(json_str(buffer, "stepMode")),
                         attribute_index,
                     ));
+                    vertex_buffer_slot_map.push((slot as u32, (layout_specs.len() - 1) as u32));
                 }
             }
             let vertex_buffers: Vec<_> = layout_specs
@@ -3273,7 +3279,10 @@ mod upstream_wgpu_native {
                 )
                 .collect();
 
-            let fragment_state = if let Some(fragment) = descriptor.get("fragment") {
+            let fragment_state = if let Some(fragment) = descriptor
+                .get("fragment")
+                .filter(|fragment| !fragment.is_null())
+            {
                 let module_id = fragment
                     .get("module")
                     .and_then(native_id)
@@ -3306,6 +3315,9 @@ mod upstream_wgpu_native {
                         }));
                     }
                 }
+                if !targets.is_empty() && targets.iter().all(Option::is_none) {
+                    targets.clear();
+                }
                 Some((module.module.clone(), entry.to_owned(), targets))
             } else {
                 None
@@ -3323,22 +3335,25 @@ mod upstream_wgpu_native {
                 conservative: false,
             };
 
-            let depth_stencil = descriptor.get("depthStencil").map(|depth| {
-                let format_text = json_str(depth, "format").unwrap_or("depth24plus");
-                let format =
-                    map_texture_format(format_text).unwrap_or(wgpu::TextureFormat::Depth24Plus);
-                wgpu::DepthStencilState {
-                    format,
-                    depth_write_enabled: Some(json_bool(depth, "depthWriteEnabled", false)),
-                    depth_compare: map_compare(json_str(depth, "depthCompare")),
-                    stencil: wgpu::StencilState::default(),
-                    bias: wgpu::DepthBiasState {
-                        constant: json_u32(depth, "depthBias", 0) as i32,
-                        slope_scale: json_f64(depth, "depthBiasSlopeScale", 0.0) as f32,
-                        clamp: json_f64(depth, "depthBiasClamp", 0.0) as f32,
-                    },
-                }
-            });
+            let depth_stencil = descriptor
+                .get("depthStencil")
+                .filter(|depth| !depth.is_null())
+                .map(|depth| {
+                    let format_text = json_str(depth, "format").unwrap_or("depth24plus");
+                    let format =
+                        map_texture_format(format_text).unwrap_or(wgpu::TextureFormat::Depth24Plus);
+                    wgpu::DepthStencilState {
+                        format,
+                        depth_write_enabled: Some(json_bool(depth, "depthWriteEnabled", false)),
+                        depth_compare: map_compare(json_str(depth, "depthCompare")),
+                        stencil: wgpu::StencilState::default(),
+                        bias: wgpu::DepthBiasState {
+                            constant: json_u32(depth, "depthBias", 0) as i32,
+                            slope_scale: json_f64(depth, "depthBiasSlopeScale", 0.0) as f32,
+                            clamp: json_f64(depth, "depthBiasClamp", 0.0) as f32,
+                        },
+                    }
+                });
 
             let multisample_value = descriptor.get("multisample").unwrap_or(&Value::Null);
             let multisample = wgpu::MultisampleState {
@@ -3382,9 +3397,17 @@ mod upstream_wgpu_native {
                     });
 
             let id = self.resources.next();
-            self.resources
-                .render_pipelines
-                .insert(id, RenderPipelineResource { pipeline });
+            self.resources.render_pipelines.insert(
+                id,
+                RenderPipelineResource {
+                    pipeline,
+                    vertex_buffer_slot_map: if has_null_vertex_slots {
+                        Some(vertex_buffer_slot_map)
+                    } else {
+                        None
+                    },
+                },
+            );
             Ok(id)
         }
 
@@ -3540,6 +3563,7 @@ mod upstream_wgpu_native {
 
             let depth_stencil_attachment = descriptor
                 .get("depthStencilAttachment")
+                .filter(|attachment| !attachment.is_null())
                 .map(|attachment| {
                     let view_id = attachment.get("view").and_then(native_id).ok_or_else(|| {
                         "GPURenderPassDepthStencilAttachment missing view".to_string()
@@ -3671,9 +3695,9 @@ mod upstream_wgpu_native {
                 .resources
                 .render_pipelines
                 .get(&pipeline_id)
-                .ok_or_else(|| format!("GPURenderPipeline {pipeline_id} was not found"))?
-                .pipeline
-                .clone();
+                .ok_or_else(|| format!("GPURenderPipeline {pipeline_id} was not found"))?;
+            let pipeline_handle = pipeline.pipeline.clone();
+            let vertex_buffer_slot_map = pipeline.vertex_buffer_slot_map.clone();
             let pass = self
                 .resources
                 .render_passes
@@ -3681,7 +3705,8 @@ mod upstream_wgpu_native {
                 .ok_or_else(|| format!("GPURenderPassEncoder {pass_id} was not found"))?;
             pass.commands.push(RenderPassCommand::SetPipeline {
                 id: pipeline_id,
-                pipeline,
+                pipeline: pipeline_handle,
+                vertex_buffer_slot_map,
             });
             Ok(())
         }
@@ -3693,13 +3718,18 @@ mod upstream_wgpu_native {
             bind_group_id: u64,
             dynamic_offsets: &[u32],
         ) -> Result<(), String> {
-            let bind_group = self
-                .resources
-                .bind_groups
-                .get(&bind_group_id)
-                .ok_or_else(|| format!("GPUBindGroup {bind_group_id} was not found"))?
-                .bind_group
-                .clone();
+            let bind_group = if bind_group_id == 0 {
+                None
+            } else {
+                Some(
+                    self.resources
+                        .bind_groups
+                        .get(&bind_group_id)
+                        .ok_or_else(|| format!("GPUBindGroup {bind_group_id} was not found"))?
+                        .bind_group
+                        .clone(),
+                )
+            };
             let pass = self
                 .resources
                 .render_passes
@@ -3882,13 +3912,18 @@ mod upstream_wgpu_native {
             bind_group_id: u64,
             dynamic_offsets: &[u32],
         ) -> Result<(), String> {
-            let bind_group = self
-                .resources
-                .bind_groups
-                .get(&bind_group_id)
-                .ok_or_else(|| format!("GPUBindGroup {bind_group_id} was not found"))?
-                .bind_group
-                .clone();
+            let bind_group = if bind_group_id == 0 {
+                None
+            } else {
+                Some(
+                    self.resources
+                        .bind_groups
+                        .get(&bind_group_id)
+                        .ok_or_else(|| format!("GPUBindGroup {bind_group_id} was not found"))?
+                        .bind_group
+                        .clone(),
+                )
+            };
             let pass = self
                 .resources
                 .compute_passes
@@ -4189,7 +4224,15 @@ mod upstream_wgpu_native {
                                         dynamic_offsets, ..
                                     } = command
                                     {
-                                        format!("setBindGroup({index},id={id},{dynamic_offsets:?})")
+                                        if *id == 0 {
+                                            format!(
+                                                "setBindGroup({index},null,{dynamic_offsets:?})"
+                                            )
+                                        } else {
+                                            format!(
+                                                "setBindGroup({index},id={id},{dynamic_offsets:?})"
+                                            )
+                                        }
                                     } else {
                                         format!("setBindGroup({index})")
                                     }
@@ -4239,21 +4282,28 @@ mod upstream_wgpu_native {
                             command_labels
                         );
                     }
-                    let color_attachments: Vec<_> = descriptor
-                        .color_attachments
-                        .iter()
-                        .map(|attachment| {
-                            attachment.as_ref().map(|attachment| wgpu::RenderPassColorAttachment {
-                                view: &attachment.view,
-                                depth_slice: None,
-                                resolve_target: attachment.resolve_target.as_ref(),
-                                ops: wgpu::Operations {
-                                    load: attachment.load,
-                                    store: attachment.store,
-                                },
-                            })
-                        })
-                        .collect();
+                    let color_attachments: Vec<_> =
+                        if descriptor.color_attachments.iter().all(Option::is_none) {
+                            Vec::new()
+                        } else {
+                            descriptor
+                                .color_attachments
+                                .iter()
+                                .map(|attachment| {
+                                    attachment.as_ref().map(|attachment| {
+                                        wgpu::RenderPassColorAttachment {
+                                            view: &attachment.view,
+                                            depth_slice: None,
+                                            resolve_target: attachment.resolve_target.as_ref(),
+                                            ops: wgpu::Operations {
+                                                load: attachment.load,
+                                                store: attachment.store,
+                                            },
+                                        }
+                                    })
+                                })
+                                .collect()
+                        };
                     let depth_stencil_attachment = descriptor
                         .depth_stencil_attachment
                         .as_ref()
@@ -4284,17 +4334,23 @@ mod upstream_wgpu_native {
                         timestamp_writes: None,
                         multiview_mask: None,
                     });
+                    let mut current_vertex_buffer_slot_map: Option<Vec<(u32, u32)>> = None;
                     for command in commands {
                         match command {
-                            RenderPassCommand::SetPipeline { pipeline, .. } => {
-                                pass.set_pipeline(pipeline)
+                            RenderPassCommand::SetPipeline {
+                                pipeline,
+                                vertex_buffer_slot_map,
+                                ..
+                            } => {
+                                pass.set_pipeline(pipeline);
+                                current_vertex_buffer_slot_map = vertex_buffer_slot_map.clone();
                             }
                             RenderPassCommand::SetBindGroup {
                                 index,
                                 bind_group,
                                 dynamic_offsets,
                                 ..
-                            } => pass.set_bind_group(*index, bind_group, dynamic_offsets),
+                            } => pass.set_bind_group(*index, bind_group.as_ref(), dynamic_offsets),
                             RenderPassCommand::SetVertexBuffer {
                                 slot,
                                 buffer,
@@ -4302,13 +4358,24 @@ mod upstream_wgpu_native {
                                 size,
                                 ..
                             } => {
+                                let mapped_slot = match current_vertex_buffer_slot_map.as_ref() {
+                                    Some(slot_map) => {
+                                        slot_map.iter().find_map(|(source, target)| {
+                                            (*source == *slot).then_some(*target)
+                                        })
+                                    }
+                                    None => Some(*slot),
+                                };
+                                let Some(mapped_slot) = mapped_slot else {
+                                    continue;
+                                };
                                 if let Some(size) = size {
                                     pass.set_vertex_buffer(
-                                        *slot,
+                                        mapped_slot,
                                         buffer.slice(*offset..offset.saturating_add(*size)),
                                     );
                                 } else {
-                                    pass.set_vertex_buffer(*slot, buffer.slice(*offset..));
+                                    pass.set_vertex_buffer(mapped_slot, buffer.slice(*offset..));
                                 }
                             }
                             RenderPassCommand::SetIndexBuffer {
@@ -4393,7 +4460,7 @@ mod upstream_wgpu_native {
                                 index,
                                 bind_group,
                                 dynamic_offsets,
-                            } => pass.set_bind_group(*index, bind_group, dynamic_offsets),
+                            } => pass.set_bind_group(*index, bind_group.as_ref(), dynamic_offsets),
                             ComputePassCommand::DispatchWorkgroups { x, y, z } => {
                                 pass.dispatch_workgroups(*x, *y, *z)
                             }
