@@ -126,6 +126,7 @@ void nvgRotate(NVGcontext* ctx, float angle);
 void nvgScale(NVGcontext* ctx, float x, float y);
 
 void nvgScissor(NVGcontext* ctx, float x, float y, float w, float h);
+void nvgIntersectScissor(NVGcontext* ctx, float x, float y, float w, float h);
 
 void nvgBeginPath(NVGcontext* ctx);
 void nvgClosePath(NVGcontext* ctx);

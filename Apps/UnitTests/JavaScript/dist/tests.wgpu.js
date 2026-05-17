@@ -15,6 +15,12 @@
         }
     }
 
+    function expectNear(actual, expected, tolerance, message) {
+        if (Math.abs(Number(actual) - expected) > tolerance) {
+            fail(message + ": expected " + String(expected) + " +/- " + String(tolerance) + ", got " + String(actual));
+        }
+    }
+
     function expectPixel(actual, expected, message) {
         expect(actual && actual.length === 4, message + ": pixel readback did not return four channels");
         for (var i = 0; i < 4; i++) {
@@ -77,6 +83,10 @@
     }
 
     async function readCanvasPixel(source, width, height, x, y) {
+        return readCanvasPixelWithDestination(source, width, height, x, y, {});
+    }
+
+    async function readCanvasPixelWithDestination(source, width, height, x, y, destinationOptions) {
         expect(typeof navigator.gpu._testReadTexturePixel === "function", "texture readback test hook missing");
 
         var adapter = await navigator.gpu.requestAdapter();
@@ -86,7 +96,9 @@
             format: "rgba8unorm",
             usage: GPUTextureUsage.COPY_SRC | GPUTextureUsage.COPY_DST | GPUTextureUsage.TEXTURE_BINDING
         });
-        device.queue.copyExternalImageToTexture({ source: source }, { texture: texture }, { width: width, height: height });
+        var destination = destinationOptions || {};
+        destination.texture = texture;
+        device.queue.copyExternalImageToTexture({ source: source }, destination, { width: width, height: height });
         await device.queue.onSubmittedWorkDone();
         return navigator.gpu._testReadTexturePixel(texture, x, y);
     }
@@ -194,6 +206,119 @@
             context.globalAlpha = Number.POSITIVE_INFINITY;
             expectEqual(context.globalAlpha, 0.5, "infinite globalAlpha should be ignored");
         }],
+        ["Canvas 2D fillStyle and strokeStyle ignore invalid strings", async function () {
+            var originalWarn = console.warn;
+            var warnings = [];
+            console.warn = function (message) {
+                warnings.push(String(message));
+                originalWarn.apply(console, arguments);
+            };
+
+            var fillCanvas = new _native.Canvas();
+            fillCanvas.width = 4;
+            fillCanvas.height = 4;
+            var fillContext = fillCanvas.getContext("2d");
+
+            var strokeCanvas = new _native.Canvas();
+            strokeCanvas.width = 8;
+            strokeCanvas.height = 5;
+            var strokeContext = strokeCanvas.getContext("2d");
+
+            try {
+                fillContext.fillStyle = "rgb(0, 255, 0)";
+                fillContext.fillStyle = "";
+                fillContext.fillStyle = "unknownColor";
+                fillContext.fillRect(0, 0, 4, 4);
+
+                strokeContext.strokeStyle = "rgb(255, 0, 0)";
+                strokeContext.strokeStyle = "";
+                strokeContext.strokeStyle = "unknownColor";
+                strokeContext.lineWidth = 2;
+                strokeContext.beginPath();
+                strokeContext.moveTo(0, 2);
+                strokeContext.lineTo(8, 2);
+                strokeContext.stroke();
+            } finally {
+                console.warn = originalWarn;
+            }
+
+            expectPixel(await readCanvasPixel(fillCanvas, 4, 4, 1, 1), [0, 255, 0, 255], "invalid fillStyle should preserve the previous valid color");
+            expectPixel(await readCanvasPixel(strokeCanvas, 8, 5, 3, 2), [255, 0, 0, 255], "invalid strokeStyle should preserve the previous valid color");
+            expect(warnings.some(function (message) { return message.indexOf("fillStyle color value \"\"") !== -1; }), "empty fillStyle warning should include the ignored value");
+            expect(warnings.some(function (message) { return message.indexOf("fillStyle color parse failed:") !== -1 && message.indexOf("Unable to parse color") !== -1; }), "fillStyle parser warning should include Napi::Error::what()");
+            expect(warnings.some(function (message) { return message.indexOf("strokeStyle color value \"\"") !== -1; }), "empty strokeStyle warning should include the ignored value");
+            expect(warnings.some(function (message) { return message.indexOf("strokeStyle color parse failed:") !== -1 && message.indexOf("Unable to parse color") !== -1; }), "strokeStyle parser warning should include Napi::Error::what()");
+        }],
+        ["Canvas 2D measureText exposes browser-style bounding metrics", function () {
+            var canvas = new _native.Canvas();
+            canvas.width = 64;
+            canvas.height = 64;
+            var context = canvas.getContext("2d");
+            context.font = "20px DefinitelyMissingFont";
+
+            var metrics = context.measureText("Hi");
+            expectNear(metrics.width, 22, 0.001, "unavailable font family should use stable fallback width");
+            expectNear(metrics.height, 20, 0.001, "unavailable font family should use stable fallback height");
+            expectNear(metrics.actualBoundingBoxLeft, 0, 0.001, "fallback actualBoundingBoxLeft");
+            expectNear(metrics.actualBoundingBoxRight, 22, 0.001, "fallback actualBoundingBoxRight");
+            expectNear(metrics.actualBoundingBoxAscent, 15, 0.001, "fallback actualBoundingBoxAscent");
+            expectNear(metrics.actualBoundingBoxDescent, 5, 0.001, "fallback actualBoundingBoxDescent");
+            expectNear(metrics.fontBoundingBoxAscent, 15, 0.001, "fallback fontBoundingBoxAscent");
+            expectNear(metrics.fontBoundingBoxDescent, 5, 0.001, "fallback fontBoundingBoxDescent");
+        }],
+        ["Canvas 2D narrow rounded paths fill", async function () {
+            var canvas = new _native.Canvas();
+            canvas.width = 32;
+            canvas.height = 32;
+            var context = canvas.getContext("2d");
+            var x = 10.5;
+            var y = 2.5;
+            var width = 11;
+            var height = 21;
+            var radius = 5.5;
+
+            context.fillStyle = "rgb(255, 0, 0)";
+            context.beginPath();
+            context.moveTo(x + radius, y);
+            context.lineTo(x + width - radius, y);
+            context.arc(x + width - radius, y + radius, radius, (3 * Math.PI) / 2, Math.PI * 2);
+            context.lineTo(x + width, y + height - radius);
+            context.arc(x + width - radius, y + height - radius, radius, 0, Math.PI / 2);
+            context.lineTo(x + radius, y + height);
+            context.arc(x + radius, y + height - radius, radius, Math.PI / 2, Math.PI);
+            context.lineTo(x, y + radius);
+            context.arc(x + radius, y + radius, radius, Math.PI, (3 * Math.PI) / 2);
+            context.closePath();
+            context.fill();
+
+            expectPixel(await readCanvasPixel(canvas, 32, 32, 16, 12), [255, 0, 0, 255], "narrow rounded path center");
+        }],
+        ["Canvas 2D clips use current path bounds and intersect nested clips", async function () {
+            var canvas = new _native.Canvas();
+            canvas.width = 18;
+            canvas.height = 8;
+            var context = canvas.getContext("2d");
+
+            context.save();
+            context.beginPath();
+            context.moveTo(4, 1);
+            context.lineTo(10, 1);
+            context.lineTo(10, 7);
+            context.lineTo(4, 7);
+            context.closePath();
+            context.clip();
+            context.beginPath();
+            context.rect(8, 0, 8, 8);
+            context.clip();
+
+            context.fillStyle = "rgb(255, 0, 0)";
+            context.fillRect(0, 0, 18, 8);
+            context.restore();
+
+            expectPixel(await readCanvasPixel(canvas, 18, 8, 8, 4), [255, 0, 0, 255], "nested clip intersection visible pixel");
+            expectPixel(await readCanvasPixel(canvas, 18, 8, 1, 4), [0, 0, 0, 0], "path clip should not fall back to the full canvas");
+            expectPixel(await readCanvasPixel(canvas, 18, 8, 14, 4), [0, 0, 0, 0], "nested clip should intersect the previous clip");
+        }],
         ["Canvas 2D drawImage accepts another native canvas source", function () {
             var source = new _native.Canvas();
             source.width = 4;
@@ -263,6 +388,26 @@
             await device.queue.onSubmittedWorkDone();
 
             expectPixel(navigator.gpu._testReadTexturePixel(texture, 1, 1), [0, 255, 0, 255], "CanvasWgpu 2D upload should include pre-flush draw commands");
+        }],
+        ["GPUQueue.copyExternalImageToTexture converts CanvasWgpu alpha mode", async function () {
+            var source = new _native.Canvas();
+            source.width = 2;
+            source.height = 2;
+            var context = source.getContext("2d");
+            context.globalAlpha = 0.5;
+            context.fillStyle = "rgb(255, 255, 255)";
+            context.fillRect(0, 0, 2, 2);
+
+            expectPixel(
+                await readCanvasPixel(source, 2, 2, 0, 0),
+                [255, 255, 255, 128],
+                "CanvasWgpu default external upload should provide straight alpha"
+            );
+            expectPixel(
+                await readCanvasPixelWithDestination(source, 2, 2, 0, 0, { premultipliedAlpha: true }),
+                [128, 128, 128, 128],
+                "CanvasWgpu premultiplied external upload should preserve premultiplied alpha"
+            );
         }],
         ["CanvasGradient renders into CanvasWgpu WebGPU uploads", async function () {
             var linear = new _native.Canvas();

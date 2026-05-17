@@ -2,6 +2,9 @@
 #include <algorithm>
 #include <cassert>
 #include <cmath>
+#include <fstream>
+#include <iterator>
+#include <optional>
 #include <regex>
 
 #ifdef _MSC_VER
@@ -34,6 +37,110 @@
 namespace Babylon::Polyfills::Internal
 {
     static constexpr auto JS_CONTEXT_CONSTRUCTOR_NAME = "Context";
+
+    void LogNativeWarning(Napi::Env env, const std::string& message)
+    {
+        try
+        {
+            auto console = env.Global().Get("console");
+            if (!console.IsObject())
+            {
+                return;
+            }
+
+            auto warn = console.As<Napi::Object>().Get("warn");
+            if (warn.IsFunction())
+            {
+                warn.As<Napi::Function>().Call(console, {Napi::String::New(env, message)});
+            }
+        }
+        catch (...)
+        {
+        }
+    }
+
+    std::optional<NVGcolor> TryParseStyleColor(Napi::Env env, const std::string& style, const char* propertyName)
+    {
+        if (style.empty())
+        {
+            LogNativeWarning(env, std::string{"Canvas 2D ignored invalid "} + propertyName + " color value \"\"; preserving the previous value.");
+            return std::nullopt;
+        }
+
+        try
+        {
+            return StringToColor(env, style);
+        }
+        catch (const Napi::Error& error)
+        {
+            LogNativeWarning(env, std::string{"Canvas 2D "} + propertyName + " color parse failed: " + error.what());
+            LogNativeWarning(env, std::string{"Canvas 2D ignored invalid "} + propertyName + " color value \"" + style + "\"; preserving the previous value.");
+            return std::nullopt;
+        }
+    }
+
+    void EnsureDefaultFontInfos()
+    {
+#if defined(__APPLE__)
+        static bool attempted = false;
+        if (attempted)
+        {
+            return;
+        }
+        attempted = true;
+
+        const char* paths[] = {
+            "/System/Library/Fonts/Supplemental/Arial.ttf",
+            "/Library/Fonts/Arial.ttf",
+        };
+
+        for (const auto* path : paths)
+        {
+            std::ifstream stream{path, std::ios::binary};
+            if (!stream)
+            {
+                continue;
+            }
+
+            std::vector<uint8_t> fontData{
+                std::istreambuf_iterator<char>{stream},
+                std::istreambuf_iterator<char>{}};
+            if (fontData.empty())
+            {
+                continue;
+            }
+
+            NativeCanvas::fontsInfos.emplace("Arial", fontData);
+            NativeCanvas::fontsInfos.emplace("sans-serif", fontData);
+            NativeCanvas::fontsInfos.emplace("Helvetica", std::move(fontData));
+            return;
+        }
+#endif
+    }
+
+    struct NormalizedRectangle
+    {
+        float left;
+        float top;
+        float width;
+        float height;
+    };
+
+    NormalizedRectangle NormalizeRectangle(float left, float top, float width, float height)
+    {
+        if (width < 0.f)
+        {
+            left += width;
+            width = -width;
+        }
+        if (height < 0.f)
+        {
+            top += height;
+            height = -height;
+        }
+
+        return {left, top, width, height};
+    }
 
     void Context::Initialize(Napi::Env env)
     {
@@ -174,6 +281,42 @@ namespace Babylon::Polyfills::Internal
         m_currentFontId = -1;
         m_frameActive = false;
         m_isClipped = false;
+        ResetCurrentPathBounds();
+    }
+
+    void Context::ResetCurrentPathBounds()
+    {
+        m_currentPathBounds = {};
+        m_hasCurrentPathBounds = false;
+    }
+
+    void Context::IncludeCurrentPathPoint(float x, float y)
+    {
+        if (!std::isfinite(x) || !std::isfinite(y))
+        {
+            return;
+        }
+
+        if (!m_hasCurrentPathBounds)
+        {
+            m_currentPathBounds = {x, y, 0.f, 0.f};
+            m_hasCurrentPathBounds = true;
+            return;
+        }
+
+        const auto right = std::max(m_currentPathBounds.left + m_currentPathBounds.width, x);
+        const auto bottom = std::max(m_currentPathBounds.top + m_currentPathBounds.height, y);
+        m_currentPathBounds.left = std::min(m_currentPathBounds.left, x);
+        m_currentPathBounds.top = std::min(m_currentPathBounds.top, y);
+        m_currentPathBounds.width = right - m_currentPathBounds.left;
+        m_currentPathBounds.height = bottom - m_currentPathBounds.top;
+    }
+
+    void Context::IncludeCurrentPathRect(float left, float top, float width, float height)
+    {
+        const auto rect = NormalizeRectangle(left, top, width, height);
+        IncludeCurrentPathPoint(rect.left, rect.top);
+        IncludeCurrentPathPoint(rect.left + rect.width, rect.top + rect.height);
     }
 
     void Context::DeleteTransientImages()
@@ -274,11 +417,12 @@ namespace Babylon::Polyfills::Internal
         auto top = info[1].As<Napi::Number>().FloatValue();
         auto width = info[2].As<Napi::Number>().FloatValue();
         auto height = info[3].As<Napi::Number>().FloatValue();
+        const auto rect = NormalizeRectangle(left, top, width, height);
 
         nvgBeginPath(*m_nvg);
-        nvgRect(*m_nvg, left, top, width, height);
+        nvgRect(*m_nvg, rect.left, rect.top, rect.width, rect.height);
 
-        BindFillStyle(info, left, top, width, height);
+        BindFillStyle(info, rect.left, rect.top, rect.width, rect.height);
 
         SetFilterStack();
         nvgFill(*m_nvg);
@@ -303,9 +447,14 @@ namespace Babylon::Polyfills::Internal
             EnsureFrame();
 
             auto string = value.As<Napi::String>().Utf8Value();
-            const auto color = StringToColor(info.Env(), string);
+            const auto color = TryParseStyleColor(info.Env(), string, "fillStyle");
+            if (!color)
+            {
+                return;
+            }
+
             m_fillStyle = std::move(string);
-            nvgFillColor(*m_nvg, color);
+            nvgFillColor(*m_nvg, *color);
         }
         else if (value.IsObject())
         {
@@ -337,9 +486,14 @@ namespace Babylon::Polyfills::Internal
             EnsureFrame();
 
             auto string = value.As<Napi::String>().Utf8Value();
-            const auto color = StringToColor(info.Env(), string);
+            const auto color = TryParseStyleColor(info.Env(), string, "strokeStyle");
+            if (!color)
+            {
+                return;
+            }
+
             m_strokeStyle = std::move(string);
-            nvgStrokeColor(*m_nvg, color);
+            nvgStrokeColor(*m_nvg, *color);
         }
         else if (value.IsObject())
         {
@@ -410,7 +564,9 @@ namespace Babylon::Polyfills::Internal
             m_shadowOffsetY,
             m_currentFontId,
             m_isClipped,
-            m_rectangleClipping});
+            m_rectangleClipping,
+            m_currentPathBounds,
+            m_hasCurrentPathBounds});
         nvgSave(*m_nvg);
     }
 
@@ -446,6 +602,8 @@ namespace Babylon::Polyfills::Internal
         m_currentFontId = state.currentFontId;
         m_isClipped = state.isClipped;
         m_rectangleClipping = state.rectangleClipping;
+        m_currentPathBounds = state.currentPathBounds;
+        m_hasCurrentPathBounds = state.hasCurrentPathBounds;
     }
 
     void Context::ClearRect(const Napi::CallbackInfo& info)
@@ -456,12 +614,13 @@ namespace Babylon::Polyfills::Internal
         const float y = info[1].As<Napi::Number>().FloatValue();
         const float width = info[2].As<Napi::Number>().FloatValue();
         const float height = info[3].As<Napi::Number>().FloatValue();
+        const auto rect = NormalizeRectangle(x, y, width, height);
 
         nvgSave(*m_nvg);
         nvgGlobalCompositeOperation(*m_nvg, NVG_COPY);
 
         nvgBeginPath(*m_nvg);
-        nvgRect(*m_nvg, x, y, width, height);
+        nvgRect(*m_nvg, rect.left, rect.top, rect.width, rect.height);
 
         nvgFillColor(*m_nvg, TRANSPARENT_BLACK);
         nvgFill(*m_nvg);
@@ -499,6 +658,7 @@ namespace Babylon::Polyfills::Internal
         EnsureFrame();
 
         nvgBeginPath(*m_nvg);
+        ResetCurrentPathBounds();
     }
 
     void Context::ClosePath(const Napi::CallbackInfo&)
@@ -516,9 +676,11 @@ namespace Babylon::Polyfills::Internal
         const auto top = info[1].As<Napi::Number>().FloatValue();
         const auto width = info[2].As<Napi::Number>().FloatValue();
         const auto height = info[3].As<Napi::Number>().FloatValue();
+        const auto rect = NormalizeRectangle(left, top, width, height);
 
-        nvgRect(*m_nvg, left, top, width, height);
-        m_rectangleClipping = {left, top, width, height};
+        nvgRect(*m_nvg, rect.left, rect.top, rect.width, rect.height);
+        m_rectangleClipping = {rect.left, rect.top, rect.width, rect.height};
+        IncludeCurrentPathRect(rect.left, rect.top, rect.width, rect.height);
     }
 
     void Context::RoundRect(const Napi::CallbackInfo& info)
@@ -530,11 +692,12 @@ namespace Babylon::Polyfills::Internal
         const auto width = info[2].As<Napi::Number>().FloatValue();
         const auto height = info[3].As<Napi::Number>().FloatValue();
         const auto radii = info[4];
+        const auto rect = NormalizeRectangle(x, y, width, height);
 
         if (radii.IsNumber())
         {
             const auto radius = radii.As<Napi::Number>().FloatValue();
-            nvgRoundedRect(*m_nvg, x, y, width, height, radius);
+            nvgRoundedRect(*m_nvg, rect.left, rect.top, rect.width, rect.height, radius);
         }
         else if (radii.IsArray())
         {
@@ -543,14 +706,14 @@ namespace Babylon::Polyfills::Internal
             if (radiiArrayLength == 1)
             {
                 const auto radius = radiiArray[0u].As<Napi::Number>().FloatValue();
-                nvgRoundedRect(*m_nvg, x, y, width, height, radius);
+                nvgRoundedRect(*m_nvg, rect.left, rect.top, rect.width, rect.height, radius);
             }
             else if (radiiArrayLength == 2)
             {
                 const auto topLeftBottomRight = radiiArray[0u].As<Napi::Number>().FloatValue();
                 const auto topRightBottomLeft = radiiArray[1u].As<Napi::Number>().FloatValue();
 
-                nvgRoundedRectVarying(*m_nvg, x, y, width, height, topLeftBottomRight, topRightBottomLeft, topLeftBottomRight, topRightBottomLeft);
+                nvgRoundedRectVarying(*m_nvg, rect.left, rect.top, rect.width, rect.height, topLeftBottomRight, topRightBottomLeft, topLeftBottomRight, topRightBottomLeft);
             }
             else if (radiiArrayLength == 3)
             {
@@ -558,7 +721,7 @@ namespace Babylon::Polyfills::Internal
                 const auto topRightBottomLeft = radiiArray[1u].As<Napi::Number>().FloatValue();
                 const auto bottomRight = radiiArray[2u].As<Napi::Number>().FloatValue();
 
-                nvgRoundedRectVarying(*m_nvg, x, y, width, height, topLeft, topRightBottomLeft, bottomRight, topRightBottomLeft);
+                nvgRoundedRectVarying(*m_nvg, rect.left, rect.top, rect.width, rect.height, topLeft, topRightBottomLeft, bottomRight, topRightBottomLeft);
             }
             else if (radiiArrayLength == 4)
             {
@@ -567,7 +730,7 @@ namespace Babylon::Polyfills::Internal
                 const auto bottomRight = radiiArray[2u].As<Napi::Number>().FloatValue();
                 const auto bottomLeft = radiiArray[3u].As<Napi::Number>().FloatValue();
 
-                nvgRoundedRectVarying(*m_nvg, x, y, width, height, topLeft, topRight, bottomRight, bottomLeft);
+                nvgRoundedRectVarying(*m_nvg, rect.left, rect.top, rect.width, rect.height, topLeft, topRight, bottomRight, bottomLeft);
             }
             else
             {
@@ -581,28 +744,41 @@ namespace Babylon::Polyfills::Internal
             const auto dompoint = radii.As<Napi::Object>();
             const auto dpx = dompoint.Get("x").As<Napi::Number>().FloatValue();
             const auto dpy = dompoint.Get("y").As<Napi::Number>().FloatValue();
-            nvgRoundedRectElliptic(*m_nvg, x, y, width, height, dpx, dpy, dpx, dpy, dpx, dpy, dpx, dpy);
+            nvgRoundedRectElliptic(*m_nvg, rect.left, rect.top, rect.width, rect.height, dpx, dpy, dpx, dpy, dpx, dpy, dpx, dpy);
         }
         else
         {
             throw Napi::Error::New(info.Env(), "Invalid radii parameter");
         }
 
-        m_rectangleClipping = {x, y, width, height};
+        m_rectangleClipping = {rect.left, rect.top, rect.width, rect.height};
+        IncludeCurrentPathRect(rect.left, rect.top, rect.width, rect.height);
     }
 
     void Context::Clip(const Napi::CallbackInfo& /*info*/)
     {
         EnsureFrame();
 
+        const bool hadActiveClip = m_isClipped;
         m_isClipped = true;
 
-        //By default m_rectangleClipping is not set, in this case we use the canvas width and height.
-        auto w = m_rectangleClipping.width != 0 ? m_rectangleClipping.width : m_canvas->GetWidth();
-        auto h = m_rectangleClipping.height != 0 ? m_rectangleClipping.height : m_canvas->GetHeight();
+        auto clipping = m_hasCurrentPathBounds ? m_currentPathBounds : m_rectangleClipping;
+        // By default no path bounds are set, in this case we use the canvas width and height.
+        if (clipping.width == 0.f && clipping.height == 0.f)
+        {
+            clipping = {0.f, 0.f, static_cast<float>(m_canvas->GetWidth()), static_cast<float>(m_canvas->GetHeight())};
+        }
+        const auto rect = NormalizeRectangle(clipping.left, clipping.top, clipping.width, clipping.height);
 
         // expand clipping 1pix in each direction because nanovg AA gets cut a bit short.
-        nvgScissor(*m_nvg, m_rectangleClipping.left - 1, m_rectangleClipping.top - 1, w + 1, h + 1);
+        if (hadActiveClip)
+        {
+            nvgIntersectScissor(*m_nvg, rect.left - 1.f, rect.top - 1.f, rect.width + 1.f, rect.height + 1.f);
+        }
+        else
+        {
+            nvgScissor(*m_nvg, rect.left - 1.f, rect.top - 1.f, rect.width + 1.f, rect.height + 1.f);
+        }
     }
 
     void Context::StrokeRect(const Napi::CallbackInfo& info)
@@ -613,10 +789,11 @@ namespace Babylon::Polyfills::Internal
         const auto top = info[1].As<Napi::Number>().FloatValue();
         const auto width = info[2].As<Napi::Number>().FloatValue();
         const auto height = info[3].As<Napi::Number>().FloatValue();
+        const auto rect = NormalizeRectangle(left, top, width, height);
 
         nvgBeginPath(*m_nvg);
-        nvgRect(*m_nvg, left, top, width, height);
-        BindStrokeStyle(info, left, top, width, height);
+        nvgRect(*m_nvg, rect.left, rect.top, rect.width, rect.height);
+        BindStrokeStyle(info, rect.left, rect.top, rect.width, rect.height);
         SetFilterStack();
         nvgStroke(*m_nvg);
     }
@@ -722,6 +899,7 @@ namespace Babylon::Polyfills::Internal
         const auto y = info[1].As<Napi::Number>().FloatValue();
 
         nvgMoveTo(*m_nvg, x, y);
+        IncludeCurrentPathPoint(x, y);
     }
 
     void Context::LineTo(const Napi::CallbackInfo& info)
@@ -732,6 +910,7 @@ namespace Babylon::Polyfills::Internal
         const auto y = info[1].As<Napi::Number>().FloatValue();
 
         nvgLineTo(*m_nvg, x, y);
+        IncludeCurrentPathPoint(x, y);
     }
 
     void Context::QuadraticCurveTo(const Napi::CallbackInfo& info)
@@ -744,14 +923,43 @@ namespace Babylon::Polyfills::Internal
         const auto y = info[3].As<Napi::Number>().FloatValue();
 
         nvgBezierTo(*m_nvg, cx, cy, cx, cy, x, y);
+        IncludeCurrentPathPoint(cx, cy);
+        IncludeCurrentPathPoint(x, y);
     }
 
     Napi::Value Context::MeasureText(const Napi::CallbackInfo& info)
     {
-        EnsureFrame();
-        SetFontFaceId();
-
         std::string text{info[0].As<Napi::String>()};
+
+        EnsureFrame();
+        EnsureLoadedFonts();
+
+        // If the JS-requested font family hasn't been loaded, return Arial-equivalent metrics
+        // instead of measuring with the first native fallback font. This matches browser fallback
+        // closely enough for GUI wrapping and centering while FillText still renders with the
+        // native substitute font.
+        const bool familyAvailable = !m_font.Family().empty()
+            && m_fonts.find(m_font.Family()) != m_fonts.end();
+        if (!familyAvailable && m_font.Size() > 0.f)
+        {
+            const float fontSize = m_font.Size();
+            const float width = fontSize * 0.55f * static_cast<float>(text.length());
+            const float ascent = fontSize * 0.75f;
+            const float descent = fontSize * 0.25f;
+
+            auto obj{Napi::Object::New(info.Env())};
+            obj.Set("width", Napi::Value::From(info.Env(), width));
+            obj.Set("height", Napi::Value::From(info.Env(), ascent + descent));
+            obj.Set("actualBoundingBoxLeft", Napi::Value::From(info.Env(), 0.f));
+            obj.Set("actualBoundingBoxRight", Napi::Value::From(info.Env(), width));
+            obj.Set("actualBoundingBoxAscent", Napi::Value::From(info.Env(), ascent));
+            obj.Set("actualBoundingBoxDescent", Napi::Value::From(info.Env(), descent));
+            obj.Set("fontBoundingBoxAscent", Napi::Value::From(info.Env(), ascent));
+            obj.Set("fontBoundingBoxDescent", Napi::Value::From(info.Env(), descent));
+            return obj.As<Napi::Value>();
+        }
+
+        SetFontFaceId();
         return MeasureText::CreateInstance(info.Env(), this, text);
     }
 
@@ -761,6 +969,8 @@ namespace Babylon::Polyfills::Internal
         {
             return;
         }
+
+        EnsureDefaultFontInfos();
 
         for (auto& font : NativeCanvas::fontsInfos)
         {
@@ -906,6 +1116,7 @@ namespace Babylon::Polyfills::Internal
         const auto endAngle = static_cast<float>(info[4].As<Napi::Number>().DoubleValue());
         const NVGwinding winding = (info.Length() == 6 && info[5].As<Napi::Boolean>()) ? NVGwinding::NVG_CCW : NVGwinding::NVG_CW;
         nvgArc(*m_nvg, x, y, radius, startAngle, endAngle, winding);
+        IncludeCurrentPathRect(x - radius, y - radius, radius * 2.f, radius * 2.f);
     }
 
     void Context::DrawImage(const Napi::CallbackInfo& info)
