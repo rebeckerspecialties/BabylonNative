@@ -7,12 +7,40 @@ class ViewController: UIViewController {
     var xrView: MTKView!
     var bnView: BNView?
 
+    private var isValidationRun: Bool {
+        let arguments = CommandLine.arguments
+        return arguments.contains("--test")
+            || arguments.contains("--test-index")
+            || arguments.contains("--save-results")
+            || arguments.contains("--once")
+            || arguments.contains("--include-excluded")
+    }
+
+    override var supportedInterfaceOrientations: UIInterfaceOrientationMask {
+        return isValidationRun ? .landscape : .all
+    }
+
+    override var preferredInterfaceOrientationForPresentation: UIInterfaceOrientation {
+        return .landscapeRight
+    }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+    }
+
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         guard
             let appDelegate = UIApplication.shared.delegate as? AppDelegate,
             let runtime = appDelegate.runtime
         else { return }
+
+        if isValidationRun {
+            if #available(iOS 16.0, *) {
+                setNeedsUpdateOfSupportedInterfaceOrientations()
+                view.window?.windowScene?.requestGeometryUpdate(.iOS(interfaceOrientations: .landscapeRight))
+            }
+        }
 
         setupViews()
 
@@ -36,7 +64,7 @@ class ViewController: UIViewController {
             target: self,
             onTouchDown: { [weak self] (id, x, y) in self?.bnView?.pointerDown(id: Int(id), x: CGFloat(x), y: CGFloat(y)) },
             onTouchMove: { [weak self] (id, x, y) in self?.bnView?.pointerMove(id: Int(id), x: CGFloat(x), y: CGFloat(y)) },
-            onTouchUp:   { [weak self] (id, x, y) in self?.bnView?.pointerUp  (id: Int(id), x: CGFloat(x), y: CGFloat(y)) }
+            onTouchUp:   { [weak self] (id, x, y) in self?.bnView?.pointerUp(id: Int(id), x: CGFloat(x), y: CGFloat(y)) }
         )
         mtkView.addGestureRecognizer(recognizer)
     }
