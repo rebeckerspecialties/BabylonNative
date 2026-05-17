@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <fstream>
 #include <iterator>
+#include <limits.h>
 #include <optional>
 #include <regex>
 
@@ -35,9 +36,14 @@
 #include "LineCaps.h"
 #include "Gradient.h"
 
+#if defined(__APPLE__)
+#include <CoreText/CoreText.h>
+#endif
+
 namespace Babylon::Polyfills::Internal
 {
     static constexpr auto JS_CONTEXT_CONSTRUCTOR_NAME = "Context";
+    static constexpr auto PI = 3.14159265358979323846f;
 
     void LogNativeWarning(Napi::Env env, const std::string& message)
     {
@@ -80,19 +86,69 @@ namespace Babylon::Polyfills::Internal
         }
     }
 
-    void EnsureDefaultFontInfos()
-    {
 #if defined(__APPLE__)
-        static bool attempted = false;
-        if (attempted)
+    std::optional<std::vector<uint8_t>> LoadAppleFontData(const char* fontName)
+    {
+        CFStringRef name = CFStringCreateWithCString(nullptr, fontName, kCFStringEncodingUTF8);
+        if (!name)
         {
-            return;
+            return std::nullopt;
         }
-        attempted = true;
 
+        CTFontRef font = CTFontCreateWithName(name, 16.0, nullptr);
+        CFRelease(name);
+        if (!font)
+        {
+            return std::nullopt;
+        }
+
+        CTFontDescriptorRef descriptor = CTFontCopyFontDescriptor(font);
+        CFRelease(font);
+        if (!descriptor)
+        {
+            return std::nullopt;
+        }
+
+        CFURLRef url = static_cast<CFURLRef>(CTFontDescriptorCopyAttribute(descriptor, kCTFontURLAttribute));
+        CFRelease(descriptor);
+        if (!url)
+        {
+            return std::nullopt;
+        }
+
+        char path[PATH_MAX]{};
+        const bool resolvedPath = CFURLGetFileSystemRepresentation(url, true, reinterpret_cast<UInt8*>(path), sizeof(path));
+        CFRelease(url);
+        if (!resolvedPath)
+        {
+            return std::nullopt;
+        }
+
+        std::ifstream stream{path, std::ios::binary};
+        if (!stream)
+        {
+            return std::nullopt;
+        }
+
+        std::vector<uint8_t> fontData{
+            std::istreambuf_iterator<char>{stream},
+            std::istreambuf_iterator<char>{}};
+        if (fontData.empty())
+        {
+            return std::nullopt;
+        }
+
+        return fontData;
+    }
+
+    std::optional<std::vector<uint8_t>> LoadAppleFontDataFromKnownPaths()
+    {
         const char* paths[] = {
             "/System/Library/Fonts/Supplemental/Arial.ttf",
             "/Library/Fonts/Arial.ttf",
+            "/System/Library/Fonts/Core/Arial.ttf",
+            "/System/Library/Fonts/Helvetica.ttc",
+            "/System/Library/Fonts/Core/Helvetica.ttc",
         };
 
         for (const auto* path : paths)
@@ -106,16 +162,43 @@ namespace Babylon::Polyfills::Internal
             std::vector<uint8_t> fontData{
                 std::istreambuf_iterator<char>{stream},
                 std::istreambuf_iterator<char>{}};
-            if (fontData.empty())
+            if (!fontData.empty())
             {
-                continue;
+                return fontData;
             }
+        }
 
-            NativeCanvas::fontsInfos.emplace("Arial", fontData);
-            NativeCanvas::fontsInfos.emplace("sans-serif", fontData);
-            NativeCanvas::fontsInfos.emplace("Helvetica", std::move(fontData));
+        return std::nullopt;
+    }
+#endif
+
+    void EnsureDefaultFontInfos()
+    {
+#if defined(__APPLE__)
+        static bool attempted = false;
+        if (attempted)
+        {
             return;
         }
+        attempted = true;
+
+        auto fontData = LoadAppleFontData("Arial");
+        if (!fontData)
+        {
+            fontData = LoadAppleFontData("Helvetica");
+        }
+        if (!fontData)
+        {
+            fontData = LoadAppleFontDataFromKnownPaths();
+        }
+        if (!fontData)
+        {
+            return;
+        }
+
+        NativeCanvas::fontsInfos.emplace("Arial", *fontData);
+        NativeCanvas::fontsInfos.emplace("sans-serif", *fontData);
+        NativeCanvas::fontsInfos.emplace("Helvetica", std::move(*fontData));
 #endif
     }
 
@@ -141,6 +224,44 @@ namespace Babylon::Polyfills::Internal
         }
 
         return {left, top, width, height};
+    }
+
+    float ClampCornerRadius(float radius, float width, float height)
+    {
+        return std::max(0.f, std::min({std::abs(radius), width * 0.5f, height * 0.5f}));
+    }
+
+    void AppendRoundedRectPath(NVGcontext* nvg, const NormalizedRectangle& rect, float topLeft, float topRight, float bottomRight, float bottomLeft)
+    {
+        const auto right = rect.left + rect.width;
+        const auto bottom = rect.top + rect.height;
+        topLeft = ClampCornerRadius(topLeft, rect.width, rect.height);
+        topRight = ClampCornerRadius(topRight, rect.width, rect.height);
+        bottomRight = ClampCornerRadius(bottomRight, rect.width, rect.height);
+        bottomLeft = ClampCornerRadius(bottomLeft, rect.width, rect.height);
+
+        nvgMoveTo(nvg, rect.left + topLeft, rect.top);
+        nvgLineTo(nvg, right - topRight, rect.top);
+        if (topRight > 0.f)
+        {
+            nvgArc(nvg, right - topRight, rect.top + topRight, topRight, (3.f * PI) / 2.f, 2.f * PI, NVG_CW);
+        }
+        nvgLineTo(nvg, right, bottom - bottomRight);
+        if (bottomRight > 0.f)
+        {
+            nvgArc(nvg, right - bottomRight, bottom - bottomRight, bottomRight, 0.f, PI / 2.f, NVG_CW);
+        }
+        nvgLineTo(nvg, rect.left + bottomLeft, bottom);
+        if (bottomLeft > 0.f)
+        {
+            nvgArc(nvg, rect.left + bottomLeft, bottom - bottomLeft, bottomLeft, PI / 2.f, PI, NVG_CW);
+        }
+        nvgLineTo(nvg, rect.left, rect.top + topLeft);
+        if (topLeft > 0.f)
+        {
+            nvgArc(nvg, rect.left + topLeft, rect.top + topLeft, topLeft, PI, (3.f * PI) / 2.f, NVG_CW);
+        }
+        nvgClosePath(nvg);
     }
 
     void Context::Initialize(Napi::Env env)
@@ -292,12 +413,18 @@ namespace Babylon::Polyfills::Internal
         m_frameActive = false;
         m_isClipped = false;
         ResetCurrentPathBounds();
+        ResetCurrentPathClipMetadata();
     }
 
     void Context::ResetCurrentPathBounds()
     {
         m_currentPathBounds = {};
         m_hasCurrentPathBounds = false;
+    }
+
+    void Context::ResetCurrentPathClipMetadata()
+    {
+        m_currentRoundedRectangleClipping.reset();
     }
 
     void Context::IncludeCurrentPathPoint(float x, float y)
@@ -576,7 +703,8 @@ namespace Babylon::Polyfills::Internal
             m_isClipped,
             m_rectangleClipping,
             m_currentPathBounds,
-            m_hasCurrentPathBounds});
+            m_hasCurrentPathBounds,
+            m_currentRoundedRectangleClipping});
         nvgSave(*m_nvg);
     }
 
@@ -614,6 +742,7 @@ namespace Babylon::Polyfills::Internal
         m_rectangleClipping = state.rectangleClipping;
         m_currentPathBounds = state.currentPathBounds;
         m_hasCurrentPathBounds = state.hasCurrentPathBounds;
+        m_currentRoundedRectangleClipping = state.currentRoundedRectangleClipping;
     }
 
     void Context::ClearRect(const Napi::CallbackInfo& info)
@@ -669,6 +798,7 @@ namespace Babylon::Polyfills::Internal
 
         nvgBeginPath(*m_nvg);
         ResetCurrentPathBounds();
+        ResetCurrentPathClipMetadata();
     }
 
     void Context::ClosePath(const Napi::CallbackInfo&)
@@ -691,6 +821,7 @@ namespace Babylon::Polyfills::Internal
         nvgRect(*m_nvg, rect.left, rect.top, rect.width, rect.height);
         m_rectangleClipping = {rect.left, rect.top, rect.width, rect.height};
         IncludeCurrentPathRect(rect.left, rect.top, rect.width, rect.height);
+        ResetCurrentPathClipMetadata();
     }
 
     void Context::RoundRect(const Napi::CallbackInfo& info)
@@ -703,11 +834,13 @@ namespace Babylon::Polyfills::Internal
         const auto height = info[3].As<Napi::Number>().FloatValue();
         const auto radii = info[4];
         const auto rect = NormalizeRectangle(x, y, width, height);
+        std::optional<float> uniformRadius{};
 
         if (radii.IsNumber())
         {
             const auto radius = radii.As<Napi::Number>().FloatValue();
-            nvgRoundedRect(*m_nvg, rect.left, rect.top, rect.width, rect.height, radius);
+            AppendRoundedRectPath(*m_nvg, rect, radius, radius, radius, radius);
+            uniformRadius = radius;
         }
         else if (radii.IsArray())
         {
@@ -716,14 +849,19 @@ namespace Babylon::Polyfills::Internal
             if (radiiArrayLength == 1)
             {
                 const auto radius = radiiArray[0u].As<Napi::Number>().FloatValue();
-                nvgRoundedRect(*m_nvg, rect.left, rect.top, rect.width, rect.height, radius);
+                AppendRoundedRectPath(*m_nvg, rect, radius, radius, radius, radius);
+                uniformRadius = radius;
             }
             else if (radiiArrayLength == 2)
             {
                 const auto topLeftBottomRight = radiiArray[0u].As<Napi::Number>().FloatValue();
                 const auto topRightBottomLeft = radiiArray[1u].As<Napi::Number>().FloatValue();
 
-                nvgRoundedRectVarying(*m_nvg, rect.left, rect.top, rect.width, rect.height, topLeftBottomRight, topRightBottomLeft, topLeftBottomRight, topRightBottomLeft);
+                AppendRoundedRectPath(*m_nvg, rect, topLeftBottomRight, topRightBottomLeft, topLeftBottomRight, topRightBottomLeft);
+                if (topLeftBottomRight == topRightBottomLeft)
+                {
+                    uniformRadius = topLeftBottomRight;
+                }
             }
             else if (radiiArrayLength == 3)
             {
@@ -731,7 +869,11 @@ namespace Babylon::Polyfills::Internal
                 const auto topRightBottomLeft = radiiArray[1u].As<Napi::Number>().FloatValue();
                 const auto bottomRight = radiiArray[2u].As<Napi::Number>().FloatValue();
 
-                nvgRoundedRectVarying(*m_nvg, rect.left, rect.top, rect.width, rect.height, topLeft, topRightBottomLeft, bottomRight, topRightBottomLeft);
+                AppendRoundedRectPath(*m_nvg, rect, topLeft, topRightBottomLeft, bottomRight, topRightBottomLeft);
+                if (topLeft == topRightBottomLeft && topLeft == bottomRight)
+                {
+                    uniformRadius = topLeft;
+                }
             }
             else if (radiiArrayLength == 4)
             {
@@ -740,7 +882,11 @@ namespace Babylon::Polyfills::Internal
                 const auto bottomRight = radiiArray[2u].As<Napi::Number>().FloatValue();
                 const auto bottomLeft = radiiArray[3u].As<Napi::Number>().FloatValue();
 
-                nvgRoundedRectVarying(*m_nvg, rect.left, rect.top, rect.width, rect.height, topLeft, topRight, bottomRight, bottomLeft);
+                AppendRoundedRectPath(*m_nvg, rect, topLeft, topRight, bottomRight, bottomLeft);
+                if (topLeft == topRight && topLeft == bottomRight && topLeft == bottomLeft)
+                {
+                    uniformRadius = topLeft;
+                }
             }
             else
             {
@@ -763,6 +909,19 @@ namespace Babylon::Polyfills::Internal
 
         m_rectangleClipping = {rect.left, rect.top, rect.width, rect.height};
         IncludeCurrentPathRect(rect.left, rect.top, rect.width, rect.height);
+        if (uniformRadius)
+        {
+            m_currentRoundedRectangleClipping = RoundedRectangleClipping{
+                rect.left,
+                rect.top,
+                rect.width,
+                rect.height,
+                ClampCornerRadius(*uniformRadius, rect.width, rect.height)};
+        }
+        else
+        {
+            ResetCurrentPathClipMetadata();
+        }
     }
 
     void Context::Clip(const Napi::CallbackInfo& /*info*/)
@@ -780,8 +939,20 @@ namespace Babylon::Polyfills::Internal
         }
         const auto rect = NormalizeRectangle(clipping.left, clipping.top, clipping.width, clipping.height);
 
-        // expand clipping 1pix in each direction because nanovg AA gets cut a bit short.
-        if (hadActiveClip)
+        if (m_currentRoundedRectangleClipping)
+        {
+            const auto& rounded = *m_currentRoundedRectangleClipping;
+            if (hadActiveClip)
+            {
+                nvgIntersectRoundedScissor(*m_nvg, rounded.left, rounded.top, rounded.width, rounded.height, rounded.radius);
+            }
+            else
+            {
+                nvgRoundedScissor(*m_nvg, rounded.left, rounded.top, rounded.width, rounded.height, rounded.radius);
+            }
+        }
+        // expand rectangular clipping 1pix in each direction because nanovg AA gets cut a bit short.
+        else if (hadActiveClip)
         {
             nvgIntersectScissor(*m_nvg, rect.left - 1.f, rect.top - 1.f, rect.width + 1.f, rect.height + 1.f);
         }
@@ -908,6 +1079,7 @@ namespace Babylon::Polyfills::Internal
         const auto x = info[0].As<Napi::Number>().FloatValue();
         const auto y = info[1].As<Napi::Number>().FloatValue();
 
+        ResetCurrentPathClipMetadata();
         nvgMoveTo(*m_nvg, x, y);
         IncludeCurrentPathPoint(x, y);
     }
@@ -919,6 +1091,7 @@ namespace Babylon::Polyfills::Internal
         const auto x = info[0].As<Napi::Number>().FloatValue();
         const auto y = info[1].As<Napi::Number>().FloatValue();
 
+        ResetCurrentPathClipMetadata();
         nvgLineTo(*m_nvg, x, y);
         IncludeCurrentPathPoint(x, y);
     }
@@ -932,6 +1105,7 @@ namespace Babylon::Polyfills::Internal
         const auto x = info[2].As<Napi::Number>().FloatValue();
         const auto y = info[3].As<Napi::Number>().FloatValue();
 
+        ResetCurrentPathClipMetadata();
         nvgBezierTo(*m_nvg, cx, cy, cx, cy, x, y);
         IncludeCurrentPathPoint(cx, cy);
         IncludeCurrentPathPoint(x, y);
@@ -1131,6 +1305,7 @@ namespace Babylon::Polyfills::Internal
         const auto startAngle = static_cast<float>(info[3].As<Napi::Number>().DoubleValue());
         const auto endAngle = static_cast<float>(info[4].As<Napi::Number>().DoubleValue());
         const NVGwinding winding = (info.Length() == 6 && info[5].As<Napi::Boolean>()) ? NVGwinding::NVG_CCW : NVGwinding::NVG_CW;
+        ResetCurrentPathClipMetadata();
         nvgArc(*m_nvg, x, y, radius, startAngle, endAngle, winding);
         IncludeCurrentPathRect(x - radius, y - radius, radius * 2.f, radius * 2.f);
     }

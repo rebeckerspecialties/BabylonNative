@@ -266,6 +266,35 @@
             expectNear(metrics.fontBoundingBoxAscent, 15, 0.001, "fallback fontBoundingBoxAscent");
             expectNear(metrics.fontBoundingBoxDescent, 5, 0.001, "fallback fontBoundingBoxDescent");
         }],
+        ["Canvas 2D Arial metrics stay close to browser GUI wrapping", function () {
+            var canvas = new _native.Canvas();
+            canvas.width = 64;
+            canvas.height = 64;
+            var context = canvas.getContext("2d");
+            context.font = "18px Arial";
+
+            var clickMetrics = context.measureText("Click");
+            var meMetrics = context.measureText("Me");
+            expectNear(clickMetrics.width, 38.9970703125, 0.001, "Arial Click width");
+            expectNear(meMetrics.width, 25.0048828125, 0.001, "Arial Me width");
+            expectNear(clickMetrics.fontBoundingBoxAscent, 16, 0.5, "Arial Click fontBoundingBoxAscent");
+            expectNear(clickMetrics.fontBoundingBoxDescent, 4, 0.5, "Arial Click fontBoundingBoxDescent");
+        }],
+        ["BabylonJS native font offset approximates browser DOM line boxes", function () {
+            var engineLike = {
+                createCanvas: function (width, height) {
+                    var canvas = new _native.Canvas();
+                    canvas.width = width;
+                    canvas.height = height;
+                    return canvas;
+                }
+            };
+            expect(BABYLON && BABYLON.Engine && BABYLON.Engine.prototype.getFontOffset, "BabylonJS Engine.getFontOffset missing");
+            var offset = BABYLON.Engine.prototype.getFontOffset.call(engineLike, "18px Arial");
+            expectEqual(offset.ascent, 16, "18px Arial font offset ascent");
+            expectEqual(offset.height, 21, "18px Arial font offset height");
+            expectEqual(offset.descent, 5, "18px Arial font offset descent");
+        }],
         ["Canvas 2D narrow rounded paths fill", async function () {
             var canvas = new _native.Canvas();
             canvas.width = 32;
@@ -292,6 +321,274 @@
             context.fill();
 
             expectPixel(await readCanvasPixel(canvas, 32, 32, 16, 12), [255, 0, 0, 255], "narrow rounded path center");
+        }],
+        ["Canvas 2D negative-width roundRect strokes match clipped browser geometry", async function () {
+            var canvas = new _native.Canvas();
+            canvas.width = 64;
+            canvas.height = 48;
+            var context = canvas.getContext("2d");
+
+            var measureLeft = 35;
+            var measureTop = 8;
+            var measureWidth = -20;
+            var measureHeight = 30;
+            var x = measureLeft + 0.5;
+            var y = measureTop + 0.5;
+            var width = measureWidth - 1;
+            var height = measureHeight - 1;
+            var radius = Math.abs(Math.min(height / 2, Math.min(width / 2, 20)));
+
+            context.beginPath();
+            context.rect(measureLeft, measureTop, measureWidth, measureHeight);
+            context.clip();
+            context.strokeStyle = "rgb(255, 255, 255)";
+            context.lineWidth = 1;
+            context.beginPath();
+            context.roundRect(x, y, width, height, radius);
+            context.stroke();
+
+            var readSourcePixel = function (x, y) {
+                return readCanvasPixel(canvas, 64, 48, x, 47 - y);
+            };
+            var topArcA = await readSourcePixel(24, 8);
+            var topArcB = await readSourcePixel(24, 9);
+            var bottomArcA = await readSourcePixel(24, 37);
+            var bottomArcB = await readSourcePixel(24, 38);
+            var hasVisibleWhite = function (pixel) {
+                return pixel[0] > 200 && pixel[1] > 200 && pixel[2] > 200 && pixel[3] > 16;
+            };
+            expect(
+                hasVisibleWhite(topArcA) || hasVisibleWhite(topArcB),
+                "negative-width roundRect should keep the clipped top arc segment: got " + Array.prototype.join.call(topArcA, ",") + " / " + Array.prototype.join.call(topArcB, ",")
+            );
+            expect(
+                hasVisibleWhite(bottomArcA) || hasVisibleWhite(bottomArcB),
+                "negative-width roundRect should keep the clipped bottom arc segment: got " + Array.prototype.join.call(bottomArcA, ",") + " / " + Array.prototype.join.call(bottomArcB, ",")
+            );
+            expectPixel(await readSourcePixel(16, 37), [0, 0, 0, 0], "negative-width roundRect should not draw a solid crossing bottom edge");
+            expectPixel(await readSourcePixel(34, 37), [0, 0, 0, 0], "negative-width roundRect should not draw past the clipped bottom arc segment");
+        }],
+        ["Canvas 2D rounded clips reject transformed top-corner overflow", async function () {
+            var canvas = new _native.Canvas();
+            canvas.width = 80;
+            canvas.height = 60;
+            var context = canvas.getContext("2d");
+
+            context.translate(40, 30);
+            context.rotate(-Math.PI / 10);
+            context.beginPath();
+            context.roundRect(-22, -18, 44, 36, 18);
+            context.clip();
+            context.fillStyle = "rgb(255, 255, 255)";
+            context.fillRect(-80, -80, 160, 160);
+
+            var transformPoint = function (x, y) {
+                var angle = -Math.PI / 10;
+                return {
+                    x: Math.round(40 + x * Math.cos(angle) - y * Math.sin(angle)),
+                    y: Math.round(30 + x * Math.sin(angle) + y * Math.cos(angle))
+                };
+            };
+            var readSourcePixel = function (point) {
+                return readCanvasPixel(canvas, 80, 60, point.x, 59 - point.y);
+            };
+
+            var topCornerOutside = transformPoint(-21, -17);
+            var topCenterInside = transformPoint(0, -15);
+            expectPixel(await readSourcePixel(topCornerOutside), [0, 0, 0, 0], "rounded clip should reject transformed top-corner overflow");
+            expectPixel(await readSourcePixel(topCenterInside), [255, 255, 255, 255], "rounded clip should keep transformed top-center content");
+        }],
+        ["Canvas 2D nested rounded clips preserve transformed top corners", async function () {
+            var canvas = new _native.Canvas();
+            canvas.width = 80;
+            canvas.height = 60;
+            var context = canvas.getContext("2d");
+
+            context.beginPath();
+            context.rect(0, 0, 80, 60);
+            context.clip();
+            context.translate(40, 30);
+            context.rotate(-Math.PI / 10);
+            context.beginPath();
+            context.roundRect(-22, -18, 44, 36, 18);
+            context.clip();
+            context.fillStyle = "rgb(255, 255, 255)";
+            context.fillRect(-80, -80, 160, 160);
+
+            var transformPoint = function (x, y) {
+                var angle = -Math.PI / 10;
+                return {
+                    x: Math.round(40 + x * Math.cos(angle) - y * Math.sin(angle)),
+                    y: Math.round(30 + x * Math.sin(angle) + y * Math.cos(angle))
+                };
+            };
+            var readSourcePixel = function (point) {
+                return readCanvasPixel(canvas, 80, 60, point.x, 59 - point.y);
+            };
+
+            var topCornerOutside = transformPoint(-21, -17);
+            var topCenterInside = transformPoint(0, -15);
+            expectPixel(await readSourcePixel(topCornerOutside), [0, 0, 0, 0], "nested rounded clip should reject transformed top-corner overflow");
+            expectPixel(await readSourcePixel(topCenterInside), [255, 255, 255, 255], "nested rounded clip should keep transformed top-center content");
+        }],
+        ["Canvas 2D nested rounded clips reject rotated capsule top-side overflow", async function () {
+            var canvas = new _native.Canvas();
+            canvas.width = 96;
+            canvas.height = 96;
+            var context = canvas.getContext("2d");
+
+            context.translate(48, 48);
+            context.rotate(0.2);
+            context.beginPath();
+            context.rect(-48, -48, 96, 96);
+            context.clip();
+            context.beginPath();
+            context.roundRect(-14, -19, 28, 38, 14);
+            context.clip();
+            context.fillStyle = "rgb(255, 255, 255)";
+            context.fillRect(-96, -96, 192, 192);
+
+            var transformPoint = function (x, y) {
+                var angle = 0.2;
+                return {
+                    x: Math.round(48 + x * Math.cos(angle) - y * Math.sin(angle)),
+                    y: Math.round(48 + x * Math.sin(angle) + y * Math.cos(angle))
+                };
+            };
+            var readSourcePixel = function (point) {
+                return readCanvasPixel(canvas, 96, 96, point.x, 95 - point.y);
+            };
+
+            expectPixel(await readSourcePixel(transformPoint(-13, -16)), [0, 0, 0, 0], "rotated capsule clip should reject top-left text overflow");
+            expectPixel(await readSourcePixel(transformPoint(0, -16)), [255, 255, 255, 255], "rotated capsule clip should keep top-center content");
+        }],
+        ["Canvas 2D matching rectangular content clips preserve rounded parent corners", async function () {
+            var canvas = new _native.Canvas();
+            canvas.width = 96;
+            canvas.height = 96;
+            var context = canvas.getContext("2d");
+
+            context.translate(48, 48);
+            context.rotate(0.2);
+            context.beginPath();
+            context.roundRect(-14, -19, 28, 38, 14);
+            context.clip();
+            context.beginPath();
+            context.rect(-14, -19, 28, 38);
+            context.clip();
+            context.fillStyle = "rgb(255, 255, 255)";
+            context.fillRect(-96, -96, 192, 192);
+
+            var transformPoint = function (x, y) {
+                var angle = 0.2;
+                return {
+                    x: Math.round(48 + x * Math.cos(angle) - y * Math.sin(angle)),
+                    y: Math.round(48 + x * Math.sin(angle) + y * Math.cos(angle))
+                };
+            };
+            var readSourcePixel = function (point) {
+                return readCanvasPixel(canvas, 96, 96, point.x, 95 - point.y);
+            };
+
+            expectPixel(await readSourcePixel(transformPoint(-13, -16)), [0, 0, 0, 0], "matching rectangular child clip should not erase rounded parent top-left corner");
+            expectPixel(await readSourcePixel(transformPoint(0, -16)), [255, 255, 255, 255], "matching rectangular child clip should preserve rounded parent top-center content");
+        }],
+        ["Canvas 2D rotated rounded GUI clip keeps top corners inside the capsule", async function () {
+            var canvas = new _native.Canvas();
+            canvas.width = 96;
+            canvas.height = 96;
+            var context = canvas.getContext("2d");
+
+            function roundedRectPath(x, y, width, height, radius) {
+                context.beginPath();
+                context.moveTo(x + radius, y);
+                context.lineTo(x + width - radius, y);
+                context.arc(x + width - radius, y + radius, radius, (3 * Math.PI) / 2, Math.PI * 2);
+                context.lineTo(x + width, y + height - radius);
+                context.arc(x + width - radius, y + height - radius, radius, 0, Math.PI / 2);
+                context.lineTo(x + radius, y + height);
+                context.arc(x + radius, y + height - radius, radius, Math.PI / 2, Math.PI);
+                context.lineTo(x, y + radius);
+                context.arc(x + radius, y + radius, radius, Math.PI, (3 * Math.PI) / 2);
+                context.closePath();
+            }
+
+            context.fillStyle = "rgb(51, 51, 76)";
+            context.fillRect(0, 0, 96, 96);
+            context.translate(48, 48);
+            context.rotate(0.2);
+            context.translate(-48, -48);
+
+            var left = 33;
+            var top = 29;
+            var width = 30;
+            var height = 40;
+
+            context.beginPath();
+            context.rect(left, top, width, height);
+            context.clip();
+
+            context.fillStyle = "green";
+            roundedRectPath(left + 0.5, top + 0.5, width - 1, height - 1, 14.5);
+            context.fill();
+            context.strokeStyle = "white";
+            context.lineWidth = 1;
+            roundedRectPath(left + 0.5, top + 0.5, width - 1, height - 1, 14.5);
+            context.stroke();
+
+            context.beginPath();
+            context.roundRect(left + 1, top + 1, width - 2, height - 2, 14);
+            context.clip();
+            context.font = "18px Arial";
+            context.fillStyle = "white";
+
+            var lines = ["Click", "Me"];
+            var fontOffsetHeight = 21;
+            var rootY = top + 1 + 16 + ((height - 2) - fontOffsetHeight * lines.length) / 2;
+            for (var i = 0; i < lines.length; i++) {
+                var textWidth = context.measureText(lines[i]).width;
+                var x = left + 1 + ((width - 2) - textWidth) / 2;
+                context.fillText(lines[i], x, rootY);
+                rootY += fontOffsetHeight;
+            }
+
+            var readSourcePixel = function (x, y) {
+                return readCanvasPixel(canvas, 96, 96, x, 95 - y);
+            };
+            expectPixel(await readSourcePixel(35, 35), [51, 51, 76, 255], "rotated capsule fill should not bleed past the top-left rounded edge");
+            expectPixel(await readSourcePixel(63, 35), [51, 51, 76, 255], "rotated capsule fill should not bleed past the top-right rounded edge");
+            expectPixel(await readSourcePixel(64, 35), [51, 51, 76, 255], "rotated capsule fill should keep rejecting far top-right overflow");
+        }],
+        ["Canvas 2D inset rectangular content clips preserve rounded parent corners", async function () {
+            var canvas = new _native.Canvas();
+            canvas.width = 96;
+            canvas.height = 96;
+            var context = canvas.getContext("2d");
+
+            context.translate(48, 48);
+            context.rotate(0.2);
+            context.beginPath();
+            context.roundRect(-14, -19, 28, 38, 14);
+            context.clip();
+            context.beginPath();
+            context.rect(-10, -19, 20, 38);
+            context.clip();
+            context.fillStyle = "rgb(255, 255, 255)";
+            context.fillRect(-96, -96, 192, 192);
+
+            var transformPoint = function (x, y) {
+                var angle = 0.2;
+                return {
+                    x: Math.round(48 + x * Math.cos(angle) - y * Math.sin(angle)),
+                    y: Math.round(48 + x * Math.sin(angle) + y * Math.cos(angle))
+                };
+            };
+            var readSourcePixel = function (point) {
+                return readCanvasPixel(canvas, 96, 96, point.x, 95 - point.y);
+            };
+
+            expectPixel(await readSourcePixel(transformPoint(-9, -18)), [0, 0, 0, 0], "inset rectangular child clip should keep rejecting rounded parent top-left overflow");
+            expectPixel(await readSourcePixel(transformPoint(0, -16)), [255, 255, 255, 255], "inset rectangular child clip should preserve rounded parent top-center content");
         }],
         ["Canvas 2D clips use current path bounds and intersect nested clips", async function () {
             var canvas = new _native.Canvas();
@@ -365,6 +662,34 @@
             destinationContext.drawImage(source, 2, 3);
             expectPixel(await readCanvasPixel(destination, 8, 8, 3, 4), [255, 0, 0, 255], "drawImage copied putImageData canvas pixel");
             expectPixel(await readCanvasPixel(destination, 8, 8, 1, 1), [0, 0, 0, 0], "drawImage offset left destination transparent");
+        }],
+        ["Canvas 2D drawImage preserves semi-transparent CanvasWgpu sources", async function () {
+            var source = new _native.Canvas();
+            source.width = 2;
+            source.height = 2;
+            var sourceContext = source.getContext("2d");
+            var imageData = sourceContext.getImageData(0, 0, 2, 2);
+            for (var i = 0; i < imageData.data.length; i += 4) {
+                imageData.data[i + 0] = 255;
+                imageData.data[i + 1] = 0;
+                imageData.data[i + 2] = 0;
+                imageData.data[i + 3] = 128;
+            }
+            sourceContext.putImageData(imageData, 0, 0);
+
+            var destination = new _native.Canvas();
+            destination.width = 2;
+            destination.height = 2;
+            var destinationContext = destination.getContext("2d");
+            destinationContext.fillStyle = "rgb(0, 0, 0)";
+            destinationContext.fillRect(0, 0, 2, 2);
+            destinationContext.drawImage(source, 0, 0);
+
+            expectPixel(
+                await readCanvasPixel(destination, 2, 2, 0, 0),
+                [128, 0, 0, 255],
+                "semi-transparent canvas drawImage should not double-premultiply source RGB"
+            );
         }],
         ["GPUQueue.copyExternalImageToTexture uploads CanvasWgpu 2D contents", async function () {
             expect(typeof navigator.gpu._testReadTexturePixel === "function", "texture readback test hook missing");

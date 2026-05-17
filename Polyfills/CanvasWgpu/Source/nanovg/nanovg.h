@@ -128,6 +128,8 @@ void nvgScale(NVGcontext* ctx, float x, float y);
 
 void nvgScissor(NVGcontext* ctx, float x, float y, float w, float h);
 void nvgIntersectScissor(NVGcontext* ctx, float x, float y, float w, float h);
+void nvgRoundedScissor(NVGcontext* ctx, float x, float y, float w, float h, float r);
+void nvgIntersectRoundedScissor(NVGcontext* ctx, float x, float y, float w, float h, float r);
 
 void nvgBeginPath(NVGcontext* ctx);
 void nvgClosePath(NVGcontext* ctx);
