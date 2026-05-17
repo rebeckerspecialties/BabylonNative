@@ -555,18 +555,37 @@ impl Backend {
         }
     }
 
+    fn transformed_image_paint(&self, image_id: ImageId, paint: NVGpaint) -> Paint {
+        // Paths are flattened through the current transform before fill; image
+        // paints must be moved into the same device-space basis.
+        let transform = self.canvas.transform();
+        let (origin_x, origin_y) = Self::transform_point(transform, paint.x, paint.y);
+        let (sin, cos) = paint.angle.sin_cos();
+        let local_x = (cos * paint.width, sin * paint.width);
+        let local_y = (-sin * paint.height, cos * paint.height);
+        let (x_axis_x, x_axis_y) =
+            Self::transform_point(transform, paint.x + local_x.0, paint.y + local_x.1);
+        let (y_axis_x, y_axis_y) =
+            Self::transform_point(transform, paint.x + local_y.0, paint.y + local_y.1);
+        let width = (x_axis_x - origin_x).hypot(x_axis_y - origin_y).max(1.0);
+        let height = (y_axis_x - origin_x).hypot(y_axis_y - origin_y).max(1.0);
+        let angle = (x_axis_y - origin_y).atan2(x_axis_x - origin_x);
+
+        Paint::image(
+            image_id,
+            origin_x,
+            origin_y,
+            width,
+            height,
+            angle,
+            paint.alpha.clamp(0.0, 1.0),
+        )
+    }
+
     fn paint_from_pattern(&self, paint: NVGpaint) -> Paint {
         if paint.kind == 1 {
             if let Some(image_id) = self.images.get(&paint.image) {
-                return Paint::image(
-                    *image_id,
-                    paint.x,
-                    paint.y,
-                    paint.width.max(1.0),
-                    paint.height.max(1.0),
-                    paint.angle,
-                    paint.alpha.clamp(0.0, 1.0),
-                );
+                return self.transformed_image_paint(*image_id, paint);
             }
         }
 
