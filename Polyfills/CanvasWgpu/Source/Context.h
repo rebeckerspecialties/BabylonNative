@@ -3,6 +3,7 @@
 #include <Babylon/Polyfills/Canvas.h>
 #include <Babylon/JsRuntimeScheduler.h>
 #include <cstdint>
+#include <optional>
 #include <unordered_map>
 #include <variant>
 #include <vector>
@@ -102,6 +103,7 @@ namespace Babylon::Polyfills::Internal
         void EnsureFrame();
         void Flush(const Napi::CallbackInfo&);
         void ResetCurrentPathBounds();
+        void ResetCurrentPathClipMetadata();
         void IncludeCurrentPathPoint(float x, float y);
         void IncludeCurrentPathRect(float left, float top, float width, float height);
 
@@ -140,6 +142,11 @@ namespace Babylon::Polyfills::Internal
         } m_rectangleClipping{};
         RectangleClipping m_currentPathBounds{};
         bool m_hasCurrentPathBounds{false};
+        struct RoundedRectangleClipping
+        {
+            float left, top, width, height, radius;
+        };
+        std::optional<RoundedRectangleClipping> m_currentRoundedRectangleClipping{};
 
         struct DrawingState
         {
@@ -165,6 +172,7 @@ namespace Babylon::Polyfills::Internal
             RectangleClipping rectangleClipping;
             RectangleClipping currentPathBounds;
             bool hasCurrentPathBounds;
+            std::optional<RoundedRectangleClipping> currentRoundedRectangleClipping;
         };
 
         std::vector<DrawingState> m_drawingStateStack;

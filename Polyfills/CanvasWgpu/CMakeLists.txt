@@ -29,6 +29,7 @@ if(APPLE)
     set(CMAKE_Swift_LANGUAGE_VERSION 6)
     enable_language(Swift)
     find_library(COREGRAPHICS_LIBRARY CoreGraphics REQUIRED)
+    find_library(CORETEXT_LIBRARY CoreText REQUIRED)
     find_library(IMAGEIO_LIBRARY ImageIO REQUIRED)
 
     add_library(CanvasAppleImageDecoder STATIC "Source/ImageDecoderApple.swift")
@@ -90,7 +91,8 @@ target_link_libraries(Canvas
 
 if(APPLE)
     target_link_libraries(Canvas
-        PRIVATE CanvasAppleImageDecoder)
+        PRIVATE CanvasAppleImageDecoder
+        PRIVATE ${CORETEXT_LIBRARY})
 endif()
 
 if(ANDROID)

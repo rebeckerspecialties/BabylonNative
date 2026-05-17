@@ -266,7 +266,7 @@ dependencies = [
 [[package]]
 name = "femtovg"
 version = "0.25.0"
-source = "git+https://github.com/rebeckerspecialties/femtovg.git?branch=update-wgpu-29.0.3#8d19f80bb29a241979eb6a962c44cec5570d82c2"
+source = "git+https://github.com/rebeckerspecialties/femtovg.git?branch=codex/rounded-scissor-clips#3f72649fffd4c3f6573a96741e7e0effa290c961"
 dependencies = [
  "bitflags",
  "bytemuck",
