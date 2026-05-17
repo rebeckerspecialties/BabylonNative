@@ -170,6 +170,30 @@
             expectEqual(_native.Canvas.parseColor("hsl(120, 100%, 50%)"), 0xff00ff00, "hsl color");
             expectEqual(_native.Canvas.parseColor("hsla(0, 100%, 50%, 0.5)"), 0x800000ff, "hsla color");
         }],
+        ["Canvas 2D globalAlpha follows browser preservation semantics", function () {
+            var canvas = new _native.Canvas();
+            canvas.width = 4;
+            canvas.height = 4;
+            var context = canvas.getContext("2d");
+
+            expectEqual(context.globalAlpha, 1, "default globalAlpha");
+            context.globalAlpha *= 0.5;
+            expectEqual(context.globalAlpha, 0.5, "globalAlpha should be readable for multiplicative updates");
+            context.save();
+            context.globalAlpha = 0.25;
+            expectEqual(context.globalAlpha, 0.25, "globalAlpha setter should update valid alpha");
+            context.restore();
+            expectEqual(context.globalAlpha, 0.5, "save/restore should preserve globalAlpha");
+
+            context.globalAlpha = -1;
+            expectEqual(context.globalAlpha, 0.5, "negative globalAlpha should be ignored");
+            context.globalAlpha = 2;
+            expectEqual(context.globalAlpha, 0.5, "out-of-range globalAlpha should be ignored");
+            context.globalAlpha = Number.NaN;
+            expectEqual(context.globalAlpha, 0.5, "NaN globalAlpha should be ignored");
+            context.globalAlpha = Number.POSITIVE_INFINITY;
+            expectEqual(context.globalAlpha, 0.5, "infinite globalAlpha should be ignored");
+        }],
         ["Canvas 2D drawImage accepts another native canvas source", function () {
             var source = new _native.Canvas();
             source.width = 4;
