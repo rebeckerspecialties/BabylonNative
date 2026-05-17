@@ -18,22 +18,11 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
             fatalError("Failed to construct BNRuntime")
         }
 
-        // Queue the Babylon.js bootstrap scripts (shared with the other
-        // Playground hosts via Apps/Playground/Shared/PlaygroundScripts.cpp),
-        // then the playground experience script. They will run after the
-        // first BNView attach completes engine initialization on the JS
-        // thread, in submission order.
-        PlaygroundBootstrap.loadScripts(runtime)
-        runtime.eval("""
-            (function(){
-            globalThis.createScene=undefined;
-            globalThis.__babylonPlaygroundSceneFactoryReady=undefined;
-            globalThis.__babylonPlaygroundWebGpuSmokeReady=undefined;
-            globalThis.__webgpuSmokeDispose=undefined;
-            })();
-            """, sourceURL: "app:///Scripts/playground_bootstrap_reset.js")
-        runtime.loadScript("app:///Scripts/webgpu_smoke.js")
-        runtime.loadScript("app:///Scripts/playground_runner.js")
+        // Queue the Babylon.js bootstrap scripts and the smoke/validation/user
+        // scripts selected by the shared Playground command-line parser. They
+        // run after the first BNView attach completes engine initialization on
+        // the JS thread, in submission order.
+        PlaygroundBootstrap.loadPlaygroundScripts(runtime)
 
         self.runtime = runtime
         return true
@@ -51,4 +40,3 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         runtime = nil
     }
 }
-
