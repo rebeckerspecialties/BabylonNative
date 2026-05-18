@@ -1687,6 +1687,7 @@ mod upstream_wgpu_native {
         current_canvas_id: Option<u64>,
         staging_belt: wgpu::util::StagingBelt,
         pending_buffer_writes: Vec<PendingBufferWrite>,
+        free_buffer_write_data: Vec<Vec<u8>>,
     }
 
     pub struct ScreenshotData {
@@ -1939,6 +1940,9 @@ mod upstream_wgpu_native {
         offset: u64,
         data: Vec<u8>,
     }
+
+    const MAX_RETAINED_BUFFER_WRITE_DATA_BUFFERS: usize = 256;
+    const MAX_RETAINED_BUFFER_WRITE_DATA_BYTES: usize = 1024 * 1024;
 
     #[derive(Default)]
     struct WebGpuResourceTable {
@@ -2646,6 +2650,7 @@ mod upstream_wgpu_native {
                 current_canvas_id: None,
                 staging_belt,
                 pending_buffer_writes: Vec::new(),
+                free_buffer_write_data: Vec::new(),
             })
         }
 
@@ -2680,17 +2685,44 @@ mod upstream_wgpu_native {
                 return false;
             }
 
-            for write in self.pending_buffer_writes.drain(..) {
+            let mut writes = std::mem::take(&mut self.pending_buffer_writes);
+            for write in writes.drain(..) {
                 let Some(size) = wgpu::BufferSize::new(write.data.len() as u64) else {
+                    self.recycle_buffer_write_data(write.data);
                     continue;
                 };
                 let mut staging =
                     self.staging_belt
                         .write_buffer(encoder, &write.buffer, write.offset, size);
                 staging.copy_from_slice(&write.data);
+                self.recycle_buffer_write_data(write.data);
             }
+            self.pending_buffer_writes = writes;
 
             true
+        }
+
+        fn take_buffer_write_data(&mut self, data: &[u8]) -> Vec<u8> {
+            let mut owned = self
+                .free_buffer_write_data
+                .iter()
+                .position(|buffer| buffer.capacity() >= data.len())
+                .map(|index| self.free_buffer_write_data.swap_remove(index))
+                .unwrap_or_else(|| Vec::with_capacity(data.len()));
+            owned.clear();
+            owned.extend_from_slice(data);
+            owned
+        }
+
+        fn recycle_buffer_write_data(&mut self, mut data: Vec<u8>) {
+            if data.capacity() > MAX_RETAINED_BUFFER_WRITE_DATA_BYTES
+                || self.free_buffer_write_data.len() >= MAX_RETAINED_BUFFER_WRITE_DATA_BUFFERS
+            {
+                return;
+            }
+
+            data.clear();
+            self.free_buffer_write_data.push(data);
         }
 
         fn submit_pending_buffer_writes(&mut self, label: &str) {
@@ -2913,13 +2945,15 @@ mod upstream_wgpu_native {
             offset: u64,
             data: &[u8],
         ) -> Result<(), String> {
-            {
+            let target_buffer = {
                 let buffer = self
                     .resources
                     .buffers
                     .get_mut(&buffer_id)
                     .ok_or_else(|| format!("GPUBuffer {buffer_id} was not found"))?;
-                if buffer.mapped {
+                if !buffer.mapped {
+                    buffer.buffer.clone()
+                } else {
                     let start = offset.min(buffer.size);
                     let available = buffer.size.saturating_sub(start);
                     let copy_len = (data.len() as u64).min(available) as usize;
@@ -2933,18 +2967,11 @@ mod upstream_wgpu_native {
                     buffer.mapped = false;
                     return Ok(());
                 }
-            }
+            };
 
             if data.is_empty() {
                 return Ok(());
             }
-            let target_buffer = self
-                .resources
-                .buffers
-                .get(&buffer_id)
-                .ok_or_else(|| format!("GPUBuffer {buffer_id} was not found"))?
-                .buffer
-                .clone();
             let data_size = data.len() as u64;
             if offset.is_multiple_of(wgpu::COPY_BUFFER_ALIGNMENT)
                 && data_size.is_multiple_of(wgpu::COPY_BUFFER_ALIGNMENT)
@@ -2952,10 +2979,11 @@ mod upstream_wgpu_native {
                 if wgpu::BufferSize::new(data_size).is_none() {
                     return Ok(());
                 }
+                let data = self.take_buffer_write_data(data);
                 self.pending_buffer_writes.push(PendingBufferWrite {
                     buffer: target_buffer,
                     offset,
-                    data: data.to_vec(),
+                    data,
                 });
             } else {
                 self.submit_pending_buffer_writes("unaligned write_buffer");
