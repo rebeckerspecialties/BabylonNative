@@ -4612,6 +4612,17 @@ mod upstream_wgpu_native {
         }
 
         pub fn queue_submit(&mut self, command_buffer_ids: &[u64]) -> Result<(), String> {
+            if command_buffer_ids.is_empty() {
+                let _ = self.runtime.device.poll(wgpu::PollType::Poll);
+                return Ok(());
+            }
+
+            let mut encoder =
+                self.runtime
+                    .device
+                    .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                        label: Some("babylon-native-webgpu.web-command-submit"),
+                    });
             for command_buffer_id in command_buffer_ids {
                 let command_buffer = self
                     .resources
@@ -4663,18 +4674,12 @@ mod upstream_wgpu_native {
                         labels
                     );
                 }
-                let mut encoder =
-                    self.runtime
-                        .device
-                        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                            label: Some("babylon-native-webgpu.web-command-submit"),
-                        });
                 for command in &command_buffer.commands {
                     self.execute_encoder_command(&mut encoder, command);
                 }
-                self.runtime.queue.submit(Some(encoder.finish()));
-                self.current_surface_frame_submitted = true;
             }
+            self.runtime.queue.submit(Some(encoder.finish()));
+            self.current_surface_frame_submitted = true;
             let _ = self.runtime.device.poll(wgpu::PollType::Poll);
             Ok(())
         }
