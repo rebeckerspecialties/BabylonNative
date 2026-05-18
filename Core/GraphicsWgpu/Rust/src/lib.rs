@@ -1685,6 +1685,8 @@ mod upstream_wgpu_native {
         current_canvas_texture: Option<wgpu::Texture>,
         current_canvas_texture_id: Option<u64>,
         current_canvas_id: Option<u64>,
+        staging_belt: wgpu::util::StagingBelt,
+        pending_buffer_writes: Vec<PendingBufferWrite>,
     }
 
     pub struct ScreenshotData {
@@ -1930,6 +1932,12 @@ mod upstream_wgpu_native {
 
     struct CommandBufferResource {
         commands: Vec<EncoderCommand>,
+    }
+
+    struct PendingBufferWrite {
+        buffer: wgpu::Buffer,
+        offset: u64,
+        data: Vec<u8>,
     }
 
     #[derive(Default)]
@@ -2621,6 +2629,7 @@ mod upstream_wgpu_native {
         pub fn create(config: LocalBootstrapConfig) -> Result<Self, String> {
             let runtime = LocalRuntimeState::bootstrap(config)?;
             let render_target_format = runtime.render_target_format;
+            let staging_belt = wgpu::util::StagingBelt::new(runtime.device.clone(), 1024 * 1024);
             Ok(Self {
                 runtime,
                 resources: WebGpuResourceTable::default(),
@@ -2635,6 +2644,8 @@ mod upstream_wgpu_native {
                 current_canvas_texture: None,
                 current_canvas_texture_id: None,
                 current_canvas_id: None,
+                staging_belt,
+                pending_buffer_writes: Vec::new(),
             })
         }
 
@@ -2664,16 +2675,59 @@ mod upstream_wgpu_native {
             buffer_bytes.saturating_add(texture_bytes)
         }
 
-        pub fn install_debug_texture(&mut self, width: u32, height: u32, rgba: &[u8]) -> bool {
-            let Some(texture) = self.current_canvas_texture.as_ref() else {
+        fn encode_pending_buffer_writes(&mut self, encoder: &mut wgpu::CommandEncoder) -> bool {
+            if self.pending_buffer_writes.is_empty() {
                 return false;
-            };
+            }
+
+            for write in self.pending_buffer_writes.drain(..) {
+                let Some(size) = wgpu::BufferSize::new(write.data.len() as u64) else {
+                    continue;
+                };
+                let mut staging =
+                    self.staging_belt
+                        .write_buffer(encoder, &write.buffer, write.offset, size);
+                staging.copy_from_slice(&write.data);
+            }
+
+            true
+        }
+
+        fn submit_pending_buffer_writes(&mut self, label: &str) {
+            if self.pending_buffer_writes.is_empty() {
+                return;
+            }
+
+            let mut encoder =
+                self.runtime
+                    .device
+                    .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                        label: Some("babylon-native-webgpu.staged-buffer-writes"),
+                    });
+            if self.encode_pending_buffer_writes(&mut encoder) {
+                self.staging_belt.finish();
+                if std::env::var_os("BABYLON_NATIVE_WEBGPU_STAGING_TRACE").is_some() {
+                    eprintln!("NativeWebGPU staging submit: {label}");
+                }
+                self.runtime.queue.submit(Some(encoder.finish()));
+                self.staging_belt.recall();
+            }
+        }
+
+        pub fn install_debug_texture(&mut self, width: u32, height: u32, rgba: &[u8]) -> bool {
+            if self.current_canvas_texture.is_none() {
+                return false;
+            }
             let width = width.max(1);
             let height = height.max(1);
             let expected_len = width as usize * height as usize * 4;
             if rgba.len() < expected_len {
                 return false;
             }
+            self.submit_pending_buffer_writes("install_debug_texture");
+            let Some(texture) = self.current_canvas_texture.as_ref() else {
+                return false;
+            };
             self.runtime.queue.write_texture(
                 wgpu::TexelCopyTextureInfo {
                     texture,
@@ -2859,32 +2913,56 @@ mod upstream_wgpu_native {
             offset: u64,
             data: &[u8],
         ) -> Result<(), String> {
-            let buffer = self
-                .resources
-                .buffers
-                .get_mut(&buffer_id)
-                .ok_or_else(|| format!("GPUBuffer {buffer_id} was not found"))?;
-            if buffer.mapped {
-                let start = offset.min(buffer.size);
-                let available = buffer.size.saturating_sub(start);
-                let copy_len = (data.len() as u64).min(available) as usize;
-                if copy_len > 0 {
-                    let end = start + copy_len as u64;
-                    let mut mapped = buffer.buffer.slice(start..end).get_mapped_range_mut();
-                    mapped.copy_from_slice(&data[..copy_len]);
-                    drop(mapped);
+            {
+                let buffer = self
+                    .resources
+                    .buffers
+                    .get_mut(&buffer_id)
+                    .ok_or_else(|| format!("GPUBuffer {buffer_id} was not found"))?;
+                if buffer.mapped {
+                    let start = offset.min(buffer.size);
+                    let available = buffer.size.saturating_sub(start);
+                    let copy_len = (data.len() as u64).min(available) as usize;
+                    if copy_len > 0 {
+                        let end = start + copy_len as u64;
+                        let mut mapped = buffer.buffer.slice(start..end).get_mapped_range_mut();
+                        mapped.copy_from_slice(&data[..copy_len]);
+                        drop(mapped);
+                    }
+                    buffer.buffer.unmap();
+                    buffer.mapped = false;
+                    return Ok(());
                 }
-                buffer.buffer.unmap();
-                buffer.mapped = false;
-                return Ok(());
             }
 
             if data.is_empty() {
                 return Ok(());
             }
-            self.runtime
-                .queue
-                .write_buffer(&buffer.buffer, offset, data);
+            let target_buffer = self
+                .resources
+                .buffers
+                .get(&buffer_id)
+                .ok_or_else(|| format!("GPUBuffer {buffer_id} was not found"))?
+                .buffer
+                .clone();
+            let data_size = data.len() as u64;
+            if offset.is_multiple_of(wgpu::COPY_BUFFER_ALIGNMENT)
+                && data_size.is_multiple_of(wgpu::COPY_BUFFER_ALIGNMENT)
+            {
+                if wgpu::BufferSize::new(data_size).is_none() {
+                    return Ok(());
+                }
+                self.pending_buffer_writes.push(PendingBufferWrite {
+                    buffer: target_buffer,
+                    offset,
+                    data: data.to_vec(),
+                });
+            } else {
+                self.submit_pending_buffer_writes("unaligned write_buffer");
+                self.runtime
+                    .queue
+                    .write_buffer(&target_buffer, offset, data);
+            }
             Ok(())
         }
 
@@ -4613,6 +4691,7 @@ mod upstream_wgpu_native {
 
         pub fn queue_submit(&mut self, command_buffer_ids: &[u64]) -> Result<(), String> {
             if command_buffer_ids.is_empty() {
+                self.submit_pending_buffer_writes("empty submit");
                 let _ = self.runtime.device.poll(wgpu::PollType::Poll);
                 return Ok(());
             }
@@ -4627,7 +4706,7 @@ mod upstream_wgpu_native {
                 let command_buffer = self
                     .resources
                     .command_buffers
-                    .remove(command_buffer_id)
+                    .get(command_buffer_id)
                     .ok_or_else(|| format!("GPUCommandBuffer {command_buffer_id} was not found"))?;
                 if std::env::var_os("BABYLON_NATIVE_WEBGPU_TRACE").is_some() {
                     let labels = command_buffer
@@ -4674,17 +4753,32 @@ mod upstream_wgpu_native {
                         labels
                     );
                 }
+            }
+            let encoded_pending_writes = self.encode_pending_buffer_writes(&mut encoder);
+            if encoded_pending_writes {
+                self.staging_belt.finish();
+            }
+            for command_buffer_id in command_buffer_ids {
+                let command_buffer = self
+                    .resources
+                    .command_buffers
+                    .remove(command_buffer_id)
+                    .ok_or_else(|| format!("GPUCommandBuffer {command_buffer_id} was not found"))?;
                 for command in &command_buffer.commands {
                     self.execute_encoder_command(&mut encoder, command);
                 }
             }
             self.runtime.queue.submit(Some(encoder.finish()));
+            if encoded_pending_writes {
+                self.staging_belt.recall();
+            }
             self.current_surface_frame_submitted = true;
             let _ = self.runtime.device.poll(wgpu::PollType::Poll);
             Ok(())
         }
 
         pub fn queue_wait_submitted_work(&mut self) -> Result<(), String> {
+            self.submit_pending_buffer_writes("wait_submitted_work");
             self.runtime
                 .device
                 .poll(wgpu::PollType::wait_indefinitely())
@@ -4726,6 +4820,7 @@ mod upstream_wgpu_native {
             }
             let (texture, mip_level, origin, aspect) =
                 self.parse_texture_copy_view(&destination)?;
+            self.submit_pending_buffer_writes("write_texture");
             self.runtime.queue.write_texture(
                 wgpu::TexelCopyTextureInfo {
                     texture: &texture,
@@ -4790,6 +4885,7 @@ mod upstream_wgpu_native {
                 destination_premultiplied_alpha,
                 texture_format,
             )?;
+            self.submit_pending_buffer_writes("copy_external_image_to_texture");
             self.runtime.queue.write_texture(
                 wgpu::TexelCopyTextureInfo {
                     texture: &texture,
@@ -4871,6 +4967,7 @@ mod upstream_wgpu_native {
                 destination_premultiplied_alpha,
                 texture_format,
             )?;
+            self.submit_pending_buffer_writes("copy_external_image_rgba_to_texture");
             self.runtime.queue.write_texture(
                 wgpu::TexelCopyTextureInfo {
                     texture: &texture,
@@ -5019,6 +5116,7 @@ mod upstream_wgpu_native {
             x: u32,
             y: u32,
         ) -> Result<[u8; 4], String> {
+            self.submit_pending_buffer_writes("read_texture_pixel_rgba");
             let texture_resource = self
                 .resources
                 .textures
@@ -5065,6 +5163,7 @@ mod upstream_wgpu_native {
         }
 
         pub fn destroy_resource(&mut self, kind: u32, resource_id: u64) -> bool {
+            self.submit_pending_buffer_writes("destroy_resource");
             match kind {
                 1 => self.resources.buffers.remove(&resource_id).is_some(),
                 2 => {
