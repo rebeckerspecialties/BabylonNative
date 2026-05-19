@@ -1,5 +1,11 @@
 import UIKit
 
+#if os(tvOS)
+import AVFoundation
+import AVKit
+import CoreMedia
+#endif
+
 @UIApplicationMain
 class AppDelegate: UIResponder, UIApplicationDelegate {
 
@@ -28,6 +34,14 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         return true
     }
 
+    #if os(tvOS)
+    func application(_ application: UIApplication, configurationForConnecting connectingSceneSession: UISceneSession, options: UIScene.ConnectionOptions) -> UISceneConfiguration {
+        let configuration = UISceneConfiguration(name: "Default Configuration", sessionRole: connectingSceneSession.role)
+        configuration.delegateClass = SceneDelegate.self
+        return configuration
+    }
+    #endif
+
     func applicationWillResignActive(_ application: UIApplication) {
         runtime?.suspend()
     }
@@ -40,3 +54,61 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         runtime = nil
     }
 }
+
+#if os(tvOS)
+class SceneDelegate: UIResponder, UIWindowSceneDelegate {
+    var window: UIWindow?
+
+    func scene(_ scene: UIScene, willConnectTo session: UISceneSession, options connectionOptions: UIScene.ConnectionOptions) {
+        guard let windowScene = scene as? UIWindowScene else {
+            return
+        }
+
+        let rootViewController = ViewController()
+        rootViewController.view.backgroundColor = .black
+
+        let window = UIWindow(windowScene: windowScene)
+        window.rootViewController = rootViewController
+        window.makeKeyAndVisible()
+        self.window = window
+
+        if let appDelegate = UIApplication.shared.delegate as? AppDelegate {
+            appDelegate.window = window
+        }
+
+        if CommandLine.arguments.contains("--hdr10") {
+            configureDisplayCriteria(for: window)
+        }
+    }
+
+    private func configureDisplayCriteria(for window: UIWindow) {
+        if #available(tvOS 17.0, *) {
+            var formatDescription: CMVideoFormatDescription?
+            let extensions: [CFString: Any] = [
+                kCMFormatDescriptionExtension_ColorPrimaries: kCMFormatDescriptionColorPrimaries_ITU_R_2020,
+                kCMFormatDescriptionExtension_TransferFunction: kCMFormatDescriptionTransferFunction_SMPTE_ST_2084_PQ,
+                kCMFormatDescriptionExtension_YCbCrMatrix: kCMFormatDescriptionYCbCrMatrix_ITU_R_2020
+            ]
+
+            let status = CMVideoFormatDescriptionCreate(
+                allocator: kCFAllocatorDefault,
+                codecType: kCMVideoCodecType_HEVC,
+                width: 3840,
+                height: 2160,
+                extensions: extensions as CFDictionary,
+                formatDescriptionOut: &formatDescription
+            )
+
+            if status == noErr, let formatDescription {
+                window.avDisplayManager.preferredDisplayCriteria = AVDisplayCriteria(
+                    refreshRate: 60,
+                    formatDescription: formatDescription
+                )
+                NSLog("[Playground] Requested tvOS 4K HDR10 display criteria.")
+            } else {
+                NSLog("[Playground] Failed to create tvOS HDR display criteria: %d", status)
+            }
+        }
+    }
+}
+#endif

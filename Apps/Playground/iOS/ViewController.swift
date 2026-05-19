@@ -1,5 +1,6 @@
 import UIKit
 import MetalKit
+import QuartzCore
 
 class ViewController: UIViewController {
 
@@ -14,8 +15,14 @@ class ViewController: UIViewController {
             || arguments.contains("--save-results")
             || arguments.contains("--once")
             || arguments.contains("--include-excluded")
+            || arguments.contains("--hdr10")
     }
 
+    private var isHdr10Run: Bool {
+        return CommandLine.arguments.contains("--hdr10")
+    }
+
+    #if !os(tvOS)
     override var supportedInterfaceOrientations: UIInterfaceOrientationMask {
         return isValidationRun ? .landscape : .all
     }
@@ -23,6 +30,7 @@ class ViewController: UIViewController {
     override var preferredInterfaceOrientationForPresentation: UIInterfaceOrientation {
         return .landscapeRight
     }
+    #endif
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -35,14 +43,20 @@ class ViewController: UIViewController {
             let runtime = appDelegate.runtime
         else { return }
 
+        #if !os(tvOS)
         if isValidationRun {
             if #available(iOS 16.0, *) {
                 setNeedsUpdateOfSupportedInterfaceOrientations()
                 view.window?.windowScene?.requestGeometryUpdate(.iOS(interfaceOrientations: .landscapeRight))
             }
         }
+        #endif
 
         setupViews()
+        configureFrameRate(mtkView)
+        configureDrawable(mtkView)
+        configureDrawable(xrView)
+        view.layoutIfNeeded()
 
         // Hand the runtime a reference to the XR overlay so NativeXr
         // can render its content into a separate transparent layer
@@ -59,6 +73,7 @@ class ViewController: UIViewController {
         // plugin initialization on the JS thread + queued-script flush.
         bnView = BNView(runtime: runtime, view: mtkView)
 
+        #if !os(tvOS)
         // Simple gesture recognizer: forwards touches to BNView.
         let recognizer = UIBabylonGestureRecognizer(
             target: self,
@@ -67,6 +82,55 @@ class ViewController: UIViewController {
             onTouchUp:   { [weak self] (id, x, y) in self?.bnView?.pointerUp(id: Int(id), x: CGFloat(x), y: CGFloat(y)) }
         )
         mtkView.addGestureRecognizer(recognizer)
+        #endif
+    }
+
+    private func currentScreen() -> UIScreen? {
+        #if os(tvOS)
+        return view.window?.windowScene?.screen
+        #else
+        return view.window?.screen ?? UIScreen.main
+        #endif
+    }
+
+    private func configureFrameRate(_ view: MTKView) {
+        #if os(tvOS)
+        view.preferredFramesPerSecond = 60
+        let maximumFramesPerSecond = currentScreen()?.maximumFramesPerSecond ?? 0
+        NSLog("[Playground] MTKView preferredFramesPerSecond=%d screenMaximumFramesPerSecond=%d", view.preferredFramesPerSecond, maximumFramesPerSecond)
+        #endif
+    }
+
+    private func configureDrawable(_ view: MTKView) {
+        if isHdr10Run {
+            #if os(tvOS)
+            view.autoResizeDrawable = false
+            #endif
+            view.colorPixelFormat = .rgba16Float
+            if let layer = view.layer as? CAMetalLayer {
+                layer.pixelFormat = view.colorPixelFormat
+                layer.colorspace = CGColorSpace(name: CGColorSpace.extendedLinearITUR_2020)
+                if #available(tvOS 18.0, iOS 18.0, *) {
+                    layer.toneMapMode = .ifSupported
+                }
+                if #available(tvOS 26.0, iOS 26.0, *) {
+                    layer.preferredDynamicRange = .high
+                    layer.contentsHeadroom = 10.0
+                }
+            }
+            return
+        }
+
+        #if os(tvOS)
+        view.autoResizeDrawable = false
+        view.colorPixelFormat = .bgra8Unorm_srgb
+        if let layer = view.layer as? CAMetalLayer {
+            layer.pixelFormat = view.colorPixelFormat
+            layer.colorspace = CGColorSpace(name: CGColorSpace.extendedLinearDisplayP3)
+        }
+        #else
+        view.colorPixelFormat = .bgra8Unorm_srgb
+        #endif
     }
 
     override func viewDidLayoutSubviews() {
@@ -88,15 +152,17 @@ class ViewController: UIViewController {
         mtkView = MTKView()
         mtkView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(mtkView)
-        view.addConstraints(NSLayoutConstraint.constraints(withVisualFormat: "|[mtkView]|", options: [], metrics: nil, views: ["mtkView" : mtkView]))
-        view.addConstraints(NSLayoutConstraint.constraints(withVisualFormat: "V:|[mtkView]|", options: [], metrics: nil, views: ["mtkView" : mtkView]))
+        let mtkViews = ["mtkView" : mtkView!]
+        view.addConstraints(NSLayoutConstraint.constraints(withVisualFormat: "|[mtkView]|", options: [], metrics: nil, views: mtkViews))
+        view.addConstraints(NSLayoutConstraint.constraints(withVisualFormat: "V:|[mtkView]|", options: [], metrics: nil, views: mtkViews))
 
         xrView = MTKView()
         xrView.translatesAutoresizingMaskIntoConstraints = false
         xrView.isUserInteractionEnabled = false
         xrView.isHidden = true
         view.addSubview(xrView)
-        view.addConstraints(NSLayoutConstraint.constraints(withVisualFormat: "|[xrView]|", options: [], metrics: nil, views: ["xrView" : xrView]))
-        view.addConstraints(NSLayoutConstraint.constraints(withVisualFormat: "V:|[xrView]|", options: [], metrics: nil, views: ["xrView" : xrView]))
+        let xrViews = ["xrView" : xrView!]
+        view.addConstraints(NSLayoutConstraint.constraints(withVisualFormat: "|[xrView]|", options: [], metrics: nil, views: xrViews))
+        view.addConstraints(NSLayoutConstraint.constraints(withVisualFormat: "V:|[xrView]|", options: [], metrics: nil, views: xrViews))
     }
 }
