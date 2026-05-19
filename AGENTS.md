@@ -95,6 +95,129 @@ PATH=/Users/matt/.rustup/toolchains/1.94.1-aarch64-apple-darwin/bin:$PATH ./buil
 
 Before starting a new visible Playground run, make sure no previous Playground instance is still running.
 
+## Native Performance Profiling Notes
+
+For BabylonNative performance work, use the optimized Release/LTO builds, not
+ASan/UBSan builds. The current local build directories used for this are:
+
+```sh
+PATH=/Users/matt/.rustup/toolchains/1.94.1-aarch64-apple-darwin/bin:$PATH cmake --build build_wgpu_29_release_lto --target Playground --parallel 10
+PATH=/Users/matt/.rustup/toolchains/1.94.1-aarch64-apple-darwin/bin:$PATH cmake --build build_wgpu_29_ios_release_lto --target Playground --config Release --parallel 10
+```
+
+For iOS device profiling, keep using the existing Rebecker Specialties signing
+setup. The observed Playground bundle id is
+`com.rebeckerspecialties.BabylonNative.Playground`, signed with
+`Apple Development: Matthew Donovan Hargett (79G4CD2XGC)` and the local
+`iOS Team Provisioning Profile: *` profile.
+
+The current macOS and iOS Release/LTO builds use the public operating-system
+JavaScriptCore framework, not V8/JSI. Check
+`NAPI_JAVASCRIPT_ENGINE:STRING=JavaScriptCore` in the active `CMakeCache.txt`
+and `otool -L` on the built Playground binary if this needs to be revalidated.
+
+The `Fluid rendering particle system` screenshot test is native catalog index
+`348`. It is excluded from automatic runs, so force it explicitly:
+
+```sh
+xcrun devicectl device process launch --device <COREDEVICE_ID> --terminate-existing --console com.rebeckerspecialties.BabylonNative.Playground --test-index 348 --include-excluded --once --save-results true
+```
+
+Do not insert a standalone `--` before the Playground flags in that
+`devicectl` command. The Playground parser treats `--` as end-of-options and
+then interprets later arguments as script URLs, which fails with
+`URL does not have a valid scheme`.
+
+Useful local device ids from the profiling pass:
+
+- iPhone 12 CoreDevice: `B5D4CA48-8949-525C-8E5D-4F661161BD9D`; xctrace UDID:
+  `00008101-000A044A3C28801E`
+- iPhone XS CoreDevice: `C7A1D5AD-C89D-5E03-99B9-5E65EEC30486`; xctrace UDID:
+  `00008020-001C292A2190003A`
+
+iPhone 12 can provide low-level CPU counter / PMU data through xctrace. iPhone
+XS cannot provide those low-level PMU counters; use Time Profiler,
+per-process CPU load, core behavior, run logs, and Metal traces instead. If
+`devicectl` can launch the XS but `xcrun xctrace list devices` reports it
+under `Devices Offline`, do not use the resulting failed trace as performance
+evidence.
+
+The first committed native-stack optimization sequence for this workload is:
+
+1. Batch WebGPU queue submit command buffers.
+2. Stage WebGPU buffer writes through a reusable staging belt.
+3. Reuse staged WebGPU buffer write storage to avoid per-frame `Vec` allocation
+   churn in the buffer write path.
+
+Use `BABYLON_NATIVE_WEBGPU_PROFILE_TRACE=1` for targeted native upload/flush
+timing. It logs WebGPU staged-buffer flushes plus `writeTexture` and
+`copyExternalImageToTexture` CPU phase timings without changing default runs.
+On the fluid test, that trace showed external-image CPU upload work was
+sub-millisecond on both M4 Max and iPhone 12; the long startup gap correlated
+with `wgpu`/Metal internal `PendingWrites` transfer lifetimes and synchronous
+scene setup, not native row-copy CPU time.
+
+Do not treat the validation log line `First pixel off...` as TTMFR. It is the
+screenshot comparison point after the configured `renderCount` / readiness
+pump, so it includes validation wait frames and readback/comparison work. In a
+fresh iPhone 12 Metal trace, steady displayed frames were still about 59.8 fps,
+while the visible long intervals were startup placeholder presentation, one
+post-startup missed vsync during upload/mipmap work, and validation shutdown.
+The corresponding Time Profiler samples were dominated by one JavaScriptCore
+LLInt thread during scene setup; within the native stack, the actionable part
+was the smaller upload/mipmap burst after setup, not the whole multi-second
+startup hold.
+
+Startup overlap experiment: moving WGPU bootstrap to a background future and
+putting a ScriptLoader-ordered readiness barrier after the core Babylon.js
+bundles was functionally safe, but on M4 Max and iPhone 12 the `WGPU
+initialized` log still arrived about 0.13-0.32s before the Babylon.js engine
+log. Direct fluid runs stayed essentially flat, so current TTMFR is not blocked
+by serialized WGPU creation before Babylon.js parsing on these devices.
+
+When `xctrace record` prints `Waiting for device to boot` for the iPhone 12
+even though `devicectl` can launch it, a later `devicectl` launch may kick the
+recording into `Starting recording...`. If that happens after app launch, use
+the trace only for steady-state/render-path evidence, not TTMFR. CPU Counters
+traces are only useful as PMU evidence when the exported trace contains the
+dynamic `MetricAggregationForProcess` / `CounterMetric...` tables; a trace that
+only exports generic `time-profile` / `time-sample` tables should not be
+reported as low-level counter data. Use absolute `.trace` output paths for CPU
+Counters; a relative output path failed to save with `trace_status=17`. In the
+latest valid iPhone 12 CPU Counters capture, `MetricAggregationForProcess` and
+`CoreTypeByThread` exported successfully, but xctrace still began recording
+after WGPU/Babylon.js startup logs, so it is steady-render PMU evidence only.
+Attempts to wait for `Starting recording...` before launching, or to use
+`xctrace --launch` with the iOS bundle id, produced empty/error traces on this
+device/toolchain combination.
+
+On macOS, `xctrace record --launch` may fail against the local Playground bundle
+because the CMake-generated `Info.plist` still contains unresolved
+`$(EXECUTABLE_NAME)` placeholders. For local M4 traces, start an all-processes
+recording first and then run
+`build_wgpu_29_release_lto/Apps/Playground/Playground.app/Contents/MacOS/Playground`
+directly with the test flags. Keep host Metal traces short and targeted:
+an 18s all-process Metal trace generated a 5.3 GB in-progress package and spent
+minutes in `DVTInstrumentsAnalysisCore` post-processing after the app had
+finished. A target-scoped attach recorded the app but `xctrace` exited with
+`Trace/BPT trap: 5` and exported a malformed trace, so preserve the app run log
+and do not report the trace as valid unless schema export succeeds.
+
+Performance lessons from rejected experiments:
+
+- Staging texture writes in this layer regressed PMU/submit behavior. `wgpu`
+  already stages and copies for `Queue::write_texture`, so the extra native
+  staging added row repacking, owned data copies, and ordering flushes.
+- Immediate staging-belt allocation in the buffer write call path regressed CPU
+  cycles. Keeping writes cheap and encoding them later was better than moving
+  mapped staging allocation into the hot call path.
+- Reducing `device.poll(Poll)` improved some first-render timings but worsened
+  PMU counters. Treat that poll as pacing/progress work, not pure overhead.
+- Command-vector pooling should not scan pools in the hot path. A `.pop()` pool
+  variant improved some iPhone 12 Metal metrics, but PMU was mixed and XS
+  trace validation was incomplete, so do not commit that idea without a fresh
+  per-device retest.
+
 ## Error Handling Expectations
 
 - NativeWebGPU does not ship glslang/twgsl. If Babylon.js code asks WebGPU to compile GLSL, surface an actionable JS error that names the shader/effect and says the path needs WGSL or an explicit NativeWebGPU exclusion.

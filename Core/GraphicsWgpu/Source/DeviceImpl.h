@@ -12,6 +12,7 @@
 #include <napi/env.h>
 
 #include <functional>
+#include <future>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -92,6 +93,11 @@ namespace Babylon::Graphics
     private:
         static float GetDevicePixelRatio(WindowT window);
 
+        void BeginRenderingInitialization();
+        std::shared_ptr<WgpuNative> CompleteRenderingInitialization();
+        std::shared_ptr<WgpuNative> CompleteRenderingInitialization(std::exception_ptr& error);
+        void LogWgpuInitialized(const std::shared_ptr<WgpuNative>& wgpu);
+
         uint32_t CurrentRenderWidth() const;
         uint32_t CurrentRenderHeight() const;
 
@@ -130,5 +136,10 @@ namespace Babylon::Graphics
         std::function<void(const char* output)> m_diagnosticOutput{};
 
         std::shared_ptr<WgpuNative> m_wgpu{};
+        std::shared_future<std::shared_ptr<WgpuNative>> m_pendingWgpu{};
+        uint32_t m_pendingWgpuWidth{};
+        uint32_t m_pendingWgpuHeight{};
+        bool m_startFrameBeforeRenderPending{};
+        bool m_wgpuInitializationLogged{};
     };
 }
