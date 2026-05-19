@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <future>
 #include <sstream>
 #include <stdexcept>
 
@@ -126,21 +127,19 @@ namespace Babylon::Graphics
         m_renderResetCallback = std::move(callback);
     }
 
-    void DeviceImpl::EnableRendering()
+    void DeviceImpl::BeginRenderingInitialization()
     {
-        bool shouldTriggerReset{};
-        std::shared_ptr<WgpuNative> wgpu{};
-
+        WgpuBootstrapConfig config{};
         {
             std::scoped_lock lock{m_state.Mutex};
-            if (m_rendering)
+            if (m_wgpu || m_pendingWgpu.valid())
             {
+                m_rendering = true;
                 return;
             }
 
             m_cancellationSource = std::make_shared<arcana::cancellation_source>();
 
-            WgpuBootstrapConfig config{};
             config.Width = CurrentRenderWidth();
             config.Height = CurrentRenderHeight();
             config.PreferLowPower = false;
@@ -151,11 +150,64 @@ namespace Babylon::Graphics
             config.SurfaceLayer = m_state.Window;
 #endif
 
-            m_wgpu = std::make_shared<WgpuNative>(config);
-            if (!m_wgpu->IsValid())
+            m_pendingWgpuWidth = config.Width;
+            m_pendingWgpuHeight = config.Height;
+            m_rendering = true;
+            m_wgpuInitializationLogged = false;
+            m_pendingWgpu = std::async(std::launch::async, [config] {
+                return std::make_shared<WgpuNative>(config);
+            }).share();
+        }
+    }
+
+    std::shared_ptr<WgpuNative> DeviceImpl::CompleteRenderingInitialization(std::exception_ptr& error)
+    {
+        std::shared_future<std::shared_ptr<WgpuNative>> pendingWgpu{};
+        uint32_t pendingWidth{};
+        uint32_t pendingHeight{};
+
+        {
+            std::scoped_lock lock{m_state.Mutex};
+            if (m_wgpu)
             {
-                std::string errorMessage{"Failed to initialize WGPU backend."};
-                const auto& details = m_wgpu->GetLastError();
+                return m_wgpu;
+            }
+
+            pendingWgpu = m_pendingWgpu;
+            pendingWidth = m_pendingWgpuWidth;
+            pendingHeight = m_pendingWgpuHeight;
+        }
+
+        if (!pendingWgpu.valid())
+        {
+            return {};
+        }
+
+        std::shared_ptr<WgpuNative> wgpu{};
+        try
+        {
+            wgpu = pendingWgpu.get();
+        }
+        catch (...)
+        {
+            error = std::current_exception();
+        }
+
+        if (error)
+        {
+            std::scoped_lock lock{m_state.Mutex};
+            m_pendingWgpu = {};
+            m_cancellationSource.reset();
+            m_rendering = false;
+            return {};
+        }
+
+        if (!wgpu || !wgpu->IsValid())
+        {
+            std::string errorMessage{"Failed to initialize WGPU backend."};
+            if (wgpu)
+            {
+                const auto& details = wgpu->GetLastError();
                 if (!details.empty())
                 {
                     if (m_diagnosticOutput)
@@ -166,55 +218,134 @@ namespace Babylon::Graphics
                     errorMessage += " ";
                     errorMessage += details;
                 }
-
-                m_wgpu.reset();
-                m_cancellationSource.reset();
-#if defined(__ANDROID__)
-                if (m_diagnosticOutput)
-                {
-                    using clock = std::chrono::steady_clock;
-                    static auto s_lastRetryLog = clock::now() - std::chrono::seconds{5};
-                    const auto now = clock::now();
-                    if (now - s_lastRetryLog >= std::chrono::seconds{1})
-                    {
-                        m_diagnosticOutput(
-                            "WGPU initialization failed; deferring and retrying on future frames.");
-                        s_lastRetryLog = now;
-                    }
-                }
-                return;
-#else
-                throw std::runtime_error{errorMessage};
-#endif
             }
 
-            m_rendering = true;
-            shouldTriggerReset = m_deviceId != 0;
-            wgpu = m_wgpu;
+            {
+                std::scoped_lock lock{m_state.Mutex};
+                m_pendingWgpu = {};
+                m_cancellationSource.reset();
+                m_rendering = false;
+            }
+
+#if defined(__ANDROID__)
+            if (m_diagnosticOutput)
+            {
+                using clock = std::chrono::steady_clock;
+                static auto s_lastRetryLog = clock::now() - std::chrono::seconds{5};
+                const auto now = clock::now();
+                if (now - s_lastRetryLog >= std::chrono::seconds{1})
+                {
+                    m_diagnosticOutput(
+                        "WGPU initialization failed; deferring and retrying on future frames.");
+                    s_lastRetryLog = now;
+                }
+            }
+            return {};
+#else
+            error = std::make_exception_ptr(std::runtime_error{errorMessage});
+            return {};
+#endif
         }
 
-        if (m_diagnosticOutput && wgpu)
+        bool shouldTriggerReset{};
+        bool shouldResize{};
         {
-            auto info = wgpu->GetInfo();
-            std::ostringstream stream{};
-            stream << "WGPU initialized (backend=" << info.Backend
-                   << ", vendor=0x" << std::hex << info.VendorId
-                   << ", device=0x" << info.DeviceId << std::dec
-                   << ", adapter=\"" << info.AdapterName << "\").";
-            const auto text = stream.str();
-            m_diagnosticOutput(text.c_str());
+            std::scoped_lock lock{m_state.Mutex};
+            if (!m_wgpu)
+            {
+                m_wgpu = wgpu;
+                m_pendingWgpu = {};
+                shouldTriggerReset = m_deviceId != 0;
+                shouldResize =
+                    pendingWidth != CurrentRenderWidth() ||
+                    pendingHeight != CurrentRenderHeight();
+            }
+            else
+            {
+                wgpu = m_wgpu;
+            }
         }
+
+        if (shouldResize)
+        {
+            wgpu->Resize(CurrentRenderWidth(), CurrentRenderHeight());
+        }
+
+        LogWgpuInitialized(wgpu);
 
         if (shouldTriggerReset && m_renderResetCallback)
         {
             m_renderResetCallback();
         }
+
+        return wgpu;
+    }
+
+    std::shared_ptr<WgpuNative> DeviceImpl::CompleteRenderingInitialization()
+    {
+        std::exception_ptr error{};
+        auto wgpu = CompleteRenderingInitialization(error);
+        if (error)
+        {
+            std::rethrow_exception(error);
+        }
+
+        return wgpu;
+    }
+
+    void DeviceImpl::LogWgpuInitialized(const std::shared_ptr<WgpuNative>& wgpu)
+    {
+        if (!m_diagnosticOutput || !wgpu)
+        {
+            return;
+        }
+
+        {
+            std::scoped_lock lock{m_state.Mutex};
+            if (m_wgpuInitializationLogged)
+            {
+                return;
+            }
+            m_wgpuInitializationLogged = true;
+        }
+
+        auto info = wgpu->GetInfo();
+        std::ostringstream stream{};
+        stream << "WGPU initialized (backend=" << info.Backend
+               << ", vendor=0x" << std::hex << info.VendorId
+               << ", device=0x" << info.DeviceId << std::dec
+               << ", adapter=\"" << info.AdapterName << "\").";
+        const auto text = stream.str();
+        m_diagnosticOutput(text.c_str());
+    }
+
+    void DeviceImpl::EnableRendering()
+    {
+        BeginRenderingInitialization();
+        (void)CompleteRenderingInitialization();
     }
 
     void DeviceImpl::DisableRendering()
     {
         std::queue<std::function<void(std::vector<uint8_t>)>> pendingScreenShots{};
         std::shared_ptr<arcana::cancellation_source> cancellationSource{};
+        std::shared_future<std::shared_ptr<WgpuNative>> pendingWgpu{};
+
+        {
+            std::scoped_lock lock{m_state.Mutex};
+            pendingWgpu = m_pendingWgpu;
+        }
+
+        if (pendingWgpu.valid())
+        {
+            try
+            {
+                (void)pendingWgpu.get();
+            }
+            catch (...)
+            {
+            }
+        }
 
         {
             std::scoped_lock lock{m_state.Mutex};
@@ -227,8 +358,11 @@ namespace Babylon::Graphics
             cancellationSource = m_cancellationSource;
 
             m_wgpu.reset();
+            m_pendingWgpu = {};
             m_cancellationSource.reset();
             m_rendering = false;
+            m_startFrameBeforeRenderPending = false;
+            m_wgpuInitializationLogged = false;
             m_deviceId++;
 
             std::scoped_lock screenShotLock{m_screenShotCallbacksMutex};
@@ -269,9 +403,10 @@ namespace Babylon::Graphics
 
     void DeviceImpl::StartRenderingCurrentFrame()
     {
-        EnableRendering();
+        BeginRenderingInitialization();
 
         std::shared_ptr<arcana::cancellation_source> cancellationSource{};
+        bool tickBeforeRender{};
         {
             std::scoped_lock lock{m_state.Mutex};
             if (!m_rendering)
@@ -280,9 +415,17 @@ namespace Babylon::Graphics
             }
 
             cancellationSource = m_cancellationSource;
+            if (m_wgpu)
+            {
+                tickBeforeRender = true;
+            }
+            else
+            {
+                m_startFrameBeforeRenderPending = true;
+            }
         }
 
-        if (!cancellationSource)
+        if (!cancellationSource || !tickBeforeRender)
         {
             return;
         }
@@ -293,9 +436,11 @@ namespace Babylon::Graphics
     void DeviceImpl::FinishRenderingCurrentFrame()
     {
         std::shared_ptr<arcana::cancellation_source> cancellationSource{};
+        std::shared_future<std::shared_ptr<WgpuNative>> pendingWgpu{};
         std::shared_ptr<WgpuNative> wgpu{};
         size_t renderWidth{};
         size_t renderHeight{};
+        bool tickBeforeRender{};
 
         {
             std::scoped_lock lock{m_state.Mutex};
@@ -304,18 +449,49 @@ namespace Babylon::Graphics
                 return;
             }
 
-            cancellationSource = m_cancellationSource;
             wgpu = m_wgpu;
+            if (!wgpu)
+            {
+                pendingWgpu = m_pendingWgpu;
+            }
+        }
+
+        if (!wgpu)
+        {
+            if (!pendingWgpu.valid() ||
+                pendingWgpu.wait_for(std::chrono::seconds{0}) != std::future_status::ready)
+            {
+                return;
+            }
+
+            wgpu = CompleteRenderingInitialization();
+        }
+
+        {
+            std::scoped_lock lock{m_state.Mutex};
+            cancellationSource = m_cancellationSource;
+            if (!wgpu)
+            {
+                wgpu = m_wgpu;
+            }
             if (wgpu)
             {
                 renderWidth = CurrentRenderWidth();
                 renderHeight = CurrentRenderHeight();
             }
+
+            tickBeforeRender = m_startFrameBeforeRenderPending;
+            m_startFrameBeforeRenderPending = false;
         }
 
         if (!cancellationSource)
         {
             return;
+        }
+
+        if (tickBeforeRender)
+        {
+            m_beforeRenderDispatcher.tick(*cancellationSource);
         }
 
         std::queue<std::function<void(std::vector<uint8_t>)>> pendingCallbacks{};
