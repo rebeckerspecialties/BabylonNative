@@ -1,12 +1,21 @@
 import UIKit
 import MetalKit
 import QuartzCore
+#if os(tvOS)
+import AVKit
+#endif
 
 class ViewController: UIViewController {
 
     var mtkView: MTKView!
     var xrView: MTKView!
     var bnView: BNView?
+
+    private var didInitializeView = false
+    #if os(tvOS)
+    private var displayModeSwitchObserver: NSObjectProtocol?
+    private var displayModeSwitchFallback: DispatchWorkItem?
+    #endif
 
     private var isValidationRun: Bool {
         let arguments = CommandLine.arguments
@@ -52,10 +61,32 @@ class ViewController: UIViewController {
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
+
+        #if os(tvOS)
+        if waitForPendingDisplayModeSwitchIfNeeded() {
+            return
+        }
+        #endif
+
+        initializeViewIfNeeded()
+    }
+
+    deinit {
+        #if os(tvOS)
+        removeDisplayModeSwitchObserver()
+        #endif
+    }
+
+    private func initializeViewIfNeeded() {
+        if didInitializeView {
+            return
+        }
+
         guard
             let appDelegate = UIApplication.shared.delegate as? AppDelegate,
             let runtime = appDelegate.runtime
         else { return }
+        didInitializeView = true
 
         #if !os(tvOS)
         if isValidationRun {
@@ -71,6 +102,7 @@ class ViewController: UIViewController {
         configureDrawable(mtkView)
         configureDrawable(xrView)
         view.layoutIfNeeded()
+        logDisplayState("initial BNView attach")
 
         // Hand the runtime a reference to the XR overlay so NativeXr
         // can render its content into a separate transparent layer
@@ -99,11 +131,80 @@ class ViewController: UIViewController {
         #endif
     }
 
+    #if os(tvOS)
+    private func waitForPendingDisplayModeSwitchIfNeeded() -> Bool {
+        guard isHdr10Run else {
+            return false
+        }
+        guard #available(tvOS 11.3, *) else {
+            return false
+        }
+        guard let displayManager = view.window?.avDisplayManager, displayManager.isDisplayModeSwitchInProgress else {
+            return false
+        }
+
+        NSLog("[Playground] Waiting for tvOS display mode switch before initializing renderer.")
+        removeDisplayModeSwitchObserver()
+
+        displayModeSwitchObserver = NotificationCenter.default.addObserver(
+            forName: NSNotification.Name.AVDisplayManagerModeSwitchEnd,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            guard let self = self else { return }
+            self.removeDisplayModeSwitchObserver()
+            self.logDisplayState("after tvOS display mode switch")
+            self.initializeViewIfNeeded()
+        }
+
+        let fallback = DispatchWorkItem { [weak self] in
+            guard let self = self else { return }
+            self.removeDisplayModeSwitchObserver()
+            self.logDisplayState("after tvOS display mode switch timeout")
+            self.initializeViewIfNeeded()
+        }
+        displayModeSwitchFallback = fallback
+        DispatchQueue.main.asyncAfter(deadline: .now() + .seconds(10), execute: fallback)
+        return true
+    }
+
+    private func removeDisplayModeSwitchObserver() {
+        if let observer = displayModeSwitchObserver {
+            NotificationCenter.default.removeObserver(observer)
+            displayModeSwitchObserver = nil
+        }
+        displayModeSwitchFallback?.cancel()
+        displayModeSwitchFallback = nil
+    }
+    #endif
+
     private func currentScreen() -> UIScreen? {
         #if os(tvOS)
         return view.window?.windowScene?.screen
         #else
         return view.window?.screen ?? UIScreen.main
+        #endif
+    }
+
+    private func logDisplayState(_ label: String) {
+        #if os(tvOS)
+        guard let screen = currentScreen() else {
+            NSLog("[Playground] tvOS display %@: no screen", label)
+            return
+        }
+
+        let modeSize = screen.currentMode?.size ?? .zero
+        NSLog("[Playground] tvOS display %@: bounds=%.0fx%.0f nativeBounds=%.0fx%.0f mode=%.0fx%.0f scale=%.3f nativeScale=%.3f maximumFramesPerSecond=%d",
+            label,
+            screen.bounds.width,
+            screen.bounds.height,
+            screen.nativeBounds.width,
+            screen.nativeBounds.height,
+            modeSize.width,
+            modeSize.height,
+            screen.scale,
+            screen.nativeScale,
+            screen.maximumFramesPerSecond)
         #endif
     }
 
