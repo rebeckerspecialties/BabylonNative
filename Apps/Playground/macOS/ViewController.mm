@@ -10,6 +10,7 @@
 #include <Shared/CommandLine.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cstdio>
 #include <sstream>
 #include <string>
@@ -18,6 +19,13 @@
 
 namespace
 {
+    using Clock = std::chrono::steady_clock;
+
+    double ElapsedMs(Clock::time_point start, Clock::time_point end)
+    {
+        return std::chrono::duration<double, std::milli>(end - start).count();
+    }
+
     bool EndsWith(std::string_view value, std::string_view suffix)
     {
         return value.size() >= suffix.size() && value.compare(value.size() - suffix.size(), suffix.size(), suffix) == 0;
@@ -215,10 +223,55 @@ namespace
     }
 }
 
+@interface PlaygroundProfilingViewDelegate : BNViewDelegate
+@end
+
+@implementation PlaygroundProfilingViewDelegate
+{
+    uint64_t _frameCount;
+    Clock::time_point _windowStart;
+    double _renderFrameMs;
+}
+
+- (instancetype)initWithView:(BNView*)view
+{
+    if ((self = [super initWithView:view]))
+    {
+        _windowStart = Clock::now();
+    }
+    return self;
+}
+
+- (void)drawInMTKView:(MTKView*)view
+{
+    const auto frameStart = Clock::now();
+    [super drawInMTKView:view];
+    const auto frameEnd = Clock::now();
+
+    _frameCount++;
+    _renderFrameMs += ElapsedMs(frameStart, frameEnd);
+
+    if ((_frameCount % 30u) == 0u)
+    {
+        const auto now = Clock::now();
+        const auto elapsedMs = std::max(ElapsedMs(_windowStart, now), 0.0001);
+        constexpr double frames = 30.0;
+        NSLog(@"[Playground] Native frame profile frame=%llu windowFps=%.2f renderFrameMs=%.3f",
+            static_cast<unsigned long long>(_frameCount),
+            (frames * 1000.0) / elapsedMs,
+            _renderFrameMs / frames);
+        _windowStart = now;
+        _renderFrameMs = 0;
+    }
+}
+
+@end
+
 @implementation ViewController
 {
     BNRuntime* _runtime;
     BNView* _bnView;
+    PlaygroundProfilingViewDelegate* _profilingDelegate;
     MTKView* _mtkView;
 }
 
@@ -239,6 +292,11 @@ namespace
 - (void)uninitialize {
     // Tear down View first (closes in-flight frame, unbinds the surface),
     // then Runtime (joins the JS thread).
+    if (_mtkView.delegate == _profilingDelegate)
+    {
+        _mtkView.delegate = nil;
+    }
+    _profilingDelegate = nil;
     _bnView = nil;
     _runtime = nil;
     [_mtkView removeFromSuperview];
@@ -327,6 +385,11 @@ namespace
     // MTKViewDelegate that drives per-frame render. Resize is driven
     // separately from -viewDidLayout below.
     _bnView = [[BNView alloc] initWithRuntime:_runtime view:_mtkView];
+    if (playgroundOptions.ProfileFrames)
+    {
+        _profilingDelegate = [[PlaygroundProfilingViewDelegate alloc] initWithView:_bnView];
+        _mtkView.delegate = _profilingDelegate;
+    }
 }
 
 - (void)viewDidAppear {

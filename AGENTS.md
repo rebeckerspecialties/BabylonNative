@@ -203,6 +203,36 @@ finished. A target-scoped attach recorded the app but `xctrace` exited with
 `Trace/BPT trap: 5` and exported a malformed trace, so preserve the app run log
 and do not report the trace as valid unless schema export succeeds.
 
+For 120 Hz / HDR checks on the local M4 Mac, do not treat the
+`MTKView preferredFramesPerSecond=120` log as proof that the fluid simulation is
+updating at 120 fps. It only proves the requested/native display cap. Use
+`--profile-frames --preferred-fps 120 --hdr10` and compare three signals:
+
+- macOS native frame logs from `drawInMTKView`, which should settle near 120 Hz
+  after startup if the display path is actually ticking at that cadence.
+- Validation JS frame logs, which report Babylon render-loop cadence and native
+  WebGPU deltas.
+- Particle profile fields: for the HDR fluid test, `particleUpdateCalls=30`
+  per 30-frame window proves the GPU particle update path is running every
+  validation frame; `particleUpdateInAnimate=true` confirms the fluid renderer
+  has moved GPU particle updates into `animate()`.
+
+The current M4 Max HDR fluid validation run requested/preferred/maxed at
+`120` and measured native windows around `120 fps` after warmup, while JS render
+windows ranged roughly `109-120 fps`. The validation harness intentionally sets
+`useConstantAnimationDeltaTime`, so this run reported `animationRatio=0.9600`
+and `particleTimeDelta=0.0192`; perceived motion speed in validation is
+therefore not the same evidence as wall-clock display cadence. Screenshot
+readback/comparison is also not live cadence evidence: the native frame window
+dropped to about `73 fps` during the screenshot phase.
+
+Focused local M4 HDR fluid cadence check:
+
+```sh
+pkill -x Playground || true
+BABYLON_NATIVE_WEBGPU_MEMORY_TRACE=1 build_wgpu_29_release_lto/Apps/Playground/Playground.app/Contents/MacOS/Playground --test "Fluid rendering particle system HDR10" --include-excluded --once --save-results false --hdr10 --profile-frames --preferred-fps 120 --inspection-hold-ms 0
+```
+
 Performance lessons from rejected experiments:
 
 - Staging texture writes in this layer regressed PMU/submit behavior. `wgpu`
