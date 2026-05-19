@@ -3,6 +3,7 @@
 #include <Shared/AppContext.h>
 #include <Shared/CommandLine.h>
 #include <algorithm>
+#include <chrono>
 #include <cstdio>
 #include <optional>
 #include <string>
@@ -14,9 +15,17 @@
 #import <QuartzCore/QuartzCore.h>
 
 std::optional<AppContext> appContext{};
+bool profileNativeFrames{false};
 
 namespace
 {
+    using Clock = std::chrono::steady_clock;
+
+    double ElapsedMs(Clock::time_point start, Clock::time_point end)
+    {
+        return std::chrono::duration<double, std::milli>(end - start).count();
+    }
+
     bool EndsWith(std::string_view value, std::string_view suffix)
     {
         return value.size() >= suffix.size() && value.compare(value.size() - suffix.size(), suffix.size(), suffix) == 0;
@@ -160,11 +169,55 @@ namespace
 {
     @autoreleasepool {
         if (appContext) {
+            const auto frameStart = Clock::now();
             appContext->DeviceUpdate().Finish();
+            const auto updateFinished = Clock::now();
             appContext->Device().FinishRenderingCurrentFrame();
+            const auto frameFinished = Clock::now();
             appContext->Device().StartRenderingCurrentFrame();
+            const auto frameStarted = Clock::now();
             appContext->DeviceUpdate().Start();
+            const auto updateStarted = Clock::now();
             appContext->DispatchAnimationFrame();
+
+            if (profileNativeFrames)
+            {
+                static uint64_t frameCount{0};
+                static auto windowStart = Clock::now();
+                static double finishUpdateMs{0};
+                static double finishFrameMs{0};
+                static double startFrameMs{0};
+                static double startUpdateMs{0};
+                static double totalMs{0};
+
+                frameCount++;
+                finishUpdateMs += ElapsedMs(frameStart, updateFinished);
+                finishFrameMs += ElapsedMs(updateFinished, frameFinished);
+                startFrameMs += ElapsedMs(frameFinished, frameStarted);
+                startUpdateMs += ElapsedMs(frameStarted, updateStarted);
+                totalMs += ElapsedMs(frameStart, updateStarted);
+
+                if ((frameCount % 30u) == 0u)
+                {
+                    const auto now = Clock::now();
+                    const auto elapsedMs = std::max(ElapsedMs(windowStart, now), 0.0001);
+                    const auto frames = 30.0;
+                    NSLog(@"[Playground] Native frame profile frame=%llu windowFps=%.2f finishUpdateMs=%.3f finishFrameMs=%.3f startFrameMs=%.3f startUpdateMs=%.3f totalBoundaryMs=%.3f",
+                        static_cast<unsigned long long>(frameCount),
+                        (frames * 1000.0) / elapsedMs,
+                        finishUpdateMs / frames,
+                        finishFrameMs / frames,
+                        startFrameMs / frames,
+                        startUpdateMs / frames,
+                        totalMs / frames);
+                    windowStart = now;
+                    finishUpdateMs = 0;
+                    finishFrameMs = 0;
+                    startFrameMs = 0;
+                    startUpdateMs = 0;
+                    totalMs = 0;
+                }
+            }
         }
     }
 }
@@ -194,6 +247,7 @@ namespace
     [self uninitialize];
 
     PlaygroundOptions playgroundOptions = ParsePlaygroundOptionsFromProcess();
+    profileNativeFrames = playgroundOptions.ProfileFrames;
     if (playgroundOptions.ParseError)
     {
         fprintf(stderr, "Playground: %s\n", playgroundOptions.ErrorMessage.c_str());
