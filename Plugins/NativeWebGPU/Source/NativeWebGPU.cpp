@@ -2725,6 +2725,11 @@ namespace Babylon::Plugins::NativeWebGPU
             }));
 
             gpu.Set("getPreferredCanvasFormat", Napi::Function::New(env, [](const Napi::CallbackInfo& info) -> Napi::Value {
+                auto options = info.Env().Global().Get("_playgroundOptions");
+                if (options.IsObject() && options.As<Napi::Object>().Get("hdr10").ToBoolean())
+                {
+                    return Napi::String::New(info.Env(), "rgba16float");
+                }
                 return Napi::String::New(info.Env(), "bgra8unorm");
             }));
 

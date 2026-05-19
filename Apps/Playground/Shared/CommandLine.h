@@ -16,10 +16,13 @@ struct PlaygroundOptions
     bool GenerateReferences = false;
     bool RunOnce = false;
     bool IncludeExcluded = false;
+    bool Hdr10 = false;
+    bool ProfileFrames = false;
 
     std::optional<bool> SaveResults;
     std::optional<bool> DebugTrace;
     std::optional<std::string> PerfTrace;
+    std::optional<int> InspectionHoldMs;
 
     // 1-based frame index at which to call TestUtils.captureNextFrame()
     // (RenderDoc capture trigger). When set, the runner extends each test's

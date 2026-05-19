@@ -3,7 +3,9 @@
 #import <Babylon/Embedding/Apple/BabylonNativeEmbedding.h>
 #import "AppleShared/PlaygroundBootstrap.h"
 
+#import <CoreGraphics/CoreGraphics.h>
 #import <MetalKit/MTKView.h>
+#import <QuartzCore/QuartzCore.h>
 
 #include <Shared/CommandLine.h>
 
@@ -37,7 +39,10 @@ namespace
             options.GenerateReferences ||
             options.RunOnce ||
             options.IncludeExcluded ||
+            options.Hdr10 ||
+            options.ProfileFrames ||
             options.SaveResults.has_value() ||
+            options.InspectionHoldMs.has_value() ||
             options.CaptureFrame.has_value() ||
             !options.TestFilters.empty() ||
             !options.TestIndices.empty();
@@ -62,6 +67,40 @@ namespace
         }
 
         return CommandLine::Parse(static_cast<int>(argv.size()), argv.data());
+    }
+
+    void ConfigureDrawable(MTKView* engineView, const PlaygroundOptions& options)
+    {
+        if (!options.Hdr10)
+        {
+            engineView.colorPixelFormat = MTLPixelFormatBGRA8Unorm_sRGB;
+            return;
+        }
+
+        engineView.colorPixelFormat = MTLPixelFormatRGBA16Float;
+
+        CAMetalLayer* layer = (CAMetalLayer*)engineView.layer;
+        layer.pixelFormat = MTLPixelFormatRGBA16Float;
+        CGColorSpaceRef colorSpace = CGColorSpaceCreateWithName(kCGColorSpaceExtendedLinearITUR_2020);
+        layer.colorspace = colorSpace;
+        if (colorSpace != nullptr)
+        {
+            CGColorSpaceRelease(colorSpace);
+        }
+
+        if (@available(macOS 10.15, *))
+        {
+            layer.EDRMetadata = [CAEDRMetadata HDR10MetadataWithMinLuminance:0.005f maxLuminance:1000.0f opticalOutputScale:100.0f];
+        }
+        if (@available(macOS 15.0, *))
+        {
+            layer.toneMapMode = CAToneMapModeIfSupported;
+        }
+        if (@available(macOS 26.0, *))
+        {
+            layer.preferredDynamicRange = CADynamicRangeHigh;
+            layer.contentsHeadroom = 10.0;
+        }
     }
 
     void AppendJsString(std::ostringstream& out, std::string_view value)
@@ -91,10 +130,16 @@ namespace
         js << "breakOnFail:" << (options.BreakOnFail ? "true" : "false") << ',';
         js << "generateReferences:" << (options.GenerateReferences ? "true" : "false") << ',';
         js << "runOnce:" << (options.RunOnce ? "true" : "false") << ',';
-        js << "includeExcluded:" << (options.IncludeExcluded ? "true" : "false");
+        js << "includeExcluded:" << (options.IncludeExcluded ? "true" : "false") << ',';
+        js << "hdr10:" << (options.Hdr10 ? "true" : "false") << ',';
+        js << "profileFrames:" << (options.ProfileFrames ? "true" : "false");
         if (options.SaveResults.has_value())
         {
             js << ",saveResults:" << (*options.SaveResults ? "true" : "false");
+        }
+        if (options.InspectionHoldMs.has_value())
+        {
+            js << ",inspectionHoldMs:" << *options.InspectionHoldMs;
         }
         if (options.CaptureFrame.has_value())
         {
@@ -119,6 +164,14 @@ namespace
             js << options.TestIndices[index];
         }
         js << "]};";
+        if (options.Hdr10)
+        {
+            js << "globalThis.__nativeValidationHdr10=true;";
+            js << "globalThis.__nativeValidationRenderWidth=3840;";
+            js << "globalThis.__nativeValidationRenderHeight=2160;";
+            js << "globalThis.__nativeValidationComparisonWidth=600;";
+            js << "globalThis.__nativeValidationComparisonHeight=400;";
+        }
         const auto source = js.str();
         return [NSString stringWithUTF8String:source.c_str()];
     }
@@ -223,7 +276,13 @@ namespace
 
     _mtkView = [[MTKView alloc] initWithFrame:[self view].frame device:nil];
     _mtkView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+    ConfigureDrawable(_mtkView, playgroundOptions);
     [[self view] addSubview:_mtkView];
+
+    if (playgroundOptions.Hdr10)
+    {
+        NSLog(@"[Playground] macOS HDR validation render size: 3840x2160; comparison size: 600x400");
+    }
 
     // BNView attaches the runtime to the MTKView and installs a default
     // MTKViewDelegate that drives per-frame render. Resize is driven
