@@ -84,7 +84,11 @@ FetchContent_MakeAvailable(CMakeExtensions)
 # and FetchContent_MakeAvailable_With_Message will use provided local folder provided to cmake command line
 # like '-DFETCHCONTENT_SOURCE_DIR_JSRUNTIMEHOST=../shared/Babylon/....'
 
-if(VISIONOS OR IOS OR BABYLON_NATIVE_BUILD_SOURCETREE)
+if(DEFINED PLATFORM AND PLATFORM MATCHES "TVOS")
+    set(TVOS ON CACHE BOOL "Build for tvOS." FORCE)
+endif()
+
+if(TVOS OR VISIONOS OR IOS OR BABYLON_NATIVE_BUILD_SOURCETREE)
     FetchContent_MakeAvailable_With_Message(ios-cmake)
     if(NOT BABYLON_NATIVE_BUILD_SOURCETREE)
         set(CMAKE_TOOLCHAIN_FILE "${ios-cmake_SOURCE_DIR}/ios.toolchain.cmake" CACHE PATH "")
@@ -92,7 +96,10 @@ if(VISIONOS OR IOS OR BABYLON_NATIVE_BUILD_SOURCETREE)
     set(ENABLE_ARC OFF CACHE STRING "Enables or disables ARC support.")
 endif()
 
-if(VISIONOS)
+if(TVOS)
+    set(PLATFORM "TVOS" CACHE STRING "")
+    set(DEPLOYMENT_TARGET "26.0" CACHE STRING "")
+elseif(VISIONOS)
     set(PLATFORM "VISIONOSCOMBINED" CACHE STRING "")
     set(DEPLOYMENT_TARGET "1.0" CACHE STRING "")
 elseif(IOS)
@@ -100,10 +107,17 @@ elseif(IOS)
     set(DEPLOYMENT_TARGET "13" CACHE STRING "")
 endif()
 
+if(CMAKE_SYSTEM_NAME STREQUAL "tvOS" OR PLATFORM MATCHES "TVOS")
+    set(TVOS ON CACHE BOOL "Build for tvOS." FORCE)
+endif()
+
 # Keep deployment targeting consistent across all generated Xcode targets.
 # Without this, transitive static libraries may default to the host SDK version
 # and become unloadable on older simulator runtimes.
-if(IOS)
+if(TVOS)
+    set(CMAKE_OSX_DEPLOYMENT_TARGET "${DEPLOYMENT_TARGET}" CACHE STRING "" FORCE)
+    set(CMAKE_XCODE_ATTRIBUTE_TVOS_DEPLOYMENT_TARGET "${DEPLOYMENT_TARGET}")
+elseif(IOS)
     set(CMAKE_OSX_DEPLOYMENT_TARGET "${DEPLOYMENT_TARGET}" CACHE STRING "" FORCE)
     set(CMAKE_XCODE_ATTRIBUTE_IPHONEOS_DEPLOYMENT_TARGET "${DEPLOYMENT_TARGET}")
 elseif(VISIONOS)
@@ -332,6 +346,8 @@ endif()
 
 if(ANDROID)
     set(BABYLON_NATIVE_PLATFORM "Android")
+elseif(TVOS)
+    set(BABYLON_NATIVE_PLATFORM "tvOS")
 elseif(IOS)
     set(BABYLON_NATIVE_PLATFORM "iOS")
 elseif (VISIONOS)
