@@ -43,25 +43,32 @@ fn main() {
         .layout_tests(false);
 
     match env::var("CARGO_CFG_TARGET_OS").ok().as_deref() {
-        Some("ios") => {
+        Some("ios") | Some("tvos") => {
             let target_triple = env::var("TARGET").unwrap_or_default();
-            let is_simulator = target_triple.contains("apple-ios-sim")
-                || target_triple.contains("x86_64-apple-ios");
+            let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+            let (device_sdk, simulator_sdk, platform) = if target_os == "tvos" {
+                ("appletvos", "appletvsimulator", "tvos")
+            } else {
+                ("iphoneos", "iphonesimulator", "ios")
+            };
+            let is_simulator = target_triple.contains("-sim")
+                || target_triple.contains("x86_64-apple-ios")
+                || target_triple.contains("x86_64-apple-tvos");
             if is_simulator {
-                let sdk = xcrun_sdk_path("iphonesimulator");
-                let clang_target = if target_triple.contains("x86_64-apple-ios") {
-                    "x86_64-apple-ios-simulator"
+                let sdk = xcrun_sdk_path(simulator_sdk);
+                let clang_target = if target_triple.contains("x86_64") {
+                    format!("x86_64-apple-{platform}-simulator")
                 } else {
-                    "arm64-apple-ios-simulator"
+                    format!("arm64-apple-{platform}-simulator")
                 };
                 builder = builder
                     .clang_arg(format!("-isysroot{sdk}"))
                     .clang_arg(format!("--target={clang_target}"));
             } else {
-                let sdk = xcrun_sdk_path("iphoneos");
+                let sdk = xcrun_sdk_path(device_sdk);
                 builder = builder
                     .clang_arg(format!("-isysroot{sdk}"))
-                    .clang_arg("--target=arm64-apple-ios");
+                    .clang_arg(format!("--target=arm64-apple-{platform}"));
             }
         }
         Some("macos") => {
