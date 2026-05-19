@@ -53,6 +53,9 @@ namespace
 #if defined(TARGET_OS_TV) && TARGET_OS_TV
         (void)playgroundOptions;
         return true;
+#elif defined(TARGET_OS_IOS) && TARGET_OS_IOS
+        (void)playgroundOptions;
+        return true;
 #elif defined(TARGET_OS_OSX) && TARGET_OS_OSX
         return playgroundOptions.Hdr10 || playgroundOptions.ProfileFrames;
 #else
