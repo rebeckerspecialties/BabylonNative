@@ -177,6 +177,18 @@ namespace
             "Log validation frame timing and WebGPU backend deltas.", "",
             [](PlaygroundOptions& o, std::string_view, std::string&) { o.ProfileFrames = true; }},
 
+        FlagSpec{"--preferred-fps", "", FlagKind::ValueRequired, "N",
+            "Request the native view frame rate.", "",
+            [](PlaygroundOptions& o, std::string_view value, std::string& err) {
+                int n = 0;
+                if (!ParseIntStrict(value, n) || n < 1 || n > 1000)
+                {
+                    err = "invalid --preferred-fps value (expected 1..1000): '" + std::string{value} + "'";
+                    return;
+                }
+                o.PreferredFps = n;
+            }},
+
         FlagSpec{"--save-results", "", FlagKind::ValueRequired, "BOOL",
             "Override saving of result PNGs (default true).", "",
             [](PlaygroundOptions& o, std::string_view value, std::string& err) {

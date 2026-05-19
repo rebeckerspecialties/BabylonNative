@@ -219,6 +219,10 @@ AppContext::AppContext(
             js.Set("includeExcluded",    Napi::Boolean::New(env, playgroundOptions.IncludeExcluded));
             js.Set("hdr10",              Napi::Boolean::New(env, playgroundOptions.Hdr10));
             js.Set("profileFrames",      Napi::Boolean::New(env, playgroundOptions.ProfileFrames));
+            if (playgroundOptions.PreferredFps.has_value())
+            {
+                js.Set("preferredFps", Napi::Number::New(env, *playgroundOptions.PreferredFps));
+            }
             if (playgroundOptions.SaveResults.has_value())
             {
                 js.Set("saveResults", Napi::Boolean::New(env, *playgroundOptions.SaveResults));

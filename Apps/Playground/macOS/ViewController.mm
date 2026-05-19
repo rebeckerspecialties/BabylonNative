@@ -2,6 +2,7 @@
 
 #include <Shared/AppContext.h>
 #include <Shared/CommandLine.h>
+#include <algorithm>
 #include <cstdio>
 #include <optional>
 #include <string>
@@ -65,6 +66,38 @@ namespace
         }
 
         return CommandLine::Parse(static_cast<int>(argv.size()), argv.data());
+    }
+
+    NSInteger ScreenMaximumFramesPerSecond(MTKView* engineView)
+    {
+        if (@available(macOS 12.0, *))
+        {
+            NSScreen* screen = engineView.window.screen;
+            if (screen == nil)
+            {
+                screen = [NSScreen mainScreen];
+            }
+            return screen != nil ? screen.maximumFramesPerSecond : 0;
+        }
+        return 0;
+    }
+
+    void ConfigureFrameRate(MTKView* engineView, const PlaygroundOptions& options)
+    {
+        if (!options.PreferredFps.has_value())
+        {
+            return;
+        }
+
+        const NSInteger requestedFramesPerSecond = static_cast<NSInteger>(*options.PreferredFps);
+        const NSInteger maximumFramesPerSecond = ScreenMaximumFramesPerSecond(engineView);
+        engineView.preferredFramesPerSecond = maximumFramesPerSecond > 0
+            ? std::min(requestedFramesPerSecond, maximumFramesPerSecond)
+            : requestedFramesPerSecond;
+        NSLog(@"[Playground] MTKView preferredFramesPerSecond=%ld requestedFramesPerSecond=%ld screenMaximumFramesPerSecond=%ld",
+            static_cast<long>(engineView.preferredFramesPerSecond),
+            static_cast<long>(requestedFramesPerSecond),
+            static_cast<long>(maximumFramesPerSecond));
     }
 
     void ConfigureDrawable(MTKView* engineView, const PlaygroundOptions& options)
@@ -180,6 +213,7 @@ namespace
     engineView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     [[self view] addSubview:engineView];
     engineView.delegate = engineView;
+    ConfigureFrameRate(engineView, playgroundOptions);
     ConfigureDrawable(engineView, playgroundOptions);
 
     size_t width = static_cast<size_t>(engineView.drawableSize.width);

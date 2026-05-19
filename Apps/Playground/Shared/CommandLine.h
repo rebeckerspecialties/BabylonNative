@@ -23,6 +23,7 @@ struct PlaygroundOptions
     std::optional<bool> DebugTrace;
     std::optional<std::string> PerfTrace;
     std::optional<int> InspectionHoldMs;
+    std::optional<int> PreferredFps;
 
     // 1-based frame index at which to call TestUtils.captureNextFrame()
     // (RenderDoc capture trigger). When set, the runner extends each test's
