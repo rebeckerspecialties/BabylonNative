@@ -8,7 +8,7 @@ set(SOURCES
 if(ANDROID)
     set(SOURCES ${SOURCES}
         "Source/Android/NativeInput.cpp")
-elseif(IOS)
+elseif(IOS OR TVOS)
     set(SOURCES ${SOURCES}
         "Source/iOS/NativeInput.cpp")
 elseif(APPLE)

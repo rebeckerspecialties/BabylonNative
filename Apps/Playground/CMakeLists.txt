@@ -1,4 +1,4 @@
-FILE(GLOB REFERENCE_IMAGES RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}" "ReferenceImages/*")
+FILE(GLOB REFERENCE_IMAGES CONFIGURE_DEPENDS RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}" "ReferenceImages/*")
 
 set(BABYLON_SCRIPTS
     "../node_modules/babylonjs-loaders/babylonjs.loaders.js"
@@ -36,7 +36,24 @@ set(SOURCES
 
 if(APPLE)
     find_library(JAVASCRIPTCORE_LIBRARY JavaScriptCore)
-    if(IOS)
+    if(TVOS)
+        set(PLIST_FILE
+            "${CMAKE_CURRENT_LIST_DIR}/tvOS/Info.plist")
+        set(STORYBOARD)
+        set(RESOURCE_FILES ${SCRIPTS})
+        set(ADDITIONAL_LIBRARIES
+            PRIVATE z
+            PRIVATE "-framework AVFoundation"
+            PRIVATE "-framework AVKit"
+            PRIVATE "-framework CoreMedia")
+        set(SOURCES ${SOURCES}
+            "iOS/AppDelegate.swift"
+            "iOS/ViewController.swift"
+            "iOS/LibNativeBridge.h"
+            "iOS/LibNativeBridge.mm")
+        set_source_files_properties(${SCRIPTS} ${BABYLON_SCRIPTS} ${DEPENDENCIES} PROPERTIES MACOSX_PACKAGE_LOCATION "Scripts")
+        set_source_files_properties(${REFERENCE_IMAGES} PROPERTIES MACOSX_PACKAGE_LOCATION "ReferenceImages")
+    elseif(IOS)
         set(PLIST_FILE
             "${CMAKE_CURRENT_LIST_DIR}/iOS/Info.plist")
         set(STORYBOARD)
@@ -218,7 +235,36 @@ if (UNIX AND NOT APPLE AND NOT ANDROID)
 endif()
 
 if(APPLE)
-    if(IOS)
+    if(TVOS)
+        if(PLATFORM MATCHES "SIMULATOR")
+            set(PLAYGROUND_TVOS_SDKROOT "appletvsimulator")
+        else()
+            set(PLAYGROUND_TVOS_SDKROOT "appletvos")
+        endif()
+
+        set_target_properties(Playground PROPERTIES
+            MACOSX_BUNDLE true
+            MACOSX_BUNDLE_INFO_PLIST "${PLIST_FILE}"
+            RESOURCE "${RESOURCE_FILES}"
+
+            XCODE_ATTRIBUTE_TVOS_DEPLOYMENT_TARGET ${DEPLOYMENT_TARGET}
+            XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER "com.BabylonNative.Playground.tvOS"
+
+            XCODE_ATTRIBUTE_SWIFT_VERSION "5.0"
+            XCODE_ATTRIBUTE_SWIFT_OBJC_BRIDGING_HEADER "${CMAKE_CURRENT_LIST_DIR}/iOS/LibNativeBridge.h"
+            XCODE_ATTRIBUTE_LD_RUNPATH_SEARCH_PATHS "@executable_path/Frameworks"
+            XCODE_ATTRIBUTE_FRAMEWORK_SEARCH_PATHS "$(inherited) $(SDKROOT)$(SYSTEM_LIBRARY_DIR)/Frameworks"
+            XCODE_ATTRIBUTE_LIBRARY_SEARCH_PATHS "$(inherited) $(SDKROOT)/usr/lib $(SDKROOT)/usr/lib/swift"
+            XCODE_ATTRIBUTE_SUPPORTED_PLATFORMS "appletvos appletvsimulator"
+            XCODE_ATTRIBUTE_SDKROOT "${PLAYGROUND_TVOS_SDKROOT}"
+            XCODE_ATTRIBUTE_TARGETED_DEVICE_FAMILY "3"
+            XCODE_ATTRIBUTE_ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES YES
+            XCODE_ATTRIBUTE_OTHER_SWIFT_FLAGS "")
+
+        set(CMAKE_Swift_COMPILER_FORCED TRUE)
+        set(CMAKE_Swift_LANGUAGE_VERSION 5.0)
+        enable_language(Swift)
+    elseif(IOS)
         if(PLATFORM MATCHES "SIMULATOR")
             set(PLAYGROUND_IOS_SDKROOT "iphonesimulator")
         else()
