@@ -1595,6 +1595,7 @@ mod upstream_wgpu_native {
     use std::ffi::c_void;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Mutex, OnceLock};
+    use std::time::Instant;
     use wgpu::util::DeviceExt;
 
     #[derive(Clone, Debug)]
@@ -1688,6 +1689,7 @@ mod upstream_wgpu_native {
         staging_belt: wgpu::util::StagingBelt,
         pending_buffer_writes: Vec<PendingBufferWrite>,
         free_buffer_write_data: Vec<Vec<u8>>,
+        free_external_image_upload_data: Vec<Vec<u8>>,
     }
 
     pub struct ScreenshotData {
@@ -1943,6 +1945,17 @@ mod upstream_wgpu_native {
 
     const MAX_RETAINED_BUFFER_WRITE_DATA_BUFFERS: usize = 256;
     const MAX_RETAINED_BUFFER_WRITE_DATA_BYTES: usize = 1024 * 1024;
+    const MAX_RETAINED_EXTERNAL_IMAGE_UPLOAD_BUFFERS: usize = 64;
+    const MAX_RETAINED_EXTERNAL_IMAGE_UPLOAD_BYTES: usize = 4 * 1024 * 1024;
+
+    fn profile_trace_enabled() -> bool {
+        static ENABLED: OnceLock<bool> = OnceLock::new();
+        *ENABLED.get_or_init(|| std::env::var_os("BABYLON_NATIVE_WEBGPU_PROFILE_TRACE").is_some())
+    }
+
+    fn elapsed_us(start: Instant, end: Instant) -> u128 {
+        end.duration_since(start).as_micros()
+    }
 
     #[derive(Default)]
     struct WebGpuResourceTable {
@@ -2240,6 +2253,27 @@ mod upstream_wgpu_native {
         }
     }
 
+    fn can_borrow_external_image_upload(
+        source_width: u32,
+        source_origin_x: u32,
+        source_origin_y: u32,
+        copy_width: u32,
+        flip_y: bool,
+        source_premultiplied_alpha: bool,
+        destination_premultiplied_alpha: bool,
+        format: wgpu::TextureFormat,
+    ) -> bool {
+        !flip_y
+            && source_origin_x == 0
+            && source_origin_y == 0
+            && copy_width == source_width
+            && source_premultiplied_alpha == destination_premultiplied_alpha
+            && matches!(
+                format,
+                wgpu::TextureFormat::Rgba8Unorm | wgpu::TextureFormat::Rgba8UnormSrgb
+            )
+    }
+
     fn encode_external_image_upload(
         rgba: &[u8],
         source_width: u32,
@@ -2251,6 +2285,7 @@ mod upstream_wgpu_native {
         source_premultiplied_alpha: bool,
         destination_premultiplied_alpha: bool,
         format: wgpu::TextureFormat,
+        reusable_upload: Option<Vec<u8>>,
     ) -> Result<(Cow<'_, [u8]>, u32), String> {
         let source_stride = source_width as usize * 4;
         let pixel_count = copy_width as usize * copy_height as usize;
@@ -2258,16 +2293,16 @@ mod upstream_wgpu_native {
             format!("copyExternalImageToTexture unsupported destination format {format:?}")
         })?;
         let upload_stride = copy_width as usize * bytes_per_pixel as usize;
-        if !flip_y
-            && source_origin_x == 0
-            && source_origin_y == 0
-            && copy_width == source_width
-            && source_premultiplied_alpha == destination_premultiplied_alpha
-            && matches!(
-                format,
-                wgpu::TextureFormat::Rgba8Unorm | wgpu::TextureFormat::Rgba8UnormSrgb
-            )
-        {
+        if can_borrow_external_image_upload(
+            source_width,
+            source_origin_x,
+            source_origin_y,
+            copy_width,
+            flip_y,
+            source_premultiplied_alpha,
+            destination_premultiplied_alpha,
+            format,
+        ) {
             let upload_len = upload_stride * copy_height as usize;
             if rgba.len() < upload_len {
                 return Err("external image RGBA data contained too few bytes".to_string());
@@ -2277,7 +2312,8 @@ mod upstream_wgpu_native {
             return Ok((Cow::Borrowed(&rgba[..upload_len]), upload_stride as u32));
         }
 
-        let mut upload = vec![0; upload_stride * copy_height as usize];
+        let mut upload = reusable_upload.unwrap_or_default();
+        upload.resize(upload_stride * copy_height as usize, 0);
 
         for row in 0..copy_height as usize {
             let source_row = if flip_y {
@@ -2651,6 +2687,7 @@ mod upstream_wgpu_native {
                 staging_belt,
                 pending_buffer_writes: Vec::new(),
                 free_buffer_write_data: Vec::new(),
+                free_external_image_upload_data: Vec::new(),
             })
         }
 
@@ -2725,24 +2762,92 @@ mod upstream_wgpu_native {
             self.free_buffer_write_data.push(data);
         }
 
+        fn take_external_image_upload_data(&mut self, len: usize) -> Vec<u8> {
+            let mut owned = self
+                .free_external_image_upload_data
+                .iter()
+                .position(|buffer| buffer.capacity() >= len)
+                .map(|index| self.free_external_image_upload_data.swap_remove(index))
+                .unwrap_or_else(|| Vec::with_capacity(len));
+            owned.clear();
+            owned
+        }
+
+        fn recycle_external_image_upload_data(&mut self, mut data: Vec<u8>) {
+            if data.capacity() > MAX_RETAINED_EXTERNAL_IMAGE_UPLOAD_BYTES
+                || self.free_external_image_upload_data.len()
+                    >= MAX_RETAINED_EXTERNAL_IMAGE_UPLOAD_BUFFERS
+            {
+                return;
+            }
+
+            data.clear();
+            self.free_external_image_upload_data.push(data);
+        }
+
         fn submit_pending_buffer_writes(&mut self, label: &str) {
             if self.pending_buffer_writes.is_empty() {
                 return;
             }
 
+            let trace = profile_trace_enabled();
+            let trace_count = if trace {
+                self.pending_buffer_writes.len()
+            } else {
+                0
+            };
+            let trace_bytes = if trace {
+                self.pending_buffer_writes
+                    .iter()
+                    .fold(0usize, |acc, write| acc.saturating_add(write.data.len()))
+            } else {
+                0
+            };
+            let trace_start = if trace { Some(Instant::now()) } else { None };
             let mut encoder =
                 self.runtime
                     .device
                     .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                         label: Some("babylon-native-webgpu.staged-buffer-writes"),
                     });
+            let trace_after_encoder = trace_start.as_ref().map(|_| Instant::now());
             if self.encode_pending_buffer_writes(&mut encoder) {
+                let trace_after_encode = trace_start.as_ref().map(|_| Instant::now());
                 self.staging_belt.finish();
+                let trace_after_finish = trace_start.as_ref().map(|_| Instant::now());
                 if std::env::var_os("BABYLON_NATIVE_WEBGPU_STAGING_TRACE").is_some() {
                     eprintln!("NativeWebGPU staging submit: {label}");
                 }
                 self.runtime.queue.submit(Some(encoder.finish()));
+                let trace_after_submit = trace_start.as_ref().map(|_| Instant::now());
                 self.staging_belt.recall();
+                if let (
+                    Some(start),
+                    Some(after_encoder),
+                    Some(after_encode),
+                    Some(after_finish),
+                    Some(after_submit),
+                ) = (
+                    trace_start,
+                    trace_after_encoder,
+                    trace_after_encode,
+                    trace_after_finish,
+                    trace_after_submit,
+                ) {
+                    let after_recall = Instant::now();
+                    eprintln!(
+                        "NativeWebGPU profile stagedBufferWrites label={} count={} bytes={} createEncoderUs={} encodeUs={} finishUs={} submitUs={} recallUs={} totalUs={}",
+                        label,
+                        trace_count,
+                        trace_bytes,
+                        elapsed_us(start, after_encoder),
+                        elapsed_us(after_encoder, after_encode),
+                        elapsed_us(after_encode, after_finish),
+                        elapsed_us(after_finish, after_submit),
+                        elapsed_us(after_submit, after_recall),
+                        elapsed_us(start, after_recall)
+                    );
+                }
             }
         }
 
@@ -4848,7 +4953,13 @@ mod upstream_wgpu_native {
             }
             let (texture, mip_level, origin, aspect) =
                 self.parse_texture_copy_view(&destination)?;
+            let trace_start = if profile_trace_enabled() {
+                Some(Instant::now())
+            } else {
+                None
+            };
             self.submit_pending_buffer_writes("write_texture");
+            let trace_after_flush = trace_start.as_ref().map(|_| Instant::now());
             self.runtime.queue.write_texture(
                 wgpu::TexelCopyTextureInfo {
                     texture: &texture,
@@ -4860,6 +4971,26 @@ mod upstream_wgpu_native {
                 layout,
                 size,
             );
+            if let (Some(start), Some(after_flush)) = (trace_start, trace_after_flush) {
+                let after_write = Instant::now();
+                eprintln!(
+                    "NativeWebGPU profile queue.writeTexture bytes={} size={}x{}x{} mip={} origin={}x{}x{} bpr={:?} rows={:?} format={:?} flushUs={} writeUs={} totalUs={}",
+                    data.len(),
+                    size.width,
+                    size.height,
+                    size.depth_or_array_layers,
+                    mip_level,
+                    origin.x,
+                    origin.y,
+                    origin.z,
+                    layout.bytes_per_row,
+                    layout.rows_per_image,
+                    texture_format,
+                    elapsed_us(start, after_flush),
+                    elapsed_us(after_flush, after_write),
+                    elapsed_us(start, after_write)
+                );
+            }
             Ok(())
         }
 
@@ -4871,6 +5002,11 @@ mod upstream_wgpu_native {
             destination_json: &str,
             size_json: &str,
         ) -> Result<(), String> {
+            let trace_start = if profile_trace_enabled() {
+                Some(Instant::now())
+            } else {
+                None
+            };
             let size = parse_extent3d(&parse_json(size_json)?);
             let destination = parse_json(destination_json)?;
             let destination_premultiplied_alpha =
@@ -4882,6 +5018,7 @@ mod upstream_wgpu_native {
                 source_height.max(size.height),
                 &mut rgba,
             )?;
+            let trace_after_import = trace_start.as_ref().map(|_| Instant::now());
             let texture_id = destination
                 .get("texture")
                 .and_then(native_id)
@@ -4912,8 +5049,30 @@ mod upstream_wgpu_native {
                 true,
                 destination_premultiplied_alpha,
                 texture_format,
+                if can_borrow_external_image_upload(
+                    width,
+                    0,
+                    0,
+                    copy_width,
+                    true,
+                    true,
+                    destination_premultiplied_alpha,
+                    texture_format,
+                ) {
+                    None
+                } else {
+                    texture_format_bytes_per_pixel(texture_format).map(|bytes_per_pixel| {
+                        self.take_external_image_upload_data(
+                            copy_width as usize * copy_height as usize * bytes_per_pixel as usize,
+                        )
+                    })
+                },
             )?;
+            let trace_after_encode = trace_start.as_ref().map(|_| Instant::now());
+            let upload_borrowed = matches!(upload, Cow::Borrowed(_));
+            let upload_bytes = upload.len();
             self.submit_pending_buffer_writes("copy_external_image_to_texture");
+            let trace_after_flush = trace_start.as_ref().map(|_| Instant::now());
             self.runtime.queue.write_texture(
                 wgpu::TexelCopyTextureInfo {
                     texture: &texture,
@@ -4933,6 +5092,36 @@ mod upstream_wgpu_native {
                     depth_or_array_layers: 1,
                 },
             );
+            if let Cow::Owned(data) = upload {
+                self.recycle_external_image_upload_data(data);
+            }
+            if let (Some(start), Some(after_import), Some(after_encode), Some(after_flush)) = (
+                trace_start,
+                trace_after_import,
+                trace_after_encode,
+                trace_after_flush,
+            ) {
+                let after_write = Instant::now();
+                eprintln!(
+                    "NativeWebGPU profile copyExternalImageToTexture src={}x{} native={}x{} copy={}x{} format={:?} borrowed={} uploadBytes={} uploadStride={} mip={} importUs={} encodeUs={} flushUs={} writeUs={} totalUs={}",
+                    source_width,
+                    source_height,
+                    width,
+                    height,
+                    copy_width,
+                    copy_height,
+                    texture_format,
+                    upload_borrowed,
+                    upload_bytes,
+                    upload_stride,
+                    mip_level,
+                    elapsed_us(start, after_import),
+                    elapsed_us(after_import, after_encode),
+                    elapsed_us(after_encode, after_flush),
+                    elapsed_us(after_flush, after_write),
+                    elapsed_us(start, after_write)
+                );
+            }
             Ok(())
         }
 
@@ -4947,6 +5136,11 @@ mod upstream_wgpu_native {
             destination_json: &str,
             size_json: &str,
         ) -> Result<(), String> {
+            let trace_start = if profile_trace_enabled() {
+                Some(Instant::now())
+            } else {
+                None
+            };
             if source_width == 0 || source_height == 0 {
                 return Err(
                     "copyExternalImageToTexture source dimensions must be non-zero".to_string(),
@@ -4994,8 +5188,30 @@ mod upstream_wgpu_native {
                 false,
                 destination_premultiplied_alpha,
                 texture_format,
+                if can_borrow_external_image_upload(
+                    source_width,
+                    source_origin_x,
+                    source_origin_y,
+                    copy_width,
+                    flip_y,
+                    false,
+                    destination_premultiplied_alpha,
+                    texture_format,
+                ) {
+                    None
+                } else {
+                    texture_format_bytes_per_pixel(texture_format).map(|bytes_per_pixel| {
+                        self.take_external_image_upload_data(
+                            copy_width as usize * copy_height as usize * bytes_per_pixel as usize,
+                        )
+                    })
+                },
             )?;
+            let trace_after_encode = trace_start.as_ref().map(|_| Instant::now());
+            let upload_borrowed = matches!(upload, Cow::Borrowed(_));
+            let upload_bytes = upload.len();
             self.submit_pending_buffer_writes("copy_external_image_rgba_to_texture");
+            let trace_after_flush = trace_start.as_ref().map(|_| Instant::now());
             self.runtime.queue.write_texture(
                 wgpu::TexelCopyTextureInfo {
                     texture: &texture,
@@ -5015,6 +5231,33 @@ mod upstream_wgpu_native {
                     depth_or_array_layers: 1,
                 },
             );
+            if let Cow::Owned(data) = upload {
+                self.recycle_external_image_upload_data(data);
+            }
+            if let (Some(start), Some(after_encode), Some(after_flush)) =
+                (trace_start, trace_after_encode, trace_after_flush)
+            {
+                let after_write = Instant::now();
+                eprintln!(
+                    "NativeWebGPU profile copyExternalImageRgbaToTexture src={}x{} origin={}x{} copy={}x{} flipY={} format={:?} borrowed={} uploadBytes={} uploadStride={} mip={} encodeUs={} flushUs={} writeUs={} totalUs={}",
+                    source_width,
+                    source_height,
+                    source_origin_x,
+                    source_origin_y,
+                    copy_width,
+                    copy_height,
+                    flip_y,
+                    texture_format,
+                    upload_borrowed,
+                    upload_bytes,
+                    upload_stride,
+                    mip_level,
+                    elapsed_us(start, after_encode),
+                    elapsed_us(after_encode, after_flush),
+                    elapsed_us(after_flush, after_write),
+                    elapsed_us(start, after_write)
+                );
+            }
             Ok(())
         }
 
