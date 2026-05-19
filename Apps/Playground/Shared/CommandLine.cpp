@@ -169,6 +169,14 @@ namespace
             "                              without editing the config.\n",
             [](PlaygroundOptions& o, std::string_view, std::string&) { o.IncludeExcluded = true; }},
 
+        FlagSpec{"--hdr10", "", FlagKind::Boolean, "",
+            "Request the native HDR10/EDR presentation path.", "",
+            [](PlaygroundOptions& o, std::string_view, std::string&) { o.Hdr10 = true; }},
+
+        FlagSpec{"--profile-frames", "", FlagKind::Boolean, "",
+            "Log validation frame timing and WebGPU backend deltas.", "",
+            [](PlaygroundOptions& o, std::string_view, std::string&) { o.ProfileFrames = true; }},
+
         FlagSpec{"--save-results", "", FlagKind::ValueRequired, "BOOL",
             "Override saving of result PNGs (default true).", "",
             [](PlaygroundOptions& o, std::string_view value, std::string& err) {
@@ -188,6 +196,18 @@ namespace
         FlagSpec{"--perf-trace", "", FlagKind::ValueRequired, "LEVEL",
             "Set Babylon::PerfTrace level (None/Log).", "",
             [](PlaygroundOptions& o, std::string_view value, std::string&) { o.PerfTrace = std::string{value}; }},
+
+        FlagSpec{"--inspection-hold-ms", "", FlagKind::ValueRequired, "N",
+            "Hold the final validation frame on-screen for N ms before disposing.", "",
+            [](PlaygroundOptions& o, std::string_view value, std::string& err) {
+                int n = 0;
+                if (!ParseIntStrict(value, n) || n < 0 || n > 600000)
+                {
+                    err = "invalid --inspection-hold-ms value (expected 0..600000): '" + std::string{value} + "'";
+                    return;
+                }
+                o.InspectionHoldMs = n;
+            }},
 
         FlagSpec{"--capture", "", FlagKind::ValueRequired, "N",
             "Trigger RenderDoc capture on the Nth",

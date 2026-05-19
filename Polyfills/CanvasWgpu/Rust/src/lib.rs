@@ -1,7 +1,9 @@
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ffi::{c_char, c_void, CStr, CString};
 use std::ptr;
 use std::slice;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 use femtovg::renderer::WGPURenderer;
@@ -82,6 +84,7 @@ struct Backend {
     canvas: femtovg::Canvas<WGPURenderer>,
     render_texture: wgpu::Texture,
     render_texture_format: wgpu::TextureFormat,
+    render_texture_bytes: u64,
     width: u32,
     height: u32,
     dpi: f32,
@@ -121,7 +124,7 @@ pub struct NVGcontext {
 }
 
 fn preferred_backends() -> wgpu::Backends {
-    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
     {
         return wgpu::Backends::METAL;
     }
@@ -131,7 +134,12 @@ fn preferred_backends() -> wgpu::Backends {
         return wgpu::Backends::DX12;
     }
 
-    #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "windows")))]
+    #[cfg(not(any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "tvos",
+        target_os = "windows"
+    )))]
     {
         return wgpu::Backends::VULKAN;
     }
@@ -150,6 +158,111 @@ fn create_instance() -> wgpu::Instance {
     wgpu::Instance::new(descriptor)
 }
 
+fn memory_trace_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("BABYLON_NATIVE_WEBGPU_MEMORY_TRACE").is_some())
+}
+
+fn bytes_to_mib(bytes: u64) -> f64 {
+    bytes as f64 / (1024.0 * 1024.0)
+}
+
+fn estimate_rgba8_texture_bytes(width: u32, height: u32) -> u64 {
+    u64::from(width.max(1))
+        .saturating_mul(u64::from(height.max(1)))
+        .saturating_mul(4)
+}
+
+thread_local! {
+    static SHARED_TEXT_CONTEXT: femtovg::TextContext = femtovg::TextContext::default();
+    static SHARED_FONT_NAMES: RefCell<HashMap<String, FontId>> = RefCell::new(HashMap::new());
+}
+
+static TOTAL_CONTEXTS_CREATED: AtomicUsize = AtomicUsize::new(0);
+static LIVE_CONTEXTS: AtomicUsize = AtomicUsize::new(0);
+static LIVE_RENDER_TEXTURE_BYTES: AtomicU64 = AtomicU64::new(0);
+static PEAK_RENDER_TEXTURE_BYTES: AtomicU64 = AtomicU64::new(0);
+static SHARED_FONTS_REGISTERED: AtomicUsize = AtomicUsize::new(0);
+
+fn update_peak_render_texture_bytes(current: u64) {
+    let mut observed = PEAK_RENDER_TEXTURE_BYTES.load(Ordering::Relaxed);
+    while current > observed {
+        match PEAK_RENDER_TEXTURE_BYTES.compare_exchange_weak(
+            observed,
+            current,
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        ) {
+            Ok(_) => break,
+            Err(next_observed) => observed = next_observed,
+        }
+    }
+}
+
+fn add_live_render_texture_bytes(bytes: u64) -> u64 {
+    let current = LIVE_RENDER_TEXTURE_BYTES
+        .fetch_add(bytes, Ordering::Relaxed)
+        .saturating_add(bytes);
+    update_peak_render_texture_bytes(current);
+    current
+}
+
+fn remove_live_render_texture_bytes(bytes: u64) -> u64 {
+    LIVE_RENDER_TEXTURE_BYTES
+        .fetch_sub(bytes, Ordering::Relaxed)
+        .saturating_sub(bytes)
+}
+
+fn required_canvas_limits(adapter_limits: &wgpu::Limits) -> wgpu::Limits {
+    let default_limits = wgpu::Limits::default();
+    let default_limits_with_resolution = wgpu::Limits {
+        max_texture_dimension_1d: adapter_limits
+            .max_texture_dimension_1d
+            .min(default_limits.max_texture_dimension_1d),
+        max_texture_dimension_2d: adapter_limits
+            .max_texture_dimension_2d
+            .min(default_limits.max_texture_dimension_2d),
+        max_texture_dimension_3d: adapter_limits
+            .max_texture_dimension_3d
+            .min(default_limits.max_texture_dimension_3d),
+        ..default_limits
+    };
+    if wgpu::Limits::check_limits(&default_limits_with_resolution, adapter_limits) {
+        return default_limits_with_resolution;
+    }
+
+    let downlevel_limits = wgpu::Limits::downlevel_defaults();
+    let downlevel_limits_with_resolution = wgpu::Limits {
+        max_texture_dimension_1d: adapter_limits
+            .max_texture_dimension_1d
+            .min(downlevel_limits.max_texture_dimension_1d),
+        max_texture_dimension_2d: adapter_limits
+            .max_texture_dimension_2d
+            .min(downlevel_limits.max_texture_dimension_2d),
+        max_texture_dimension_3d: adapter_limits
+            .max_texture_dimension_3d
+            .min(downlevel_limits.max_texture_dimension_3d),
+        ..downlevel_limits
+    };
+    if wgpu::Limits::check_limits(&downlevel_limits_with_resolution, adapter_limits) {
+        return downlevel_limits_with_resolution;
+    }
+
+    let webgl_limits = wgpu::Limits::downlevel_webgl2_defaults();
+    wgpu::Limits {
+        max_texture_dimension_1d: adapter_limits
+            .max_texture_dimension_1d
+            .min(webgl_limits.max_texture_dimension_1d),
+        max_texture_dimension_2d: adapter_limits
+            .max_texture_dimension_2d
+            .min(webgl_limits.max_texture_dimension_2d),
+        max_texture_dimension_3d: adapter_limits
+            .max_texture_dimension_3d
+            .min(webgl_limits.max_texture_dimension_3d),
+        ..webgl_limits
+    }
+}
+
 fn create_device() -> Result<(wgpu::Device, wgpu::Queue), String> {
     let instance = create_instance();
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
@@ -159,10 +272,25 @@ fn create_device() -> Result<(wgpu::Device, wgpu::Queue), String> {
     }))
     .map_err(|err| format!("request_adapter failed: {err}"))?;
 
+    let adapter_info = adapter.get_info();
+    let adapter_limits = adapter.limits();
+    let required_limits = required_canvas_limits(&adapter_limits);
+    if memory_trace_enabled() {
+        eprintln!(
+            "CanvasWgpu memory requestDevice adapter=\"{}\" backend={:?} adapterMaxTexture2D={} requiredMaxTexture2D={} requiredStorageBuffersPerShaderStage={} requiredBindGroups={}",
+            adapter_info.name,
+            adapter_info.backend,
+            adapter_limits.max_texture_dimension_2d,
+            required_limits.max_texture_dimension_2d,
+            required_limits.max_storage_buffers_per_shader_stage,
+            required_limits.max_bind_groups
+        );
+    }
+
     let descriptor = wgpu::DeviceDescriptor {
         label: Some("babylon-canvas-wgpu.device"),
         required_features: wgpu::Features::empty(),
-        required_limits: adapter.limits(),
+        required_limits,
         experimental_features: wgpu::ExperimentalFeatures::disabled(),
         memory_hints: wgpu::MemoryHints::default(),
         trace: wgpu::Trace::default(),
@@ -328,6 +456,17 @@ fn create_render_texture(
     height: u32,
     format: wgpu::TextureFormat,
 ) -> wgpu::Texture {
+    if memory_trace_enabled() {
+        let bytes = estimate_rgba8_texture_bytes(width, height);
+        eprintln!(
+            "CanvasWgpu memory createRenderTexture size={}x{} format={:?} estimated={} ({:.1} MiB)",
+            width.max(1),
+            height.max(1),
+            format,
+            bytes,
+            bytes_to_mib(bytes)
+        );
+    }
     device.create_texture(&wgpu::TextureDescriptor {
         label: Some("babylon-canvas-wgpu.render-target"),
         size: wgpu::Extent3d {
@@ -348,13 +487,24 @@ fn create_render_texture(
 
 impl Backend {
     fn new(width: u32, height: u32) -> Result<Self, String> {
+        if memory_trace_enabled() {
+            eprintln!(
+                "CanvasWgpu memory createContext requestedSize={}x{}",
+                width.max(1),
+                height.max(1)
+            );
+        }
         let (device, queue) = shared_device()?;
         let renderer = WGPURenderer::new(device.clone(), queue.clone());
-        let mut canvas = femtovg::Canvas::new(renderer)
+        let mut canvas = SHARED_TEXT_CONTEXT
+            .with(|text_context| {
+                femtovg::Canvas::new_with_text_context(renderer, text_context.clone())
+            })
             .map_err(|err| format!("femtovg canvas create failed: {err:?}"))?;
 
         let render_texture_format = wgpu::TextureFormat::Rgba8Unorm;
         let render_texture = create_render_texture(&device, width, height, render_texture_format);
+        let render_texture_bytes = estimate_rgba8_texture_bytes(width, height);
 
         let dpi = 1.0f32;
         canvas.set_size(width.max(1), height.max(1), dpi);
@@ -365,12 +515,36 @@ impl Backend {
         fill_paint.set_font_size(16.0);
         stroke_paint.set_font_size(16.0);
 
+        let total_contexts = TOTAL_CONTEXTS_CREATED
+            .fetch_add(1, Ordering::Relaxed)
+            .saturating_add(1);
+        let live_contexts = LIVE_CONTEXTS
+            .fetch_add(1, Ordering::Relaxed)
+            .saturating_add(1);
+        let live_texture_bytes = add_live_render_texture_bytes(render_texture_bytes);
+        if memory_trace_enabled() {
+            eprintln!(
+                "CanvasWgpu memory contextCreated total={} live={} size={}x{} renderTexture={} ({:.1} MiB) liveRenderTextures={} ({:.1} MiB) peakRenderTextures={} ({:.1} MiB)",
+                total_contexts,
+                live_contexts,
+                width.max(1),
+                height.max(1),
+                render_texture_bytes,
+                bytes_to_mib(render_texture_bytes),
+                live_texture_bytes,
+                bytes_to_mib(live_texture_bytes),
+                PEAK_RENDER_TEXTURE_BYTES.load(Ordering::Relaxed),
+                bytes_to_mib(PEAK_RENDER_TEXTURE_BYTES.load(Ordering::Relaxed))
+            );
+        }
+
         Ok(Self {
             device,
             queue,
             canvas,
             render_texture,
             render_texture_format,
+            render_texture_bytes,
             width: width.max(1),
             height: height.max(1),
             dpi,
@@ -428,14 +602,40 @@ impl Backend {
         self.canvas.set_size(self.width, self.height, self.dpi);
 
         if size_changed {
+            let old_texture_bytes = self.render_texture_bytes;
+            if memory_trace_enabled() {
+                eprintln!(
+                    "CanvasWgpu memory resizeRenderTexture size={}x{} oldRenderTexture={} ({:.1} MiB)",
+                    self.width,
+                    self.height,
+                    old_texture_bytes,
+                    bytes_to_mib(old_texture_bytes)
+                );
+            }
             // Keep GPU residency bounded when callers resize canvases repeatedly.
             self.render_texture.destroy();
+            let live_after_old_destroy = remove_live_render_texture_bytes(old_texture_bytes);
             self.render_texture = create_render_texture(
                 &self.device,
                 self.width,
                 self.height,
                 self.render_texture_format,
             );
+            self.render_texture_bytes = estimate_rgba8_texture_bytes(self.width, self.height);
+            let live_after_new_texture = add_live_render_texture_bytes(self.render_texture_bytes);
+            if memory_trace_enabled() {
+                eprintln!(
+                    "CanvasWgpu memory resizeRenderTexture liveRenderTextures {}->{} ({:.1}->{:.1} MiB) newRenderTexture={} ({:.1} MiB) peakRenderTextures={} ({:.1} MiB)",
+                    live_after_old_destroy,
+                    live_after_new_texture,
+                    bytes_to_mib(live_after_old_destroy),
+                    bytes_to_mib(live_after_new_texture),
+                    self.render_texture_bytes,
+                    bytes_to_mib(self.render_texture_bytes),
+                    PEAK_RENDER_TEXTURE_BYTES.load(Ordering::Relaxed),
+                    bytes_to_mib(PEAK_RENDER_TEXTURE_BYTES.load(Ordering::Relaxed))
+                );
+            }
             self.refresh_interop_handle();
         }
     }
@@ -867,6 +1067,26 @@ impl Backend {
 
         let bytes = slice::from_raw_parts(ptr as *const u8, len as usize);
         String::from_utf8_lossy(bytes).into_owned()
+    }
+}
+
+impl Drop for Backend {
+    fn drop(&mut self) {
+        self.render_texture.destroy();
+        let live_texture_bytes = remove_live_render_texture_bytes(self.render_texture_bytes);
+        let live_contexts = LIVE_CONTEXTS
+            .fetch_sub(1, Ordering::Relaxed)
+            .saturating_sub(1);
+        if memory_trace_enabled() {
+            eprintln!(
+                "CanvasWgpu memory contextDeleted live={} renderTexture={} ({:.1} MiB) liveRenderTextures={} ({:.1} MiB)",
+                live_contexts,
+                self.render_texture_bytes,
+                bytes_to_mib(self.render_texture_bytes),
+                live_texture_bytes,
+                bytes_to_mib(live_texture_bytes)
+            );
+        }
     }
 }
 
@@ -1383,6 +1603,15 @@ pub extern "C" fn nvgCreateImageRGBA(
         let height = h as usize;
         let pixel_count = width.saturating_mul(height);
         let byte_count = pixel_count.saturating_mul(4);
+        if memory_trace_enabled() && byte_count >= 8 * 1024 * 1024 {
+            eprintln!(
+                "CanvasWgpu memory createImageRGBA size={}x{} bytes={} ({:.1} MiB)",
+                width,
+                height,
+                byte_count,
+                bytes_to_mib(byte_count as u64)
+            );
+        }
         let mut storage = vec![RGBA8::new(0, 0, 0, 0); pixel_count];
 
         if !data.is_null() && byte_count > 0 {
@@ -1444,6 +1673,16 @@ pub extern "C" fn nvgCreateImageFromNativeTexture(
             native_handle.height
         }
         .max(1) as usize;
+        let byte_count = width.saturating_mul(height).saturating_mul(4);
+        if memory_trace_enabled() && byte_count >= 8 * 1024 * 1024 {
+            eprintln!(
+                "CanvasWgpu memory createImageFromNativeTexture size={}x{} estimated={} ({:.1} MiB)",
+                width,
+                height,
+                byte_count,
+                bytes_to_mib(byte_count as u64)
+            );
+        }
         let info = ImageInfo::new(ImageFlags::PREMULTIPLIED, width, height, PixelFormat::Rgba8);
 
         match backend
@@ -1536,6 +1775,16 @@ pub extern "C" fn nvgLinearGradientStops(
             _ => {
                 let width = canvas_width.max(1) as usize;
                 let height = canvas_height.max(1) as usize;
+                let byte_count = width.saturating_mul(height).saturating_mul(4);
+                if memory_trace_enabled() && byte_count >= 8 * 1024 * 1024 {
+                    eprintln!(
+                        "CanvasWgpu memory linearGradientImage size={}x{} bytes={} ({:.1} MiB)",
+                        width,
+                        height,
+                        byte_count,
+                        bytes_to_mib(byte_count as u64)
+                    );
+                }
                 let mut storage = vec![RGBA8::new(0, 0, 0, 0); width.saturating_mul(height)];
                 for y in 0..height {
                     for x in 0..width {
@@ -1589,6 +1838,16 @@ pub extern "C" fn nvgRadialGradientStops(
         } else {
             let width = canvas_width.max(1) as usize;
             let height = canvas_height.max(1) as usize;
+            let byte_count = width.saturating_mul(height).saturating_mul(4);
+            if memory_trace_enabled() && byte_count >= 8 * 1024 * 1024 {
+                eprintln!(
+                    "CanvasWgpu memory radialGradientImage size={}x{} bytes={} ({:.1} MiB)",
+                    width,
+                    height,
+                    byte_count,
+                    bytes_to_mib(byte_count as u64)
+                );
+            }
             let mut storage = vec![RGBA8::new(0, 0, 0, 0); width.saturating_mul(height)];
             for y in 0..height {
                 for x in 0..width {
@@ -1644,6 +1903,26 @@ pub extern "C" fn nvgCreateFontMem(
             return *existing;
         }
 
+        if !font_name.is_empty() {
+            if let Some(font_id) =
+                SHARED_FONT_NAMES.with(|fonts| fonts.borrow().get(&font_name).copied())
+            {
+                let handle = backend.next_font_handle;
+                backend.next_font_handle += 1;
+                backend.fonts.insert(handle, font_id);
+                backend.font_names.insert(font_name.clone(), handle);
+                if memory_trace_enabled() {
+                    eprintln!(
+                        "CanvasWgpu memory sharedFontReused name=\"{}\" handle={} registeredSharedFonts={}",
+                        font_name,
+                        handle,
+                        SHARED_FONTS_REGISTERED.load(Ordering::Relaxed)
+                    );
+                }
+                return handle;
+            }
+        }
+
         // SAFETY: The caller guarantees a readable font byte range.
         let bytes = unsafe { slice::from_raw_parts(data as *const u8, size as usize) };
         let owned = bytes.to_vec();
@@ -1657,7 +1936,25 @@ pub extern "C" fn nvgCreateFontMem(
         backend.next_font_handle += 1;
         backend.fonts.insert(handle, font_id);
         if !font_name.is_empty() {
+            SHARED_FONT_NAMES.with(|fonts| {
+                fonts
+                    .borrow_mut()
+                    .entry(font_name.clone())
+                    .or_insert(font_id);
+            });
+            let registered_shared_fonts = SHARED_FONTS_REGISTERED
+                .fetch_add(1, Ordering::Relaxed)
+                .saturating_add(1);
             backend.font_names.insert(font_name, handle);
+            if memory_trace_enabled() {
+                eprintln!(
+                    "CanvasWgpu memory sharedFontRegistered handle={} bytes={} ({:.1} MiB) registeredSharedFonts={}",
+                    handle,
+                    bytes.len(),
+                    bytes_to_mib(bytes.len() as u64),
+                    registered_shared_fonts
+                );
+            }
         }
 
         handle
@@ -1819,6 +2116,7 @@ pub extern "C" fn nvgTextMetrics(
 #[cfg(not(any(
     target_os = "macos",
     target_os = "ios",
+    target_os = "tvos",
     target_os = "visionos",
     target_os = "android"
 )))]
@@ -1868,6 +2166,7 @@ pub extern "C" fn babylon_canvas_decode_image_rgba(
 #[cfg(not(any(
     target_os = "macos",
     target_os = "ios",
+    target_os = "tvos",
     target_os = "visionos",
     target_os = "android"
 )))]

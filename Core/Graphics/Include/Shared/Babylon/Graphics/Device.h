@@ -53,6 +53,9 @@ namespace Babylon::Graphics
         // When enabled, back buffer will be premultiplied with alpha value.
         bool AlphaPremultiplied{};
 
+        // Request the platform HDR10/EDR presentation path when supported.
+        bool Hdr10{};
+
         // Format to use when creating the depth/stencil texture for the back buffer.
         // Specify DepthStencilFormat::None to not create a depth/stencil texture.
         DepthStencilFormat BackBufferDepthStencilFormat{DepthStencilFormat::Depth24Stencil8};

@@ -27,6 +27,15 @@ static EXTERNAL_IMAGE_UPLOAD_OWNED_BYTES: AtomicU64 = AtomicU64::new(0);
 static ACTIVE_CONTEXT: AtomicPtr<BackendContext> = AtomicPtr::new(ptr::null_mut());
 static LAST_ERROR: OnceLock<Mutex<String>> = OnceLock::new();
 
+fn webgpu_memory_trace_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("BABYLON_NATIVE_WEBGPU_MEMORY_TRACE").is_some())
+}
+
+fn bytes_to_mib(bytes: u64) -> f64 {
+    bytes as f64 / (1024.0 * 1024.0)
+}
+
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct BabylonWgpuConfig {
@@ -35,7 +44,7 @@ pub struct BabylonWgpuConfig {
     pub surface_layer: *mut c_void,
     pub prefer_low_power: u8,
     pub enable_validation: u8,
-    pub _reserved0: u8,
+    pub hdr10: u8,
     pub _reserved1: u8,
 }
 
@@ -112,6 +121,24 @@ impl BackendContext {
             Ok(None) => {}
             Err(error) => {
                 log_backend_error(&format!("Render submission failed: {error}"));
+            }
+        }
+
+        self.publish_estimated_gpu_memory_bytes();
+        if webgpu_memory_trace_enabled() {
+            let frame = RENDER_FRAME_COUNTER.load(Ordering::Relaxed);
+            let estimated = ESTIMATED_GPU_MEMORY_BYTES.load(Ordering::Relaxed);
+            if frame <= 5 || screenshot_requested {
+                eprintln!(
+                    "NativeWebGPU memory render frame={} liveEstimated={} ({:.1} MiB) screenshotRequested={} screenshot={}x{} screenshotBytes={}",
+                    frame,
+                    estimated,
+                    bytes_to_mib(estimated),
+                    screenshot_requested,
+                    self.screenshot_width,
+                    self.screenshot_height,
+                    self.screenshot_rgba.len()
+                );
             }
         }
     }
@@ -388,6 +415,7 @@ fn create_context(config: BabylonWgpuConfig) -> Result<Box<BackendContext>, Stri
             height: config.height.max(1),
             surface_layer: config.surface_layer,
             prefer_low_power: config.prefer_low_power != 0,
+            hdr10: config.hdr10 != 0,
         },
     )?;
 
@@ -465,7 +493,9 @@ where
             ));
         }
         let context_ref = unsafe { &mut *context };
-        f(&mut context_ref.backend)
+        let value = f(&mut context_ref.backend)?;
+        context_ref.publish_estimated_gpu_memory_bytes();
+        Ok(value)
     }));
 
     match result {
@@ -1271,7 +1301,7 @@ fn default_config() -> BabylonWgpuConfig {
         surface_layer: ptr::null_mut(),
         prefer_low_power: 0,
         enable_validation: 0,
-        _reserved0: 0,
+        hdr10: 0,
         _reserved1: 0,
     }
 }
@@ -1584,9 +1614,9 @@ pub extern "C" fn babylon_wgpu_dispatch_compute_global(
 
 mod upstream_wgpu_native {
     use super::{
-        opaque_ptr_as_ref, EXTERNAL_IMAGE_UPLOAD_BORROWED_BYTES,
-        EXTERNAL_IMAGE_UPLOAD_BORROWED_COUNT, EXTERNAL_IMAGE_UPLOAD_OWNED_BYTES,
-        EXTERNAL_IMAGE_UPLOAD_OWNED_COUNT,
+        bytes_to_mib, opaque_ptr_as_ref, webgpu_memory_trace_enabled,
+        EXTERNAL_IMAGE_UPLOAD_BORROWED_BYTES, EXTERNAL_IMAGE_UPLOAD_BORROWED_COUNT,
+        EXTERNAL_IMAGE_UPLOAD_OWNED_BYTES, EXTERNAL_IMAGE_UPLOAD_OWNED_COUNT,
     };
     use bytemuck::{Pod, Zeroable};
     use serde_json::Value;
@@ -1620,6 +1650,7 @@ mod upstream_wgpu_native {
         pub height: u32,
         pub surface_layer: *mut c_void,
         pub prefer_low_power: bool,
+        pub hdr10: bool,
     }
 
     pub struct LocalRuntimeState {
@@ -1632,6 +1663,7 @@ mod upstream_wgpu_native {
         pub width: u32,
         pub height: u32,
         pub render_target_format: wgpu::TextureFormat,
+        pub hdr10: bool,
         pub used_fallback_adapter: bool,
         pub surface_acquire_failures: u32,
     }
@@ -1709,6 +1741,8 @@ mod upstream_wgpu_native {
         width: u32,
         height: u32,
         depth_or_array_layers: u32,
+        mip_level_count: u32,
+        sample_count: u32,
         format: wgpu::TextureFormat,
     }
 
@@ -2175,7 +2209,8 @@ mod upstream_wgpu_native {
             | wgpu::TextureFormat::Rgba8Uint
             | wgpu::TextureFormat::Rgba8Sint
             | wgpu::TextureFormat::Bgra8Unorm
-            | wgpu::TextureFormat::Bgra8UnormSrgb => 4,
+            | wgpu::TextureFormat::Bgra8UnormSrgb
+            | wgpu::TextureFormat::Rgb10a2Unorm => 4,
             wgpu::TextureFormat::Rg32Uint
             | wgpu::TextureFormat::Rg32Sint
             | wgpu::TextureFormat::Rg32Float
@@ -2187,6 +2222,34 @@ mod upstream_wgpu_native {
             | wgpu::TextureFormat::Rgba32Float => 16,
             _ => return None,
         })
+    }
+
+    fn estimated_texture_allocation_bytes(
+        width: u32,
+        height: u32,
+        depth_or_array_layers: u32,
+        format: wgpu::TextureFormat,
+        mip_level_count: u32,
+        sample_count: u32,
+    ) -> u64 {
+        let Some(bytes_per_pixel) = texture_format_bytes_per_pixel(format) else {
+            return 0;
+        };
+
+        let mut total = 0u64;
+        let mips = mip_level_count.max(1);
+        for mip in 0..mips {
+            let mip_width = width.checked_shr(mip).unwrap_or(0).max(1);
+            let mip_height = height.checked_shr(mip).unwrap_or(0).max(1);
+            total = total.saturating_add(
+                u64::from(mip_width)
+                    .saturating_mul(u64::from(mip_height))
+                    .saturating_mul(u64::from(depth_or_array_layers.max(1)))
+                    .saturating_mul(u64::from(bytes_per_pixel)),
+            );
+        }
+
+        total.saturating_mul(u64::from(sample_count.max(1)))
     }
 
     fn f32_to_f16_bits(value: f32) -> u16 {
@@ -2706,12 +2769,13 @@ mod upstream_wgpu_native {
                 .values()
                 .fold(0u64, |acc, buffer| acc.saturating_add(buffer.size));
             let texture_bytes = self.resources.textures.values().fold(0u64, |acc, texture| {
-                acc.saturating_add(estimated_texture_bytes(
+                acc.saturating_add(estimated_texture_allocation_bytes(
                     texture.width,
-                    texture
-                        .height
-                        .saturating_mul(texture.depth_or_array_layers.max(1)),
+                    texture.height,
+                    texture.depth_or_array_layers,
                     texture.format,
+                    texture.mip_level_count,
+                    texture.sample_count,
                 ))
             });
             buffer_bytes.saturating_add(texture_bytes)
@@ -2937,6 +3001,7 @@ mod upstream_wgpu_native {
                             source_texture,
                             self.runtime.width,
                             self.runtime.height,
+                            self.offscreen_format,
                         )?;
                     self.runtime.queue.submit(Some(encoder.finish()));
                     Some(map_readback_buffer_to_rgba(
@@ -2946,7 +3011,7 @@ mod upstream_wgpu_native {
                         unpadded_bytes_per_row,
                         self.runtime.width,
                         self.runtime.height,
-                        self.runtime.render_target_format,
+                        self.offscreen_format,
                     )?)
                 } else {
                     None
@@ -3027,9 +3092,10 @@ mod upstream_wgpu_native {
             mapped_at_creation: bool,
         ) -> Result<u64, String> {
             let id = self.resources.next();
+            let effective_size = size.max(4);
             let buffer = self.runtime.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("babylon-native-webgpu.web-buffer"),
-                size: size.max(4),
+                size: effective_size,
                 usage: map_buffer_usage(usage),
                 mapped_at_creation,
             });
@@ -3037,10 +3103,23 @@ mod upstream_wgpu_native {
                 id,
                 BufferResource {
                     buffer,
-                    size: size.max(4),
+                    size: effective_size,
                     mapped: mapped_at_creation,
                 },
             );
+            if webgpu_memory_trace_enabled() && effective_size >= 8 * 1024 * 1024 {
+                let total = self.estimated_gpu_memory_bytes();
+                eprintln!(
+                    "NativeWebGPU memory createBuffer id={} size={} ({:.1} MiB) usage=0x{:x} mapped={} liveEstimated={} ({:.1} MiB)",
+                    id,
+                    effective_size,
+                    bytes_to_mib(effective_size),
+                    usage,
+                    mapped_at_creation,
+                    total,
+                    bytes_to_mib(total)
+                );
+            }
             Ok(id)
         }
 
@@ -3114,14 +3193,17 @@ mod upstream_wgpu_native {
                 .ok_or_else(|| format!("unsupported GPUTexture format '{format_text}'"))?;
             let usage = map_texture_usage(json_u32(&descriptor, "usage", 0x10));
             let view_formats = compatible_view_formats(format);
+            let mip_level_count = json_u32(&descriptor, "mipLevelCount", 1).max(1);
+            let sample_count = json_u32(&descriptor, "sampleCount", 1).max(1);
+            let label = json_str(&descriptor, "label").map(str::to_owned);
             let texture = self
                 .runtime
                 .device
                 .create_texture(&wgpu::TextureDescriptor {
-                    label: json_str(&descriptor, "label"),
+                    label: label.as_deref(),
                     size,
-                    mip_level_count: json_u32(&descriptor, "mipLevelCount", 1).max(1),
-                    sample_count: json_u32(&descriptor, "sampleCount", 1).max(1),
+                    mip_level_count,
+                    sample_count,
                     dimension: map_texture_dimension(json_str(&descriptor, "dimension")),
                     format,
                     usage,
@@ -3135,9 +3217,38 @@ mod upstream_wgpu_native {
                     width: size.width,
                     height: size.height,
                     depth_or_array_layers: size.depth_or_array_layers,
+                    mip_level_count,
+                    sample_count,
                     format,
                 },
             );
+            let estimated = estimated_texture_allocation_bytes(
+                size.width,
+                size.height,
+                size.depth_or_array_layers,
+                format,
+                mip_level_count,
+                sample_count,
+            );
+            if webgpu_memory_trace_enabled() && estimated >= 8 * 1024 * 1024 {
+                let total = self.estimated_gpu_memory_bytes();
+                eprintln!(
+                    "NativeWebGPU memory createTexture id={} label={} size={}x{}x{} format={:?} mips={} samples={} usage={:?} estimated={} ({:.1} MiB) liveEstimated={} ({:.1} MiB)",
+                    id,
+                    label.as_deref().unwrap_or("(unlabeled)"),
+                    size.width,
+                    size.height,
+                    size.depth_or_array_layers,
+                    format,
+                    mip_level_count,
+                    sample_count,
+                    usage,
+                    estimated,
+                    bytes_to_mib(estimated),
+                    total,
+                    bytes_to_mib(total)
+                );
+            }
             Ok(id)
         }
 
@@ -5280,6 +5391,13 @@ mod upstream_wgpu_native {
             let requested_format =
                 map_texture_format(format).unwrap_or(self.runtime.render_target_format);
             let format = match (requested_format, self.runtime.render_target_format) {
+                (
+                    wgpu::TextureFormat::Bgra8Unorm
+                    | wgpu::TextureFormat::Bgra8UnormSrgb
+                    | wgpu::TextureFormat::Rgba8Unorm
+                    | wgpu::TextureFormat::Rgba8UnormSrgb,
+                    wgpu::TextureFormat::Rgba16Float,
+                ) if self.runtime.hdr10 => self.runtime.render_target_format,
                 (wgpu::TextureFormat::Bgra8Unorm, wgpu::TextureFormat::Bgra8UnormSrgb)
                 | (wgpu::TextureFormat::Rgba8Unorm, wgpu::TextureFormat::Rgba8UnormSrgb) => {
                     self.runtime.render_target_format
@@ -5341,9 +5459,28 @@ mod upstream_wgpu_native {
                     width,
                     height,
                     depth_or_array_layers: 1,
+                    mip_level_count: 1,
+                    sample_count: 1,
                     format,
                 },
             );
+            if webgpu_memory_trace_enabled() {
+                let estimated = estimated_texture_allocation_bytes(width, height, 1, format, 1, 1);
+                let total = self.estimated_gpu_memory_bytes();
+                eprintln!(
+                    "NativeWebGPU memory canvasTexture id={} canvas={} size={}x{} format={:?} usage=0x{:x} estimated={} ({:.1} MiB) liveEstimated={} ({:.1} MiB)",
+                    id,
+                    canvas_id,
+                    width,
+                    height,
+                    format,
+                    usage,
+                    estimated,
+                    bytes_to_mib(estimated),
+                    total,
+                    bytes_to_mib(total)
+                );
+            }
             self.offscreen_texture = Some(texture.clone());
             self.offscreen_view = Some(view.clone());
             self.offscreen_width = width;
@@ -5413,6 +5550,7 @@ mod upstream_wgpu_native {
                     &texture_resource.texture,
                     texture_resource.width,
                     texture_resource.height,
+                    texture_resource.format,
                 )?;
             self.runtime.queue.submit(Some(encoder.finish()));
             let rgba = map_readback_buffer_to_rgba(
@@ -5729,8 +5867,11 @@ mod upstream_wgpu_native {
         source_texture: &wgpu::Texture,
         width: u32,
         height: u32,
+        format: wgpu::TextureFormat,
     ) -> Result<(wgpu::Buffer, u32, u32), String> {
-        let unpadded_bytes_per_row = width.saturating_mul(4);
+        let bytes_per_pixel = texture_format_bytes_per_pixel(format)
+            .ok_or_else(|| format!("screenshot readback does not support format {format:?}"))?;
+        let unpadded_bytes_per_row = width.saturating_mul(bytes_per_pixel);
         if unpadded_bytes_per_row == 0 || height == 0 {
             return Err("invalid screenshot extent".to_string());
         }
@@ -5797,30 +5938,119 @@ mod upstream_wgpu_native {
             .saturating_mul(height as usize)
             .saturating_mul(4);
         let mut rgba = vec![0; expected_len];
+        let source_bytes_per_pixel = texture_format_bytes_per_pixel(format)
+            .ok_or_else(|| format!("screenshot readback does not support format {format:?}"))?
+            as usize;
         for row in 0..(height as usize) {
             let src_start = row.saturating_mul(padded_bytes_per_row as usize);
-            let src_end = src_start.saturating_add(unpadded_bytes_per_row as usize);
-            let dst_start = row.saturating_mul(unpadded_bytes_per_row as usize);
-            let dst_end = dst_start.saturating_add(unpadded_bytes_per_row as usize);
-            rgba[dst_start..dst_end].copy_from_slice(&mapped[src_start..src_end]);
+            let dst_start = row.saturating_mul(width as usize).saturating_mul(4);
+            match format {
+                wgpu::TextureFormat::Rgba8Unorm | wgpu::TextureFormat::Rgba8UnormSrgb => {
+                    let src_end = src_start.saturating_add(unpadded_bytes_per_row as usize);
+                    let dst_end = dst_start.saturating_add(width as usize * 4);
+                    rgba[dst_start..dst_end].copy_from_slice(&mapped[src_start..src_end]);
+                }
+                wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb => {
+                    for x in 0..(width as usize) {
+                        let src = src_start + x * source_bytes_per_pixel;
+                        let dst = dst_start + x * 4;
+                        rgba[dst] = mapped[src + 2];
+                        rgba[dst + 1] = mapped[src + 1];
+                        rgba[dst + 2] = mapped[src];
+                        rgba[dst + 3] = mapped[src + 3];
+                    }
+                }
+                wgpu::TextureFormat::Rgb10a2Unorm => {
+                    for x in 0..(width as usize) {
+                        let src = src_start + x * source_bytes_per_pixel;
+                        let packed = u32::from_le_bytes([
+                            mapped[src],
+                            mapped[src + 1],
+                            mapped[src + 2],
+                            mapped[src + 3],
+                        ]);
+                        let dst = dst_start + x * 4;
+                        rgba[dst] = (((packed & 0x3ff) * 255 + 511) / 1023) as u8;
+                        rgba[dst + 1] = ((((packed >> 10) & 0x3ff) * 255 + 511) / 1023) as u8;
+                        rgba[dst + 2] = ((((packed >> 20) & 0x3ff) * 255 + 511) / 1023) as u8;
+                        rgba[dst + 3] = ((((packed >> 30) & 0x3) * 255 + 1) / 3) as u8;
+                    }
+                }
+                wgpu::TextureFormat::Rgba16Float => {
+                    for x in 0..(width as usize) {
+                        let src = src_start + x * source_bytes_per_pixel;
+                        let dst = dst_start + x * 4;
+                        rgba[dst] = linear_to_srgb_u8(half_to_f32(u16::from_le_bytes([
+                            mapped[src],
+                            mapped[src + 1],
+                        ])));
+                        rgba[dst + 1] = linear_to_srgb_u8(half_to_f32(u16::from_le_bytes([
+                            mapped[src + 2],
+                            mapped[src + 3],
+                        ])));
+                        rgba[dst + 2] = linear_to_srgb_u8(half_to_f32(u16::from_le_bytes([
+                            mapped[src + 4],
+                            mapped[src + 5],
+                        ])));
+                        rgba[dst + 3] = linear_to_unorm_u8(half_to_f32(u16::from_le_bytes([
+                            mapped[src + 6],
+                            mapped[src + 7],
+                        ])));
+                    }
+                }
+                _ => {
+                    return Err(format!(
+                        "screenshot readback does not support format {format:?}"
+                    ))
+                }
+            }
         }
         drop(mapped);
         staging_buffer.unmap();
-
-        if matches!(
-            format,
-            wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb
-        ) {
-            for pixel in rgba.chunks_exact_mut(4) {
-                pixel.swap(0, 2);
-            }
-        }
 
         Ok(ScreenshotData {
             width,
             height,
             rgba,
         })
+    }
+
+    fn linear_to_unorm_u8(value: f32) -> u8 {
+        if !value.is_finite() {
+            return 0;
+        }
+        (value.clamp(0.0, 1.0) * 255.0 + 0.5) as u8
+    }
+
+    fn linear_to_srgb_u8(value: f32) -> u8 {
+        if !value.is_finite() {
+            return 0;
+        }
+        let v = value.clamp(0.0, 1.0);
+        let srgb = if v <= 0.003_130_8 {
+            v * 12.92
+        } else {
+            1.055 * v.powf(1.0 / 2.4) - 0.055
+        };
+        (srgb.clamp(0.0, 1.0) * 255.0 + 0.5) as u8
+    }
+
+    fn half_to_f32(bits: u16) -> f32 {
+        let sign = if (bits & 0x8000) == 0 { 1.0 } else { -1.0 };
+        let exponent = ((bits >> 10) & 0x1f) as i32;
+        let mantissa = (bits & 0x03ff) as u32;
+
+        match exponent {
+            0 => sign * 2.0_f32.powi(-14) * (mantissa as f32 / 1024.0),
+            31 => {
+                if mantissa == 0 {
+                    sign * f32::INFINITY
+                } else {
+                    f32::NAN
+                }
+            }
+            _ => sign * 2.0_f32.powi(exponent - 15) * (1.0 + mantissa as f32 / 1024.0),
+        }
     }
 
     fn import_native_texture_rgba_inner(
@@ -6145,6 +6375,7 @@ mod upstream_wgpu_native {
             | wgpu::TextureFormat::Rgba8UnormSrgb
             | wgpu::TextureFormat::Bgra8Unorm
             | wgpu::TextureFormat::Bgra8UnormSrgb
+            | wgpu::TextureFormat::Rgb10a2Unorm
             | wgpu::TextureFormat::Depth24Plus
             | wgpu::TextureFormat::Depth24PlusStencil8
             | wgpu::TextureFormat::Depth32Float => 4,
@@ -6656,6 +6887,7 @@ mod upstream_wgpu_native {
                     source_texture,
                     self.width,
                     self.height,
+                    runtime.render_target_format,
                 )?)
             } else {
                 None
@@ -6716,6 +6948,7 @@ mod upstream_wgpu_native {
                     &bootstrap.device,
                     width,
                     height,
+                    config.hdr10,
                 )?;
                 surface_config = Some(config);
             }
@@ -6741,6 +6974,7 @@ mod upstream_wgpu_native {
                 width,
                 height,
                 render_target_format,
+                hdr10: config.hdr10,
                 used_fallback_adapter: bootstrap.used_fallback_adapter,
                 surface_acquire_failures: 0,
             })
@@ -6841,7 +7075,7 @@ mod upstream_wgpu_native {
             return Ok(None);
         }
 
-        #[cfg(any(target_os = "macos", target_os = "ios"))]
+        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
         {
             // SAFETY: The caller passes a valid CoreAnimation layer pointer that stays alive
             // for the lifetime of the created surface.
@@ -6915,13 +7149,17 @@ mod upstream_wgpu_native {
         device: &wgpu::Device,
         width: u32,
         height: u32,
+        hdr10: bool,
     ) -> Result<wgpu::SurfaceConfiguration, String> {
         let mut config = surface
             .get_default_config(adapter, width.max(1), height.max(1))
             .ok_or_else(|| "Surface returned no default configuration.".to_string())?;
 
         let caps = surface.get_capabilities(adapter);
-        if caps.formats.contains(&wgpu::TextureFormat::Bgra8UnormSrgb) {
+        if hdr10 && caps.formats.contains(&wgpu::TextureFormat::Rgba16Float) {
+            config.format = wgpu::TextureFormat::Rgba16Float;
+            config.view_formats = vec![];
+        } else if caps.formats.contains(&wgpu::TextureFormat::Bgra8UnormSrgb) {
             config.format = wgpu::TextureFormat::Bgra8UnormSrgb;
             config.view_formats = vec![wgpu::TextureFormat::Bgra8Unorm];
         } else if caps.formats.contains(&wgpu::TextureFormat::Bgra8Unorm) {
@@ -6939,6 +7177,10 @@ mod upstream_wgpu_native {
         }
 
         surface.configure(device, &config);
+        eprintln!(
+            "NativeWebGPU surface configured: size={}x{} format={:?} hdr10={} formats={:?}",
+            config.width, config.height, config.format, hdr10, caps.formats
+        );
         Ok(config)
     }
 
@@ -7053,12 +7295,12 @@ mod upstream_wgpu_native {
         // iOS simulator builds are especially sensitive to delayed submission
         // retirement and can exhibit sustained RSS growth unless we block for
         // completion. Use the stronger mode only on simulator targets.
-        #[cfg(all(target_os = "ios", target_abi = "sim"))]
+        #[cfg(all(any(target_os = "ios", target_os = "tvos"), target_abi = "sim"))]
         {
             let _ = device.poll(wgpu::PollType::wait_indefinitely());
         }
 
-        #[cfg(all(target_os = "ios", not(target_abi = "sim")))]
+        #[cfg(all(any(target_os = "ios", target_os = "tvos"), not(target_abi = "sim")))]
         {
             static IOS_SUBMIT_POLL_TICK: std::sync::atomic::AtomicU32 =
                 std::sync::atomic::AtomicU32::new(0);
@@ -7071,7 +7313,7 @@ mod upstream_wgpu_native {
             let _ = device.poll(poll_mode);
         }
 
-        #[cfg(not(target_os = "ios"))]
+        #[cfg(not(any(target_os = "ios", target_os = "tvos")))]
         {
             static NON_IOS_SUBMIT_POLL_TICK: std::sync::atomic::AtomicU32 =
                 std::sync::atomic::AtomicU32::new(0);
@@ -7098,7 +7340,7 @@ mod upstream_wgpu_native {
     }
 
     pub fn preferred_wgpu_backends() -> wgpu::Backends {
-        #[cfg(any(target_os = "macos", target_os = "ios"))]
+        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
         {
             return wgpu::Backends::METAL;
         }
@@ -7108,7 +7350,12 @@ mod upstream_wgpu_native {
             return wgpu::Backends::DX12;
         }
 
-        #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "windows")))]
+        #[cfg(not(any(
+            target_os = "macos",
+            target_os = "ios",
+            target_os = "tvos",
+            target_os = "windows"
+        )))]
         {
             return wgpu::Backends::VULKAN;
         }

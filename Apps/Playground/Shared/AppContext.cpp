@@ -24,11 +24,18 @@
 #include <Babylon/Polyfills/Window.h>
 #include <Babylon/Polyfills/XMLHttpRequest.h>
 
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#endif
+
+#include <chrono>
 #include <cstdlib>
 #include <sstream>
 
 namespace
 {
+    constexpr auto NativeAnimationFrameCallbacksName = "__nativeAnimationFrameCallbacks";
+
     const char* GetLogLevelString(Babylon::Polyfills::Console::LogLevel logLevel)
     {
         switch (logLevel)
@@ -41,6 +48,115 @@ namespace
                 return "Error";
             default:
                 return "";
+        }
+    }
+
+    bool UseNativeFrameRequestAnimationFrame(const PlaygroundOptions& playgroundOptions)
+    {
+#if defined(TARGET_OS_TV) && TARGET_OS_TV
+        (void)playgroundOptions;
+        return true;
+#elif defined(TARGET_OS_OSX) && TARGET_OS_OSX
+        return playgroundOptions.Hdr10 || playgroundOptions.ProfileFrames;
+#else
+        (void)playgroundOptions;
+        return false;
+#endif
+    }
+
+    double CurrentAnimationFrameTimestampMs()
+    {
+        using Clock = std::chrono::steady_clock;
+        return std::chrono::duration<double, std::milli>(Clock::now().time_since_epoch()).count();
+    }
+
+    void InstallNativeFrameRequestAnimationFrame(Napi::Env env)
+    {
+        auto global = env.Global();
+        global.Set(NativeAnimationFrameCallbacksName, Napi::Array::New(env));
+
+        auto requestAnimationFrame = Napi::Function::New(env, [](const Napi::CallbackInfo& info) -> Napi::Value {
+            auto env = info.Env();
+            if (info.Length() == 0 || !info[0].IsFunction())
+            {
+                Napi::TypeError::New(env, "requestAnimationFrame callback must be a function").ThrowAsJavaScriptException();
+                return env.Undefined();
+            }
+
+            auto global = env.Global();
+            auto callbacksValue = global.Get(NativeAnimationFrameCallbacksName);
+            if (!callbacksValue.IsArray())
+            {
+                callbacksValue = Napi::Array::New(env);
+                global.Set(NativeAnimationFrameCallbacksName, callbacksValue);
+            }
+
+            auto callbacks = callbacksValue.As<Napi::Array>();
+            const auto frameId = callbacks.Length() + 1;
+            callbacks.Set(frameId - 1, info[0].As<Napi::Function>());
+            return Napi::Number::New(env, frameId);
+        });
+
+        auto cancelAnimationFrame = Napi::Function::New(env, [](const Napi::CallbackInfo& info) {
+            if (info.Length() == 0)
+            {
+                return;
+            }
+
+            auto env = info.Env();
+            auto callbacksValue = env.Global().Get(NativeAnimationFrameCallbacksName);
+            if (!callbacksValue.IsArray())
+            {
+                return;
+            }
+
+            const auto frameId = info[0].ToNumber().Uint32Value();
+            if (frameId == 0)
+            {
+                return;
+            }
+
+            callbacksValue.As<Napi::Array>().Set(frameId - 1, env.Undefined());
+        });
+
+        global.Set("requestAnimationFrame", requestAnimationFrame);
+        global.Set("cancelAnimationFrame", cancelAnimationFrame);
+
+        auto window = global.Get("window");
+        if (window.IsObject())
+        {
+            auto windowObject = window.As<Napi::Object>();
+            windowObject.Set("requestAnimationFrame", requestAnimationFrame);
+            windowObject.Set("cancelAnimationFrame", cancelAnimationFrame);
+        }
+    }
+
+    void DispatchNativeFrameRequestAnimationFrame(Napi::Env env)
+    {
+        auto global = env.Global();
+        auto callbacksValue = global.Get(NativeAnimationFrameCallbacksName);
+        if (!callbacksValue.IsArray())
+        {
+            return;
+        }
+
+        auto callbacks = callbacksValue.As<Napi::Array>();
+        global.Set(NativeAnimationFrameCallbacksName, Napi::Array::New(env));
+
+        const auto length = callbacks.Length();
+        if (length == 0)
+        {
+            return;
+        }
+
+        const auto timestamp = Napi::Number::New(env, CurrentAnimationFrameTimestampMs());
+        for (uint32_t i = 0; i < length; ++i)
+        {
+            auto callback = callbacks.Get(i);
+            if (callback.IsFunction())
+            {
+                callback.As<Napi::Function>().Call(global, {timestamp});
+            }
         }
     }
 }
@@ -76,6 +192,7 @@ AppContext::AppContext(
     graphicsConfig.Width = width;
     graphicsConfig.Height = height;
     graphicsConfig.MSAASamples = 4;
+    graphicsConfig.Hdr10 = playgroundOptions.Hdr10;
 
     m_device.emplace(graphicsConfig);
     m_deviceUpdate.emplace(m_device->GetUpdate("update"));
@@ -133,6 +250,8 @@ AppContext::AppContext(
             js.Set("generateReferences", Napi::Boolean::New(env, playgroundOptions.GenerateReferences));
             js.Set("runOnce",            Napi::Boolean::New(env, playgroundOptions.RunOnce));
             js.Set("includeExcluded",    Napi::Boolean::New(env, playgroundOptions.IncludeExcluded));
+            js.Set("hdr10",              Napi::Boolean::New(env, playgroundOptions.Hdr10));
+            js.Set("profileFrames",      Napi::Boolean::New(env, playgroundOptions.ProfileFrames));
             if (playgroundOptions.SaveResults.has_value())
             {
                 js.Set("saveResults", Napi::Boolean::New(env, *playgroundOptions.SaveResults));
@@ -140,6 +259,10 @@ AppContext::AppContext(
             if (playgroundOptions.CaptureFrame.has_value())
             {
                 js.Set("captureFrame", Napi::Number::New(env, *playgroundOptions.CaptureFrame));
+            }
+            if (playgroundOptions.InspectionHoldMs.has_value())
+            {
+                js.Set("inspectionHoldMs", Napi::Number::New(env, *playgroundOptions.InspectionHoldMs));
             }
 
             auto filters = Napi::Array::New(env, playgroundOptions.TestFilters.size());
@@ -188,6 +311,10 @@ AppContext::AppContext(
 
         Babylon::Polyfills::Performance::Initialize(env);
         Babylon::Polyfills::Window::Initialize(env);
+        if (UseNativeFrameRequestAnimationFrame(playgroundOptions))
+        {
+            InstallNativeFrameRequestAnimationFrame(env);
+        }
         Babylon::Polyfills::TextDecoder::Initialize(env);
         Babylon::Polyfills::URL::Initialize(env);
         Babylon::Polyfills::XMLHttpRequest::Initialize(env);
@@ -216,6 +343,20 @@ AppContext::AppContext(
     m_scriptLoader->LoadScript("app:///Scripts/babylonjs.serializers.js");
     m_scriptLoader->Dispatch([this](Napi::Env) {
         m_device->EnableRendering();
+    });
+}
+
+void AppContext::DispatchAnimationFrame()
+{
+    if (!m_runtime || !m_animationFrameDispatchPending || m_animationFrameDispatchPending->exchange(true))
+    {
+        return;
+    }
+
+    auto pending = m_animationFrameDispatchPending;
+    m_runtime->Dispatch([pending = std::move(pending)](Napi::Env env) {
+        pending->store(false);
+        DispatchNativeFrameRequestAnimationFrame(env);
     });
 }
 
