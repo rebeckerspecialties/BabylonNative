@@ -214,6 +214,9 @@ AppContext::AppContext(
     m_scriptLoader->LoadScript("app:///Scripts/babylon.gui.js");
     m_scriptLoader->LoadScript("app:///Scripts/meshwriter.min.js");
     m_scriptLoader->LoadScript("app:///Scripts/babylonjs.serializers.js");
+    m_scriptLoader->Dispatch([this](Napi::Env) {
+        m_device->EnableRendering();
+    });
 }
 
 AppContext::~AppContext()
