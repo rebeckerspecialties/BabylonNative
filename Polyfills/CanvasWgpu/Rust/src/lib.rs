@@ -180,7 +180,8 @@ fn set_last_create_error(message: Option<String>) {
     };
 
     *slot = message.map(|message| {
-        CString::new(message).unwrap_or_else(|_| CString::new("CanvasWgpu nvgCreate failed").unwrap())
+        CString::new(message)
+            .unwrap_or_else(|_| CString::new("CanvasWgpu nvgCreate failed").unwrap())
     });
 }
 
@@ -915,7 +916,8 @@ pub extern "C" fn nvgLastCreateError() -> *const c_char {
         return ptr::null();
     };
 
-    slot.as_ref().map_or(ptr::null(), |message| message.as_ptr())
+    slot.as_ref()
+        .map_or(ptr::null(), |message| message.as_ptr())
 }
 
 #[no_mangle]
