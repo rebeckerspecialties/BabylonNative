@@ -192,8 +192,12 @@
         const collector = {
             animateCalls: 0,
             animateMs: 0,
+            updateCalls: 0,
+            updateMs: 0,
             renderCalls: 0,
             renderMs: 0,
+            timeDelta: 0,
+            updateInAnimate: false,
             activeParticles: 0
         };
 
@@ -212,11 +216,26 @@
                     } finally {
                         collector.animateMs += performance.now() - startMs;
                         collector.animateCalls++;
+                        collector.timeDelta = Number(this._timeDelta || this._scaledUpdateSpeed || 0);
+                        collector.updateInAnimate = !!this.updateInAnimate;
                         if (typeof this.getActiveCount === "function") {
                             collector.activeParticles = this.getActiveCount();
                         } else if (Array.isArray(this._particles)) {
                             collector.activeParticles = this._particles.length;
                         }
+                    }
+                };
+            }
+
+            const originalUpdate = particleSystem._update;
+            if (typeof originalUpdate === "function") {
+                particleSystem._update = function () {
+                    const startMs = performance.now();
+                    try {
+                        return originalUpdate.apply(this, arguments);
+                    } finally {
+                        collector.updateMs += performance.now() - startMs;
+                        collector.updateCalls++;
                     }
                 };
             }
@@ -2507,10 +2526,17 @@ fragmentOutputs.color=color;
                                 particleDelta =
                                     " particleAnimateCalls=" + String(profileParticleCollector.animateCalls) +
                                     " particleAnimateMs=" + profileParticleCollector.animateMs.toFixed(3) +
+                                    " particleUpdateCalls=" + String(profileParticleCollector.updateCalls) +
+                                    " particleUpdateMs=" + profileParticleCollector.updateMs.toFixed(3) +
                                     " particleRenderCalls=" + String(profileParticleCollector.renderCalls) +
                                     " particleRenderMs=" + profileParticleCollector.renderMs.toFixed(3) +
+                                    " particleTimeDelta=" + profileParticleCollector.timeDelta.toFixed(4) +
+                                    " particleUpdateInAnimate=" + String(profileParticleCollector.updateInAnimate) +
                                     " activeParticles=" + String(profileParticleCollector.activeParticles);
                             }
+                            const animationRatio = currentScene && typeof currentScene.getAnimationRatio === "function"
+                                ? currentScene.getAnimationRatio()
+                                : 0;
                             console.log(
                                 "Frame profile " + (test.title || "(unnamed)") +
                                 " frame=" + String(frameIndex) +
@@ -2518,6 +2544,7 @@ fragmentOutputs.color=color;
                                 " avgFps=" + ((totalProfileFrames * 1000) / totalElapsedMs).toFixed(2) +
                                 " avgRenderMs=" + (profileWindowRenderMs / Math.max(profileWindowFrames, 1)).toFixed(3) +
                                 " totalAvgRenderMs=" + (profileTotalRenderMs / totalProfileFrames).toFixed(3) +
+                                " animationRatio=" + Number(animationRatio).toFixed(4) +
                                 particleDelta +
                                 nativeDelta
                             );
@@ -2528,6 +2555,8 @@ fragmentOutputs.color=color;
                             if (profileParticleCollector) {
                                 profileParticleCollector.animateCalls = 0;
                                 profileParticleCollector.animateMs = 0;
+                                profileParticleCollector.updateCalls = 0;
+                                profileParticleCollector.updateMs = 0;
                                 profileParticleCollector.renderCalls = 0;
                                 profileParticleCollector.renderMs = 0;
                             }
