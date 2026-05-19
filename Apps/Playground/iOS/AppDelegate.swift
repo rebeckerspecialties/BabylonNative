@@ -73,7 +73,6 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
 
         let window = UIWindow(windowScene: windowScene)
         window.rootViewController = rootViewController
-        window.makeKeyAndVisible()
         self.window = window
 
         if let appDelegate = UIApplication.shared.delegate as? AppDelegate {
@@ -83,10 +82,13 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         if CommandLine.arguments.contains("--hdr10") {
             configureDisplayCriteria(for: window)
         }
+
+        window.makeKeyAndVisible()
     }
 
     private func configureDisplayCriteria(for window: UIWindow) {
         if #available(tvOS 17.0, *) {
+            let requestedRefreshRate = preferredDisplayCriteriaRefreshRate()
             var formatDescription: CMVideoFormatDescription?
             let extensions: [CFString: Any] = [
                 kCMFormatDescriptionExtension_ColorPrimaries: kCMFormatDescriptionColorPrimaries_ITU_R_2020,
@@ -105,14 +107,38 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
 
             if status == noErr, let formatDescription {
                 window.avDisplayManager.preferredDisplayCriteria = AVDisplayCriteria(
-                    refreshRate: 60,
+                    refreshRate: requestedRefreshRate,
                     formatDescription: formatDescription
                 )
-                NSLog("[Playground] Requested tvOS 4K HDR10 display criteria.")
+                NSLog("[Playground] Requested tvOS 4K HDR10 display criteria at %.0f Hz; matchingEnabled=%d switchInProgress=%d.",
+                    requestedRefreshRate,
+                    window.avDisplayManager.isDisplayCriteriaMatchingEnabled ? 1 : 0,
+                    window.avDisplayManager.isDisplayModeSwitchInProgress ? 1 : 0)
             } else {
                 NSLog("[Playground] Failed to create tvOS HDR display criteria: %d", status)
             }
         }
+    }
+
+    private func preferredDisplayCriteriaRefreshRate() -> Float {
+        let arguments = CommandLine.arguments
+        for index in arguments.indices {
+            let argument = arguments[index]
+            if argument == "--preferred-fps", index + 1 < arguments.count {
+                return parseRefreshRate(arguments[index + 1]) ?? 60
+            }
+            if argument.hasPrefix("--preferred-fps=") {
+                return parseRefreshRate(String(argument.dropFirst("--preferred-fps=".count))) ?? 60
+            }
+        }
+        return 60
+    }
+
+    private func parseRefreshRate(_ value: String) -> Float? {
+        guard let refreshRate = Float(value), refreshRate > 0 else {
+            return nil
+        }
+        return refreshRate
     }
 }
 #endif
