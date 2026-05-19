@@ -60,7 +60,8 @@ namespace
         (void)playgroundOptions;
         return true;
 #elif defined(TARGET_OS_OSX) && TARGET_OS_OSX
-        return playgroundOptions.Hdr10 || playgroundOptions.ProfileFrames;
+        (void)playgroundOptions;
+        return true;
 #else
         (void)playgroundOptions;
         return false;
