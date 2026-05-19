@@ -24,6 +24,20 @@ class ViewController: UIViewController {
         return CommandLine.arguments.contains("--hdr10")
     }
 
+    private var requestedPreferredFramesPerSecond: Int? {
+        let arguments = CommandLine.arguments
+        for index in arguments.indices {
+            let argument = arguments[index]
+            if argument == "--preferred-fps", index + 1 < arguments.count {
+                return parsePreferredFramesPerSecond(arguments[index + 1])
+            }
+            if argument.hasPrefix("--preferred-fps=") {
+                return parsePreferredFramesPerSecond(String(argument.dropFirst("--preferred-fps=".count)))
+            }
+        }
+        return nil
+    }
+
     #if !os(tvOS)
     override var supportedInterfaceOrientations: UIInterfaceOrientationMask {
         return isValidationRun ? .landscape : .all
@@ -140,12 +154,34 @@ class ViewController: UIViewController {
         return Int32(min(value.rounded(), CGFloat(Int32.max)))
     }
 
+    private func parsePreferredFramesPerSecond(_ value: String) -> Int? {
+        guard let fps = Int(value), fps > 0 else {
+            NSLog("[Playground] Ignoring invalid --preferred-fps value: %@", value)
+            return nil
+        }
+        return fps
+    }
+
     private func configureFrameRate(_ view: MTKView) {
-        #if os(tvOS)
-        view.preferredFramesPerSecond = 60
+        let requestedFramesPerSecond: Int?
+        if let requested = requestedPreferredFramesPerSecond {
+            requestedFramesPerSecond = requested
+        } else {
+            #if os(tvOS)
+            requestedFramesPerSecond = 60
+            #else
+            requestedFramesPerSecond = nil
+            #endif
+        }
+
         let maximumFramesPerSecond = currentScreen()?.maximumFramesPerSecond ?? 0
-        NSLog("[Playground] MTKView preferredFramesPerSecond=%d screenMaximumFramesPerSecond=%d", view.preferredFramesPerSecond, maximumFramesPerSecond)
-        #endif
+        if let requested = requestedFramesPerSecond {
+            view.preferredFramesPerSecond = maximumFramesPerSecond > 0 ? min(requested, maximumFramesPerSecond) : requested
+        }
+        NSLog("[Playground] MTKView preferredFramesPerSecond=%d requestedFramesPerSecond=%d screenMaximumFramesPerSecond=%d",
+            view.preferredFramesPerSecond,
+            requestedFramesPerSecond ?? 0,
+            maximumFramesPerSecond)
     }
 
     private func configureDrawable(_ view: MTKView) {
