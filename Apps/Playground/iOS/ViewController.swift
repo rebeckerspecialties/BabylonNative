@@ -1,6 +1,9 @@
 import UIKit
 import MetalKit
 import QuartzCore
+#if os(tvOS)
+import AVKit
+#endif
 
 class ViewController: UIViewController {
 
@@ -9,6 +12,11 @@ class ViewController: UIViewController {
 
     private let comparisonWidth = 600
     private let comparisonHeight = 400
+    private var didInitializeBridge = false
+    #if os(tvOS)
+    private var displayModeSwitchObserver: NSObjectProtocol?
+    private var displayModeSwitchFallback: DispatchWorkItem?
+    #endif
 
     private var isValidationRun: Bool {
         let arguments = CommandLine.arguments
@@ -54,10 +62,32 @@ class ViewController: UIViewController {
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
+
+        #if os(tvOS)
+        if waitForPendingDisplayModeSwitchIfNeeded() {
+            return
+        }
+        #endif
+
+        initializeBridgeIfNeeded()
+    }
+
+    deinit {
+        #if os(tvOS)
+        removeDisplayModeSwitchObserver()
+        #endif
+    }
+
+    private func initializeBridgeIfNeeded() {
+        if didInitializeBridge {
+            return
+        }
+
         guard
             let appDelegate = UIApplication.shared.delegate as? AppDelegate,
             let bridge = appDelegate._bridge
         else { return }
+        didInitializeBridge = true
 
         #if !os(tvOS)
         if isValidationRun {
@@ -92,6 +122,7 @@ class ViewController: UIViewController {
         mtkView.drawableSize = initialSize
         let initialWidth = drawableDimension(initialSize.width)
         let initialHeight = drawableDimension(initialSize.height)
+        logDisplayState("initial drawable")
         
         bridge.initialize(
             mtkView,
@@ -104,6 +135,53 @@ class ViewController: UIViewController {
         )
         mtkView.delegate = self
     }
+
+    #if os(tvOS)
+    private func waitForPendingDisplayModeSwitchIfNeeded() -> Bool {
+        guard isHdr10Run else {
+            return false
+        }
+        guard #available(tvOS 11.3, *) else {
+            return false
+        }
+        guard let displayManager = view.window?.avDisplayManager, displayManager.isDisplayModeSwitchInProgress else {
+            return false
+        }
+
+        NSLog("[Playground] Waiting for tvOS display mode switch before initializing renderer.")
+        removeDisplayModeSwitchObserver()
+
+        displayModeSwitchObserver = NotificationCenter.default.addObserver(
+            forName: NSNotification.Name.AVDisplayManagerModeSwitchEnd,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            guard let self = self else { return }
+            self.removeDisplayModeSwitchObserver()
+            self.logDisplayState("after tvOS display mode switch")
+            self.initializeBridgeIfNeeded()
+        }
+
+        let fallback = DispatchWorkItem { [weak self] in
+            guard let self = self else { return }
+            self.removeDisplayModeSwitchObserver()
+            self.logDisplayState("after tvOS display mode switch timeout")
+            self.initializeBridgeIfNeeded()
+        }
+        displayModeSwitchFallback = fallback
+        DispatchQueue.main.asyncAfter(deadline: .now() + .seconds(10), execute: fallback)
+        return true
+    }
+
+    private func removeDisplayModeSwitchObserver() {
+        if let observer = displayModeSwitchObserver {
+            NotificationCenter.default.removeObserver(observer)
+            displayModeSwitchObserver = nil
+        }
+        displayModeSwitchFallback?.cancel()
+        displayModeSwitchFallback = nil
+    }
+    #endif
 
     private func initialDrawableSize() -> CGSize {
         #if os(tvOS)
@@ -152,6 +230,28 @@ class ViewController: UIViewController {
         }
 
         return Int32(min(value.rounded(), CGFloat(Int32.max)))
+    }
+
+    private func logDisplayState(_ label: String) {
+        #if os(tvOS)
+        guard let screen = currentScreen() else {
+            NSLog("[Playground] tvOS display %@: no screen", label)
+            return
+        }
+
+        let modeSize = screen.currentMode?.size ?? .zero
+        NSLog("[Playground] tvOS display %@: bounds=%.0fx%.0f nativeBounds=%.0fx%.0f mode=%.0fx%.0f scale=%.3f nativeScale=%.3f maximumFramesPerSecond=%d",
+            label,
+            screen.bounds.width,
+            screen.bounds.height,
+            screen.nativeBounds.width,
+            screen.nativeBounds.height,
+            modeSize.width,
+            modeSize.height,
+            screen.scale,
+            screen.nativeScale,
+            screen.maximumFramesPerSecond)
+        #endif
     }
 
     private func parsePreferredFramesPerSecond(_ value: String) -> Int? {
@@ -258,6 +358,10 @@ extension ViewController: MTKViewDelegate {
             return
         }
 
+        #if os(tvOS)
+        NSLog("[Playground] MTKView drawableSizeWillChange=%.0fx%.0f", size.width, size.height)
+        logDisplayState("drawable size changed")
+        #endif
         appDelegate._bridge?.resize(drawableDimension(size.width), height: drawableDimension(size.height))
     }
 }
