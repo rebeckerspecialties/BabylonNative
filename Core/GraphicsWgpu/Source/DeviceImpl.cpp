@@ -27,6 +27,7 @@ namespace Babylon::Graphics
         std::scoped_lock lock{m_state.Mutex};
         m_state.Window = config.Window;
         m_state.Device = config.Device;
+        m_state.Hdr10 = config.Hdr10;
         m_state.Resolution.Width = std::max<size_t>(1, config.Width);
         m_state.Resolution.Height = std::max<size_t>(1, config.Height);
         m_state.Resolution.HardwareScalingLevel = 1.0f;
@@ -144,6 +145,7 @@ namespace Babylon::Graphics
             config.Height = CurrentRenderHeight();
             config.PreferLowPower = false;
             config.EnableValidation = false;
+            config.Hdr10 = m_state.Hdr10;
 #if defined(__APPLE__)
             config.SurfaceLayer = static_cast<void*>(m_state.Window);
 #elif defined(__ANDROID__)

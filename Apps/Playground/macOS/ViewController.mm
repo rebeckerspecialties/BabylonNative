@@ -8,7 +8,9 @@
 #include <string_view>
 #include <vector>
 
+#import <CoreGraphics/CoreGraphics.h>
 #import <MetalKit/MTKView.h>
+#import <QuartzCore/QuartzCore.h>
 
 std::optional<AppContext> appContext{};
 
@@ -36,7 +38,9 @@ namespace
             options.GenerateReferences ||
             options.RunOnce ||
             options.IncludeExcluded ||
+            options.Hdr10 ||
             options.SaveResults.has_value() ||
+            options.InspectionHoldMs.has_value() ||
             options.CaptureFrame.has_value() ||
             !options.TestFilters.empty() ||
             !options.TestIndices.empty();
@@ -61,6 +65,40 @@ namespace
         }
 
         return CommandLine::Parse(static_cast<int>(argv.size()), argv.data());
+    }
+
+    void ConfigureDrawable(MTKView* engineView, const PlaygroundOptions& options)
+    {
+        if (!options.Hdr10)
+        {
+            engineView.colorPixelFormat = MTLPixelFormatBGRA8Unorm_sRGB;
+            return;
+        }
+
+        engineView.colorPixelFormat = MTLPixelFormatRGBA16Float;
+
+        CAMetalLayer* layer = (CAMetalLayer*)engineView.layer;
+        layer.pixelFormat = MTLPixelFormatRGBA16Float;
+        CGColorSpaceRef colorSpace = CGColorSpaceCreateWithName(kCGColorSpaceExtendedLinearITUR_2020);
+        layer.colorspace = colorSpace;
+        if (colorSpace != nullptr)
+        {
+            CGColorSpaceRelease(colorSpace);
+        }
+
+        if (@available(macOS 10.15, *))
+        {
+            layer.EDRMetadata = [CAEDRMetadata HDR10MetadataWithMinLuminance:0.005f maxLuminance:1000.0f opticalOutputScale:100.0f];
+        }
+        if (@available(macOS 15.0, *))
+        {
+            layer.toneMapMode = CAToneMapModeIfSupported;
+        }
+        if (@available(macOS 26.0, *))
+        {
+            layer.preferredDynamicRange = CADynamicRangeHigh;
+            layer.contentsHeadroom = 10.0;
+        }
     }
 }
 
@@ -93,6 +131,7 @@ namespace
             appContext->Device().FinishRenderingCurrentFrame();
             appContext->Device().StartRenderingCurrentFrame();
             appContext->DeviceUpdate().Start();
+            appContext->DispatchAnimationFrame();
         }
     }
 }
@@ -141,9 +180,11 @@ namespace
     engineView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     [[self view] addSubview:engineView];
     engineView.delegate = engineView;
+    ConfigureDrawable(engineView, playgroundOptions);
 
     size_t width = static_cast<size_t>(engineView.drawableSize.width);
     size_t height = static_cast<size_t>(engineView.drawableSize.height);
+    const bool hdr10 = playgroundOptions.Hdr10;
 
     appContext.emplace(
         (__bridge CA::MetalLayer*)engineView.layer,
@@ -153,7 +194,7 @@ namespace
         {
             NSLog(@"%s", message);
         },
-        [](Napi::Env env)
+        [hdr10](Napi::Env env)
         {
             auto statusCallback = Napi::Function::New(env, [](const Napi::CallbackInfo& info) {
                 if (info.Length() > 0)
@@ -165,6 +206,16 @@ namespace
                 }
             });
             env.Global().Set("__nativePlaygroundStatus", statusCallback);
+
+            if (hdr10)
+            {
+                env.Global().Set("__nativeValidationHdr10", Napi::Boolean::New(env, true));
+                env.Global().Set("__nativeValidationRenderWidth", Napi::Number::New(env, 3840));
+                env.Global().Set("__nativeValidationRenderHeight", Napi::Number::New(env, 2160));
+                env.Global().Set("__nativeValidationComparisonWidth", Napi::Number::New(env, 600));
+                env.Global().Set("__nativeValidationComparisonHeight", Napi::Number::New(env, 400));
+                NSLog(@"[Playground] macOS HDR validation render size: 3840x2160; comparison size: 600x400");
+            }
         },
         playgroundOptions);
 

@@ -354,11 +354,9 @@ namespace Babylon::Polyfills::Internal
         //info.This().ToObject().DefineProperty(Napi::PropertyDescriptor::Value("canvas", info[0], napi_enumerable));
         info.This().ToObject().Set("canvas", info[0]);
 
-        for (auto& font : NativeCanvas::fontsInfos)
-        {
-            // TODO: update nvgCreateFontMem safely when old font buffer invalidated
-            m_fonts[font.first] = nvgCreateFontMem(*m_nvg, font.first.c_str(), font.second.data(), static_cast<int>(font.second.size()), 0);
-        }
+        // Fonts are registered lazily by EnsureLoadedFonts(). GUI3D creates many
+        // dynamic texture canvases up front; eager per-context registration
+        // over-allocates text/layout state on memory-constrained devices.
     }
 
     Context::~Context()
@@ -1115,9 +1113,6 @@ namespace Babylon::Polyfills::Internal
     {
         std::string text{info[0].As<Napi::String>()};
 
-        EnsureFrame();
-        EnsureLoadedFonts();
-
         // If the JS-requested font family hasn't been loaded, return Arial-equivalent metrics
         // instead of measuring with the first native fallback font. This matches browser fallback
         // closely enough for GUI wrapping and centering while FillText still renders with the
@@ -1143,6 +1138,8 @@ namespace Babylon::Polyfills::Internal
             return obj.As<Napi::Value>();
         }
 
+        EnsureFrame();
+        EnsureLoadedFonts();
         SetFontFaceId();
         return MeasureText::CreateInstance(info.Env(), this, text);
     }
