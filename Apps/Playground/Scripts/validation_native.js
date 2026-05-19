@@ -4,12 +4,34 @@
     const opts = (typeof _playgroundOptions === "object" && _playgroundOptions) ? _playgroundOptions : {};
     const justOnce = !!opts.runOnce;
     const saveResult = (typeof opts.saveResults === "boolean") ? opts.saveResults : true;
-    const testWidth = 600;
-    const testHeight = 400;
+    const comparisonWidth = (typeof globalThis.__nativeValidationComparisonWidth === "number" && globalThis.__nativeValidationComparisonWidth > 0)
+        ? globalThis.__nativeValidationComparisonWidth
+        : 600;
+    const comparisonHeight = (typeof globalThis.__nativeValidationComparisonHeight === "number" && globalThis.__nativeValidationComparisonHeight > 0)
+        ? globalThis.__nativeValidationComparisonHeight
+        : 400;
+    const renderWidth = (typeof globalThis.__nativeValidationRenderWidth === "number" && globalThis.__nativeValidationRenderWidth > 0)
+        ? globalThis.__nativeValidationRenderWidth
+        : comparisonWidth;
+    const renderHeight = (typeof globalThis.__nativeValidationRenderHeight === "number" && globalThis.__nativeValidationRenderHeight > 0)
+        ? globalThis.__nativeValidationRenderHeight
+        : comparisonHeight;
+    const testWidth = renderWidth;
+    const testHeight = renderHeight;
     const generateReferences = !!opts.generateReferences;
     const breakOnFail = !!opts.breakOnFail;
     const listTests = !!opts.listTests;
     const includeExcluded = !!opts.includeExcluded;
+    const hdr10 = !!opts.hdr10 || !!globalThis.__nativeValidationHdr10;
+    const profileFrames = !!opts.profileFrames;
+    const inspectionHoldMs = (() => {
+        const value = (typeof opts.inspectionHoldMs === "number")
+            ? opts.inspectionHoldMs
+            : (typeof globalThis.__nativeValidationInspectionHoldMs === "number")
+                ? globalThis.__nativeValidationInspectionHoldMs
+                : (hdr10 ? 8000 : 0);
+        return Number.isFinite(value) && value > 0 ? Math.min(value | 0, 600000) : 0;
+    })();
     const testFilters = Array.isArray(opts.testFilters) ? opts.testFilters.map(s => String(s).toLowerCase()) : [];
     const testIndices = Array.isArray(opts.testIndices) ? opts.testIndices.map(n => +n) : [];
     const sceneReadyTimeoutMs = (typeof opts.sceneReadyTimeoutMs === "number" && opts.sceneReadyTimeoutMs > 0)
@@ -55,6 +77,13 @@
 
         try {
             const stats = navigator.gpu._backendStats();
+            const estimatedBytes = Number(stats.estimatedGpuMemoryBytes || 0);
+            const requestedBufferBytes = Number(stats.bufferRequestedBytes || 0);
+            const borrowedBytes = Number(stats.externalImageUploadBorrowedBytes || 0);
+            const ownedBytes = Number(stats.externalImageUploadOwnedBytes || 0);
+            const toMiB = function (bytes) {
+                return (bytes / (1024 * 1024)).toFixed(1);
+            };
             console.log(
                 "NativeWebGPU stats " + label +
                 ": pipelines=" + String(stats.renderPipelineCreateCount || 0) +
@@ -66,14 +95,149 @@
                 " views=" + String(stats.textureViewCreateCount || 0) +
                 " bindGroups=" + String(stats.bindGroupCreateCount || 0) +
                 " buffers=" + String(stats.bufferCreateCount || 0) +
+                " bufferRequestedMiB=" + toMiB(requestedBufferBytes) +
+                " estimatedGpuMiB=" + toMiB(estimatedBytes) +
+                " canvas=" + String(stats.canvasTextureWidth || 0) + "x" + String(stats.canvasTextureHeight || 0) +
                 " externalBorrowed=" + String(stats.externalImageUploadBorrowedCount || 0) +
+                "/" + toMiB(borrowedBytes) + "MiB" +
                 " externalOwned=" + String(stats.externalImageUploadOwnedCount || 0) +
+                "/" + toMiB(ownedBytes) + "MiB" +
                 " drawPath=" + String(!!stats.drawPathActive) +
                 " lastError=" + String(stats.lastError || "")
             );
         } catch (e) {
             // Stats are diagnostic-only.
         }
+    }
+
+    function getNativeWebGPUStatsSnapshot() {
+        if (typeof navigator === "undefined" || !navigator.gpu || typeof navigator.gpu._backendStats !== "function") {
+            return null;
+        }
+
+        try {
+            const stats = navigator.gpu._backendStats();
+            const snapshot = {};
+            const fields = [
+                "queueSubmitCount",
+                "renderPassBeginCount",
+                "drawCallCount",
+                "bindGroupCreateCount",
+                "textureCreateCount",
+                "commandEncoderCreateCount",
+                "bufferCreateCount",
+                "bufferRequestedBytes",
+                "estimatedGpuMemoryBytes"
+            ];
+            for (let i = 0; i < fields.length; ++i) {
+                const field = fields[i];
+                snapshot[field] = Number((stats && stats[field]) || 0);
+            }
+            return snapshot;
+        } catch (e) {
+            return null;
+        }
+    }
+
+    function statDelta(current, previous, name) {
+        return String(Number((current && current[name]) || 0) - Number((previous && previous[name]) || 0));
+    }
+
+    function applyNativeWebGPUFluidProfile(test) {
+        const profile = test && test.nativeWebGPUFluidProfile;
+        if (!profile || !engine.isWebGPU || !currentScene || !currentScene.fluidRenderer || !Array.isArray(currentScene.fluidRenderer.targetRenderers)) {
+            return;
+        }
+
+        const targetRenderers = currentScene.fluidRenderer.targetRenderers;
+        if (targetRenderers.length === 0) {
+            return;
+        }
+
+        const fields = [
+            "depthMapSize",
+            "thicknessMapSize",
+            "diffuseMapSize",
+            "blurDepthSizeDivisor",
+            "blurDepthFilterSize",
+            "blurDepthNumIterations",
+            "blurDepthMaxFilterSize",
+            "blurDepthDepthScale",
+            "blurThicknessSizeDivisor",
+            "blurThicknessFilterSize",
+            "blurThicknessNumIterations"
+        ];
+        const applied = [];
+        for (let i = 0; i < targetRenderers.length; ++i) {
+            const targetRenderer = targetRenderers[i];
+            for (let j = 0; j < fields.length; ++j) {
+                const field = fields[j];
+                if (!Object.prototype.hasOwnProperty.call(profile, field)) {
+                    continue;
+                }
+                targetRenderer[field] = profile[field];
+                applied.push(field + "=" + String(profile[field]));
+            }
+        }
+
+        console.log("Applied NativeWebGPU fluid profile for " + (test.title || "(unnamed)") + ": renderers=" + String(targetRenderers.length) + " " + applied.join(" "));
+    }
+
+    function installParticleFrameProfileCollector() {
+        const particleSystems = currentScene && currentScene.particleSystems;
+        if (!profileFrames || !particleSystems || !particleSystems.length) {
+            return null;
+        }
+
+        const collector = {
+            animateCalls: 0,
+            animateMs: 0,
+            renderCalls: 0,
+            renderMs: 0,
+            activeParticles: 0
+        };
+
+        for (let i = 0; i < particleSystems.length; ++i) {
+            const particleSystem = particleSystems[i];
+            if (!particleSystem || particleSystem.__nativeValidationFrameProfileWrapped) {
+                continue;
+            }
+
+            const originalAnimate = particleSystem.animate;
+            if (typeof originalAnimate === "function") {
+                particleSystem.animate = function () {
+                    const startMs = performance.now();
+                    try {
+                        return originalAnimate.apply(this, arguments);
+                    } finally {
+                        collector.animateMs += performance.now() - startMs;
+                        collector.animateCalls++;
+                        if (typeof this.getActiveCount === "function") {
+                            collector.activeParticles = this.getActiveCount();
+                        } else if (Array.isArray(this._particles)) {
+                            collector.activeParticles = this._particles.length;
+                        }
+                    }
+                };
+            }
+
+            const originalRender = particleSystem.render;
+            if (typeof originalRender === "function") {
+                particleSystem.render = function () {
+                    const startMs = performance.now();
+                    try {
+                        return originalRender.apply(this, arguments);
+                    } finally {
+                        collector.renderMs += performance.now() - startMs;
+                        collector.renderCalls++;
+                    }
+                };
+            }
+
+            particleSystem.__nativeValidationFrameProfileWrapped = true;
+        }
+
+        return collector;
     }
 
     // Per-run counters surfaced as a final summary line on exit.
@@ -111,6 +275,9 @@
     function getExclusionReason(t) {
         const isNativeWebGPU = !!globalThis.__babylonNativeValidationUseWebGPU;
         const includeInNativeWebGPU = isNativeWebGPU && !!t.includeInNativeWebGPU;
+        if (t.requiresHdr10 && !hdr10) {
+            return "requiresHdr10";
+        }
         if (t.excludeFromNativeWebGPU && isNativeWebGPU) {
             return "excludeFromNativeWebGPU" + (t.reason ? ": " + t.reason : "");
         }
@@ -127,6 +294,9 @@
     }
 
     function getSkipReason(t) {
+        if (t.requiresHdr10 && !hdr10) {
+            return "requires --hdr10";
+        }
         if (includeExcluded) {
             return null;
         }
@@ -1555,6 +1725,9 @@
                 if (scene.activeCamera && typeof scene.render === "function") {
                     scene.render();
                     frameCount++;
+                    if (frameCount <= 3) {
+                        logNativeWebGPUStats("after readiness pump frame " + frameCount + " for " + pumpLabel);
+                    }
                 }
                 const unsupportedWebGPUEffect = findUnsupportedNativeWebGPUEffectInSceneFamily(scene);
                 if (unsupportedWebGPUEffect) {
@@ -1946,6 +2119,16 @@ fragmentOutputs.color=color;
 
     const canvas = validationEngine.canvas;
 
+    function getValidationHardwareScalingLevel() {
+        const scalingLevel = (engine && typeof engine.getHardwareScalingLevel === "function")
+            ? engine.getHardwareScalingLevel()
+            : (validationEngine && typeof validationEngine.getHardwareScalingLevel === "function")
+                ? validationEngine.getHardwareScalingLevel()
+                : 1;
+
+        return Number.isFinite(scalingLevel) && scalingLevel > 0 ? scalingLevel : 1;
+    }
+
     // Random replacement
     let seed = 1;
     Math.random = function () {
@@ -1953,8 +2136,75 @@ fragmentOutputs.color=color;
         return x - Math.floor(x);
     }
 
-    function compare(test, renderData, referenceImage, threshold, errorRatio) {
+    function downscaleRgba(renderData, sourceWidth, sourceHeight, targetWidth, targetHeight) {
+        const sourceAspect = sourceWidth / sourceHeight;
+        const targetAspect = targetWidth / targetHeight;
+        let cropX = 0;
+        let cropY = 0;
+        let cropWidth = sourceWidth;
+        let cropHeight = sourceHeight;
+
+        if (sourceAspect > targetAspect) {
+            cropWidth = Math.round(sourceHeight * targetAspect);
+            cropX = Math.floor((sourceWidth - cropWidth) / 2);
+        } else if (sourceAspect < targetAspect) {
+            cropHeight = Math.round(sourceWidth / targetAspect);
+            cropY = Math.floor((sourceHeight - cropHeight) / 2);
+        }
+
+        if (cropX === 0 && cropY === 0 && sourceWidth === targetWidth && sourceHeight === targetHeight) {
+            return renderData;
+        }
+
+        const downscaled = new Uint8Array(targetWidth * targetHeight * 4);
+        for (let y = 0; y < targetHeight; y++) {
+            const sourceY = Math.min(sourceHeight - 1, cropY + Math.floor(((y + 0.5) * cropHeight) / targetHeight));
+            for (let x = 0; x < targetWidth; x++) {
+                const sourceX = Math.min(sourceWidth - 1, cropX + Math.floor(((x + 0.5) * cropWidth) / targetWidth));
+                const sourceIndex = ((sourceY * sourceWidth) + sourceX) * 4;
+                const targetIndex = ((y * targetWidth) + x) * 4;
+                downscaled[targetIndex] = renderData[sourceIndex];
+                downscaled[targetIndex + 1] = renderData[sourceIndex + 1];
+                downscaled[targetIndex + 2] = renderData[sourceIndex + 2];
+                downscaled[targetIndex + 3] = renderData[sourceIndex + 3];
+            }
+        }
+
+        if (cropX !== 0 || cropY !== 0 || cropWidth !== sourceWidth || cropHeight !== sourceHeight) {
+            console.log(`Cropped native screenshot from ${sourceWidth}x${sourceHeight} to ${cropWidth}x${cropHeight} at ${cropX},${cropY} for ${targetWidth}x${targetHeight} comparison.`);
+        }
+        console.log(`Downscaled native screenshot from ${cropWidth}x${cropHeight} to ${targetWidth}x${targetHeight} for comparison.`);
+        return downscaled;
+    }
+
+    function normalizeRenderDataForComparison(renderData, screenshotWidth, screenshotHeight, referenceData) {
+        if (referenceData.length === renderData.length) {
+            return renderData;
+        }
+
+        const hardwareScalingLevel = getValidationHardwareScalingLevel();
+        const targetWidth = Math.round(comparisonWidth / hardwareScalingLevel);
+        const targetHeight = Math.round(comparisonHeight / hardwareScalingLevel);
+        const expectedReferenceLength = targetWidth * targetHeight * 4;
+        if (referenceData.length !== expectedReferenceLength) {
+            throw new Error(`Reference data length (${referenceData.length}) did not match expected comparison size ${targetWidth}x${targetHeight}.`);
+        }
+
+        const sourcePixelCount = renderData.length / 4;
+        if (!screenshotWidth || !screenshotHeight || screenshotWidth * screenshotHeight !== sourcePixelCount) {
+            screenshotWidth = renderWidth / hardwareScalingLevel;
+            screenshotHeight = renderHeight / hardwareScalingLevel;
+        }
+        if (screenshotWidth * screenshotHeight !== sourcePixelCount) {
+            throw new Error(`Render data length (${renderData.length}) did not match screenshot dimensions ${screenshotWidth}x${screenshotHeight}.`);
+        }
+
+        return downscaleRgba(renderData, screenshotWidth, screenshotHeight, targetWidth, targetHeight);
+    }
+
+    function compare(test, renderData, referenceImage, threshold, errorRatio, screenshotWidth, screenshotHeight) {
         const referenceData = TestUtils.getImageData(referenceImage);
+        renderData = normalizeRenderDataForComparison(renderData, screenshotWidth, screenshotHeight, referenceData);
         if (referenceData.length != renderData.length) {
             throw new Error(`Reference data length (${referenceData.length}) must match render data length (${renderData.length})`);
         }
@@ -1987,8 +2237,9 @@ fragmentOutputs.color=color;
 
         const error = (differencesCount * 100) / (size / 4) > errorRatio;
 
-        const width = testWidth / engine.getHardwareScalingLevel();
-        const height = testHeight / engine.getHardwareScalingLevel();
+        const hardwareScalingLevel = getValidationHardwareScalingLevel();
+        const width = comparisonWidth / hardwareScalingLevel;
+        const height = comparisonHeight / hardwareScalingLevel;
 
         if (error) {
             TestUtils.writePNG(referenceData, width, height, TestUtils.getOutputDirectory() + "/Errors/" + test.referenceImage);
@@ -2000,20 +2251,21 @@ fragmentOutputs.color=color;
     }
 
     function saveRenderedResult(test, renderData) {
-        const width = testWidth / engine.getHardwareScalingLevel();
-        const height = testHeight / engine.getHardwareScalingLevel();
+        const hardwareScalingLevel = getValidationHardwareScalingLevel();
+        const width = comparisonWidth / hardwareScalingLevel;
+        const height = comparisonHeight / hardwareScalingLevel;
         TestUtils.writePNG(renderData, width, height, TestUtils.getOutputDirectory() + "/Results/" + test.referenceImage);
         return false; // no error
     }
 
-    function evaluateScreenshot(test, screenshot, referenceImage, done, compareFunction) {
+    function evaluateScreenshot(test, screenshot, referenceImage, done, compareFunction, screenshotWidth, screenshotHeight) {
         let testRes = true;
 
         if (!test.onlyVisual) {
 
             const defaultErrorRatio = 2.5;
 
-            if (compareFunction(test, screenshot, referenceImage, test.threshold || 25, test.errorRatio || defaultErrorRatio)) {
+            if (compareFunction(test, screenshot, referenceImage, test.threshold || 25, test.errorRatio || defaultErrorRatio, screenshotWidth, screenshotHeight)) {
                 testRes = false;
                 console.log("Test '" + (test.title || "(unnamed)") + "' failed");
                 logNativeWebGPUStats("after failed " + (test.title || "(unnamed)"));
@@ -2026,19 +2278,28 @@ fragmentOutputs.color=color;
             }
         }
 
-        currentScene.dispose();
-        currentScene = null;
-        engine.setHardwareScalingLevel(1);
+        const finish = function () {
+            currentScene.dispose();
+            currentScene = null;
+            engine.setHardwareScalingLevel(1);
 
-        // This is necessary because of https://github.com/BabylonJS/Babylon.js/pull/15217 so that each test starts fresh.
-        engine.releaseEffects();
+            // This is necessary because of https://github.com/BabylonJS/Babylon.js/pull/15217 so that each test starts fresh.
+            engine.releaseEffects();
 
-        done(testRes);
+            done(testRes);
+        };
+
+        if (inspectionHoldMs > 0) {
+            console.log("Holding final validation frame on-screen for " + inspectionHoldMs + " ms.");
+            setTimeout(finish, inspectionHoldMs);
+        } else {
+            finish();
+        }
     }
 
     function evaluate(test, referenceImage, done, compareFunction) {
-        TestUtils.getFrameBufferData(function (screenshot) {
-            evaluateScreenshot(test, screenshot, referenceImage, done, compareFunction);
+        TestUtils.getFrameBufferData(function (screenshot, screenshotWidth, screenshotHeight) {
+            evaluateScreenshot(test, screenshot, referenceImage, done, compareFunction, screenshotWidth, screenshotHeight);
         });
     }
 
@@ -2068,8 +2329,16 @@ fragmentOutputs.color=color;
         let evaluated = false;
         let readinessTimer = null;
         let readinessPump = null;
+        let profileStartMs = 0;
+        let profileWindowStartMs = 0;
+        let profileWindowRenderMs = 0;
+        let profileWindowFrames = 0;
+        let profileTotalRenderMs = 0;
+        let profileBaseFrameIndex = 0;
+        let profileLastStats = null;
+        let profileParticleCollector = null;
 
-        const runEvaluation = function (screenshot) {
+        const runEvaluation = function (screenshot, screenshotWidth, screenshotHeight) {
             if (evaluated) {
                 return;
             }
@@ -2082,7 +2351,7 @@ fragmentOutputs.color=color;
                 readinessPump = null;
             }
             evaluated = true;
-            evaluateScreenshot(test, screenshot, renderImage, done, compareFunction);
+            evaluateScreenshot(test, screenshot, renderImage, done, compareFunction, screenshotWidth, screenshotHeight);
         };
 
         const requestScreenshot = function () {
@@ -2095,11 +2364,15 @@ fragmentOutputs.color=color;
                 if (evaluated) {
                     return;
                 }
-                TestUtils.getFrameBufferData(function (data) {
+                TestUtils.getFrameBufferData(function (data, screenshotWidth, screenshotHeight) {
                     if (stopped) {
-                        runEvaluation(data);
+                        runEvaluation(data, screenshotWidth, screenshotHeight);
                     } else {
-                        pendingScreenshot = data;
+                        pendingScreenshot = {
+                            data,
+                            width: screenshotWidth,
+                            height: screenshotHeight
+                        };
                     }
                 });
             };
@@ -2186,6 +2459,15 @@ fragmentOutputs.color=color;
             if (currentScene.activeCamera && currentScene.activeCamera.useAutoRotationBehavior) {
                 currentScene.activeCamera.useAutoRotationBehavior = false;
             }
+            applyNativeWebGPUFluidProfile(test);
+            if (profileFrames) {
+                profileStartMs = performance.now();
+                profileWindowStartMs = profileStartMs;
+                profileBaseFrameIndex = frameIndex;
+                profileLastStats = getNativeWebGPUStatsSnapshot();
+                profileParticleCollector = installParticleFrameProfileCollector();
+                console.log("Frame profile start for " + (test.title || "(unnamed)") + ": compareFrame=" + String(compareFrame) + " stopFrame=" + String(stopFrame));
+            }
             engine.runRenderLoop(function () {
                 try {
                     frameIndex++;
@@ -2194,9 +2476,72 @@ fragmentOutputs.color=color;
                         TestUtils.captureNextFrame();
                     }
 
+                    const renderStartMs = profileFrames ? performance.now() : 0;
                     currentScene.render();
+                    if (profileFrames) {
+                        const nowMs = performance.now();
+                        const renderMs = nowMs - renderStartMs;
+                        profileWindowRenderMs += renderMs;
+                        profileTotalRenderMs += renderMs;
+                        profileWindowFrames++;
+
+                        if ((frameIndex % 30) === 0 || frameIndex >= stopFrame) {
+                            const windowElapsedMs = Math.max(nowMs - profileWindowStartMs, 0.0001);
+                            const totalElapsedMs = Math.max(nowMs - profileStartMs, 0.0001);
+                            const totalProfileFrames = Math.max(frameIndex - profileBaseFrameIndex, 1);
+                            const currentStats = getNativeWebGPUStatsSnapshot();
+                            let nativeDelta = "";
+                            if (currentStats && profileLastStats) {
+                                nativeDelta =
+                                    " submitsDelta=" + statDelta(currentStats, profileLastStats, "queueSubmitCount") +
+                                    " passesDelta=" + statDelta(currentStats, profileLastStats, "renderPassBeginCount") +
+                                    " drawsDelta=" + statDelta(currentStats, profileLastStats, "drawCallCount") +
+                                    " bindGroupsDelta=" + statDelta(currentStats, profileLastStats, "bindGroupCreateCount") +
+                                    " texturesDelta=" + statDelta(currentStats, profileLastStats, "textureCreateCount") +
+                                    " encodersDelta=" + statDelta(currentStats, profileLastStats, "commandEncoderCreateCount") +
+                                    " buffersDelta=" + statDelta(currentStats, profileLastStats, "bufferCreateCount") +
+                                    " bufferRequestedBytesDelta=" + statDelta(currentStats, profileLastStats, "bufferRequestedBytes");
+                            }
+                            let particleDelta = "";
+                            if (profileParticleCollector) {
+                                particleDelta =
+                                    " particleAnimateCalls=" + String(profileParticleCollector.animateCalls) +
+                                    " particleAnimateMs=" + profileParticleCollector.animateMs.toFixed(3) +
+                                    " particleRenderCalls=" + String(profileParticleCollector.renderCalls) +
+                                    " particleRenderMs=" + profileParticleCollector.renderMs.toFixed(3) +
+                                    " activeParticles=" + String(profileParticleCollector.activeParticles);
+                            }
+                            console.log(
+                                "Frame profile " + (test.title || "(unnamed)") +
+                                " frame=" + String(frameIndex) +
+                                " windowFps=" + ((profileWindowFrames * 1000) / windowElapsedMs).toFixed(2) +
+                                " avgFps=" + ((totalProfileFrames * 1000) / totalElapsedMs).toFixed(2) +
+                                " avgRenderMs=" + (profileWindowRenderMs / Math.max(profileWindowFrames, 1)).toFixed(3) +
+                                " totalAvgRenderMs=" + (profileTotalRenderMs / totalProfileFrames).toFixed(3) +
+                                particleDelta +
+                                nativeDelta
+                            );
+                            profileWindowStartMs = nowMs;
+                            profileWindowRenderMs = 0;
+                            profileWindowFrames = 0;
+                            profileLastStats = currentStats;
+                            if (profileParticleCollector) {
+                                profileParticleCollector.animateCalls = 0;
+                                profileParticleCollector.animateMs = 0;
+                                profileParticleCollector.renderCalls = 0;
+                                profileParticleCollector.renderMs = 0;
+                            }
+                        }
+                    }
+                    if (frameIndex <= 3) {
+                        logNativeWebGPUStats("after validation frame " + frameIndex + " for " + (test.title || "(unnamed)"));
+                    }
 
                     if (frameIndex >= compareFrame && !readbackRequested) {
+                        if (stopFrame <= compareFrame && !stopped) {
+                            stopped = true;
+                            engine.stopRenderLoop();
+                        }
                         requestScreenshot();
                     }
 
@@ -2206,9 +2551,9 @@ fragmentOutputs.color=color;
                         if (pendingScreenshot !== null) {
                             // Defer dispose to next tick so it runs outside
                             // this runRenderLoop iteration.
-                            const data = pendingScreenshot;
+                            const pending = pendingScreenshot;
                             pendingScreenshot = null;
-                            setTimeout(function () { runEvaluation(data); }, 0);
+                            setTimeout(function () { runEvaluation(pending.data, pending.width, pending.height); }, 0);
                         }
                     }
                 }
@@ -2290,6 +2635,7 @@ fragmentOutputs.color=color;
                                 }
                             }
 
+                            seed = 1;
                             currentScene = eval(code + "\r\ncreateScene(engine)");
 
                             if (currentScene.then) {
@@ -2357,6 +2703,7 @@ fragmentOutputs.color=color;
                         }
                     }
 
+                    seed = 1;
                     currentScene = eval(scriptToRun + test.functionToCall + "(engine)");
                     if (currentScene && currentScene.then) {
                         currentScene.then(function (scene) {

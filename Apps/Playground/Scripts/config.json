@@ -2438,6 +2438,25 @@
             "referenceImage": "fluidParticleSystem.png"
         },
         {
+            "title": "Fluid rendering particle system HDR10",
+            "playgroundId": "#544N0Q#67",
+            "renderCount": 120,
+            "replace": "const useGPU = false;, const useGPU = true;",
+            "nativeWebGPUFluidProfile": {
+                "depthMapSize": 1280,
+                "thicknessMapSize": 768,
+                "blurDepthSizeDivisor": 2,
+                "blurDepthNumIterations": 1,
+                "blurDepthMaxFilterSize": 32,
+                "blurThicknessSizeDivisor": 2,
+                "blurThicknessNumIterations": 1
+            },
+            "requiresHdr10": true,
+            "excludeFromAutomaticTesting": true,
+            "reason": "Requires a native HDR10/EDR display path.",
+            "referenceImage": "fluidParticleSystemHDR10.png"
+        },
+        {
             "title": "Fluid rendering box sphere",
             "playgroundId": "#PCMH7A#2",
             "renderCount": 120,
