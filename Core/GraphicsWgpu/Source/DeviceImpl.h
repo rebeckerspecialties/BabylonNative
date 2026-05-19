@@ -107,6 +107,7 @@ namespace Babylon::Graphics
 
             WindowT Window{};
             DeviceT Device{};
+            bool Hdr10{};
 
             struct
             {

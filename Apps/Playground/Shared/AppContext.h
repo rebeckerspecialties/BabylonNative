@@ -10,7 +10,9 @@
 #include <Babylon/Polyfills/Canvas.h>
 #endif
 
+#include <atomic>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <vector>
 #include <string>
@@ -49,11 +51,13 @@ public:
     Babylon::AppRuntime& Runtime() { return *m_runtime; }
     Babylon::Plugins::NativeInput* Input() { return m_input; }
     Babylon::ScriptLoader& ScriptLoader() { return *m_scriptLoader; }
+    void DispatchAnimationFrame();
 
 private:
     std::optional<Babylon::Graphics::Device> m_device;
     std::optional<Babylon::Graphics::DeviceUpdate> m_deviceUpdate;
     std::optional<Babylon::AppRuntime> m_runtime;
+    std::shared_ptr<std::atomic_bool> m_animationFrameDispatchPending{std::make_shared<std::atomic_bool>(false)};
     Babylon::Plugins::NativeInput* m_input{};
     std::optional<Babylon::ScriptLoader> m_scriptLoader;
 #if defined(BABYLON_NATIVE_PLAYGROUND_HAS_CANVAS)

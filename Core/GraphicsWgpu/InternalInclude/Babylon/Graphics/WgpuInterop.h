@@ -14,7 +14,7 @@ struct BabylonWgpuConfig final
     void* surface_layer{};
     uint8_t prefer_low_power{};
     uint8_t enable_validation{};
-    uint8_t reserved0{};
+    uint8_t hdr10{};
     uint8_t reserved1{};
 };
 

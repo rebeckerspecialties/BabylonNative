@@ -13,6 +13,7 @@ namespace Babylon::Graphics
         void* SurfaceLayer{nullptr};
         bool PreferLowPower{false};
         bool EnableValidation{false};
+        bool Hdr10{false};
     };
 
     struct WgpuBootstrapInfo final
