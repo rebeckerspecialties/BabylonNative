@@ -166,6 +166,8 @@ namespace
             (void)inHeight;
             (void)comparisonWidth;
             (void)comparisonHeight;
+            (void)hdr10;
+            (void)inspectionHoldMs;
 #endif
         },
         playgroundOptions);
