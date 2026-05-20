@@ -571,11 +571,9 @@ pub extern "C" fn babylon_wgpu_native_import_metal_texture(
 
 #[no_mangle]
 pub extern "C" fn babylon_wgpu_native_get_metal_device() -> *mut c_void {
-    run_with_active_backend(
-        "NativeWebGPU.getMetalDevice",
-        ptr::null_mut(),
-        |backend| backend.get_metal_device(),
-    )
+    run_with_active_backend("NativeWebGPU.getMetalDevice", ptr::null_mut(), |backend| {
+        backend.get_metal_device()
+    })
 }
 
 #[no_mangle]
@@ -1817,6 +1815,7 @@ mod upstream_wgpu_native {
     #[derive(Clone)]
     struct ColorAttachmentCommand {
         view: wgpu::TextureView,
+        depth_slice: Option<u32>,
         resolve_target: Option<wgpu::TextureView>,
         load: wgpu::LoadOp<wgpu::Color>,
         store: wgpu::StoreOp,
@@ -2158,7 +2157,48 @@ mod upstream_wgpu_native {
         stages
     }
 
+    fn map_astc_block(block: &str) -> Option<wgpu::AstcBlock> {
+        Some(match block {
+            "4x4" => wgpu::AstcBlock::B4x4,
+            "5x4" => wgpu::AstcBlock::B5x4,
+            "5x5" => wgpu::AstcBlock::B5x5,
+            "6x5" => wgpu::AstcBlock::B6x5,
+            "6x6" => wgpu::AstcBlock::B6x6,
+            "8x5" => wgpu::AstcBlock::B8x5,
+            "8x6" => wgpu::AstcBlock::B8x6,
+            "8x8" => wgpu::AstcBlock::B8x8,
+            "10x5" => wgpu::AstcBlock::B10x5,
+            "10x6" => wgpu::AstcBlock::B10x6,
+            "10x8" => wgpu::AstcBlock::B10x8,
+            "10x10" => wgpu::AstcBlock::B10x10,
+            "12x10" => wgpu::AstcBlock::B12x10,
+            "12x12" => wgpu::AstcBlock::B12x12,
+            _ => return None,
+        })
+    }
+
     fn map_texture_format(format: &str) -> Option<wgpu::TextureFormat> {
+        if let Some(block) = format
+            .strip_prefix("astc-")
+            .and_then(|value| value.strip_suffix("-unorm-srgb"))
+            .and_then(map_astc_block)
+        {
+            return Some(wgpu::TextureFormat::Astc {
+                block,
+                channel: wgpu::AstcChannel::UnormSrgb,
+            });
+        }
+        if let Some(block) = format
+            .strip_prefix("astc-")
+            .and_then(|value| value.strip_suffix("-unorm"))
+            .and_then(map_astc_block)
+        {
+            return Some(wgpu::TextureFormat::Astc {
+                block,
+                channel: wgpu::AstcChannel::Unorm,
+            });
+        }
+
         Some(match format {
             "r8unorm" => wgpu::TextureFormat::R8Unorm,
             "r8snorm" => wgpu::TextureFormat::R8Snorm,
@@ -2208,43 +2248,19 @@ mod upstream_wgpu_native {
     }
 
     fn texture_format_bytes_per_pixel(format: wgpu::TextureFormat) -> Option<u32> {
-        Some(match format {
-            wgpu::TextureFormat::R8Unorm
-            | wgpu::TextureFormat::R8Snorm
-            | wgpu::TextureFormat::R8Uint
-            | wgpu::TextureFormat::R8Sint => 1,
-            wgpu::TextureFormat::R16Uint
-            | wgpu::TextureFormat::R16Sint
-            | wgpu::TextureFormat::R16Float
-            | wgpu::TextureFormat::Rg8Unorm
-            | wgpu::TextureFormat::Rg8Snorm
-            | wgpu::TextureFormat::Rg8Uint
-            | wgpu::TextureFormat::Rg8Sint => 2,
-            wgpu::TextureFormat::R32Uint
-            | wgpu::TextureFormat::R32Sint
-            | wgpu::TextureFormat::R32Float
-            | wgpu::TextureFormat::Rg16Uint
-            | wgpu::TextureFormat::Rg16Sint
-            | wgpu::TextureFormat::Rg16Float
-            | wgpu::TextureFormat::Rgba8Unorm
-            | wgpu::TextureFormat::Rgba8UnormSrgb
-            | wgpu::TextureFormat::Rgba8Snorm
-            | wgpu::TextureFormat::Rgba8Uint
-            | wgpu::TextureFormat::Rgba8Sint
-            | wgpu::TextureFormat::Bgra8Unorm
-            | wgpu::TextureFormat::Bgra8UnormSrgb
-            | wgpu::TextureFormat::Rgb10a2Unorm => 4,
-            wgpu::TextureFormat::Rg32Uint
-            | wgpu::TextureFormat::Rg32Sint
-            | wgpu::TextureFormat::Rg32Float
-            | wgpu::TextureFormat::Rgba16Uint
-            | wgpu::TextureFormat::Rgba16Sint
-            | wgpu::TextureFormat::Rgba16Float => 8,
-            wgpu::TextureFormat::Rgba32Uint
-            | wgpu::TextureFormat::Rgba32Sint
-            | wgpu::TextureFormat::Rgba32Float => 16,
-            _ => return None,
-        })
+        let (block_width, block_height) = format.block_dimensions();
+        if block_width != 1 || block_height != 1 {
+            return None;
+        }
+
+        format.block_copy_size(None)
+    }
+
+    fn div_ceil_u32(value: u32, divisor: u32) -> u32 {
+        if divisor == 0 {
+            return 0;
+        }
+        value.saturating_add(divisor - 1) / divisor
     }
 
     fn estimated_texture_allocation_bytes(
@@ -2255,20 +2271,23 @@ mod upstream_wgpu_native {
         mip_level_count: u32,
         sample_count: u32,
     ) -> u64 {
-        let Some(bytes_per_pixel) = texture_format_bytes_per_pixel(format) else {
+        let Some(block_bytes) = format.block_copy_size(None) else {
             return 0;
         };
+        let (block_width, block_height) = format.block_dimensions();
 
         let mut total = 0u64;
         let mips = mip_level_count.max(1);
         for mip in 0..mips {
             let mip_width = width.checked_shr(mip).unwrap_or(0).max(1);
             let mip_height = height.checked_shr(mip).unwrap_or(0).max(1);
+            let mip_blocks_wide = div_ceil_u32(mip_width, block_width);
+            let mip_blocks_high = div_ceil_u32(mip_height, block_height);
             total = total.saturating_add(
-                u64::from(mip_width)
-                    .saturating_mul(u64::from(mip_height))
+                u64::from(mip_blocks_wide)
+                    .saturating_mul(u64::from(mip_blocks_high))
                     .saturating_mul(u64::from(depth_or_array_layers.max(1)))
-                    .saturating_mul(u64::from(bytes_per_pixel)),
+                    .saturating_mul(u64::from(block_bytes)),
             );
         }
 
@@ -3275,7 +3294,12 @@ mod upstream_wgpu_native {
             Ok(id)
         }
 
-        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos", target_os = "visionos"))]
+        #[cfg(any(
+            target_os = "macos",
+            target_os = "ios",
+            target_os = "tvos",
+            target_os = "visionos"
+        ))]
         pub fn import_metal_texture(
             &mut self,
             native_texture: *const c_void,
@@ -3309,8 +3333,7 @@ mod upstream_wgpu_native {
             let label = json_str(&descriptor, "label").map(str::to_owned);
             let dimension = map_texture_dimension(json_str(&descriptor, "dimension"));
 
-            let raw = native_texture
-                as *mut ProtocolObject<dyn objc2_metal::MTLTexture>;
+            let raw = native_texture as *mut ProtocolObject<dyn objc2_metal::MTLTexture>;
             let retained = unsafe { Retained::retain(raw) }
                 .ok_or_else(|| "failed to retain native Metal texture".to_string())?;
             let raw_type = retained.textureType();
@@ -3375,7 +3398,12 @@ mod upstream_wgpu_native {
             Ok(id)
         }
 
-        #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "tvos", target_os = "visionos")))]
+        #[cfg(not(any(
+            target_os = "macos",
+            target_os = "ios",
+            target_os = "tvos",
+            target_os = "visionos"
+        )))]
         pub fn import_metal_texture(
             &mut self,
             _native_texture: *const c_void,
@@ -3384,15 +3412,27 @@ mod upstream_wgpu_native {
             Err("native Metal texture import is only available on Apple platforms".to_string())
         }
 
-        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos", target_os = "visionos"))]
+        #[cfg(any(
+            target_os = "macos",
+            target_os = "ios",
+            target_os = "tvos",
+            target_os = "visionos"
+        ))]
         pub fn get_metal_device(&mut self) -> Result<*mut c_void, String> {
-            let Some(hal_device) = (unsafe { self.runtime.device.as_hal::<wgpu::hal::api::Metal>() }) else {
+            let Some(hal_device) =
+                (unsafe { self.runtime.device.as_hal::<wgpu::hal::api::Metal>() })
+            else {
                 return Ok(ptr::null_mut());
             };
             Ok(&**hal_device.raw_device() as *const _ as *mut c_void)
         }
 
-        #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "tvos", target_os = "visionos")))]
+        #[cfg(not(any(
+            target_os = "macos",
+            target_os = "ios",
+            target_os = "tvos",
+            target_os = "visionos"
+        )))]
         pub fn get_metal_device(&mut self) -> Result<*mut c_void, String> {
             Ok(ptr::null_mut())
         }
@@ -4072,6 +4112,10 @@ mod upstream_wgpu_native {
                     };
                     color_attachments.push(Some(ColorAttachmentCommand {
                         view: view.view.clone(),
+                        depth_slice: attachment
+                            .get("depthSlice")
+                            .and_then(Value::as_u64)
+                            .map(|value| value as u32),
                         resolve_target,
                         load,
                         store,
@@ -4813,7 +4857,7 @@ mod upstream_wgpu_native {
                                     attachment.as_ref().map(|attachment| {
                                         wgpu::RenderPassColorAttachment {
                                             view: &attachment.view,
-                                            depth_slice: None,
+                                            depth_slice: attachment.depth_slice,
                                             resolve_target: attachment.resolve_target.as_ref(),
                                             ops: wgpu::Operations {
                                                 load: attachment.load,
@@ -5195,11 +5239,11 @@ mod upstream_wgpu_native {
                 .get(&texture_id)
                 .ok_or_else(|| format!("GPUTexture {texture_id} was not found"))?
                 .format;
-            if let (Some(bytes_per_row), Some(bytes_per_pixel)) = (
-                layout.bytes_per_row,
-                texture_format_bytes_per_pixel(texture_format),
-            ) {
-                let required = size.width.saturating_mul(bytes_per_pixel);
+            if let (Some(bytes_per_row), Some(block_bytes)) =
+                (layout.bytes_per_row, texture_format.block_copy_size(None))
+            {
+                let (block_width, _) = texture_format.block_dimensions();
+                let required = div_ceil_u32(size.width, block_width).saturating_mul(block_bytes);
                 if bytes_per_row < required {
                     return Err(format!(
                         "GPUQueue.writeTexture bytesPerRow {bytes_per_row} is less than required {required} for format {texture_format:?} and width {}",
@@ -7613,6 +7657,9 @@ mod upstream_wgpu_native {
             }
             if supported_features.contains(wgpu::Features::BGRA8UNORM_STORAGE) {
                 required_features |= wgpu::Features::BGRA8UNORM_STORAGE;
+            }
+            if supported_features.contains(wgpu::Features::TEXTURE_COMPRESSION_ASTC) {
+                required_features |= wgpu::Features::TEXTURE_COMPRESSION_ASTC;
             }
 
             let descriptor = wgpu::DeviceDescriptor {
