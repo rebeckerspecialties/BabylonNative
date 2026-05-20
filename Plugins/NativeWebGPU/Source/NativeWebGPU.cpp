@@ -1207,8 +1207,8 @@ namespace Babylon::Plugins::NativeWebGPU
             limits.Set("maxBufferSize", Napi::Number::From(env, 268435456));
             limits.Set("maxVertexAttributes", Napi::Number::From(env, 16));
             limits.Set("maxVertexBufferArrayStride", Napi::Number::From(env, 2048));
-            limits.Set("maxInterStageShaderComponents", Napi::Number::From(env, 124));
-            limits.Set("maxInterStageShaderVariables", Napi::Number::From(env, 31));
+            limits.Set("maxInterStageShaderComponents", Napi::Number::From(env, 60));
+            limits.Set("maxInterStageShaderVariables", Napi::Number::From(env, 15));
             limits.Set("maxColorAttachments", Napi::Number::From(env, 8));
             limits.Set("maxColorAttachmentBytesPerSample", Napi::Number::From(env, 32));
             limits.Set("maxComputeWorkgroupStorageSize", Napi::Number::From(env, 16384));
@@ -2946,6 +2946,26 @@ namespace Babylon::Plugins::NativeWebGPU
 
             return gpu;
         }
+    }
+
+    Napi::Object CreateTextureFromNativeId(
+        Napi::Env env,
+        uint64_t nativeId,
+        const char* label,
+        const char* format,
+        uint32_t width,
+        uint32_t height,
+        uint32_t depthOrArrayLayers,
+        uint32_t usage)
+    {
+        TextureDescriptorData descriptor{};
+        descriptor.Label = label != nullptr ? label : "";
+        descriptor.Format = format != nullptr ? format : "bgra8unorm";
+        descriptor.Width = std::max<uint32_t>(1, width);
+        descriptor.Height = std::max<uint32_t>(1, height);
+        descriptor.DepthOrArrayLayers = std::max<uint32_t>(1, depthOrArrayLayers);
+        descriptor.Usage = usage;
+        return CreateGpuTextureObject(env, descriptor, nativeId);
     }
 
     // Initialization contract: this function must be called from an

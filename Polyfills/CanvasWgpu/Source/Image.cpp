@@ -26,6 +26,29 @@ extern "C"
 
 namespace
 {
+    std::string NormalizeImageUrl(std::string url)
+    {
+        if (url.rfind("http://", 0) != 0 && url.rfind("https://", 0) != 0)
+        {
+            return url;
+        }
+
+        std::string normalized;
+        normalized.reserve(url.size());
+        for (char ch : url)
+        {
+            if (ch == ' ')
+            {
+                normalized += "%20";
+            }
+            else
+            {
+                normalized += ch;
+            }
+        }
+        return normalized;
+    }
+
     class ScopedNativeCanvasImageRef final
     {
     public:
@@ -90,6 +113,7 @@ namespace Babylon::Polyfills::Internal
                 InstanceAccessor("src", &NativeCanvasImage::GetSrc, &NativeCanvasImage::SetSrc),
                 InstanceAccessor("onload", nullptr, &NativeCanvasImage::SetOnload),
                 InstanceAccessor("onerror", nullptr, &NativeCanvasImage::SetOnerror),
+                InstanceMethod("dispose", &NativeCanvasImage::DisposeJs),
                 InstanceMethod("_getNativeImageData", &NativeCanvasImage::GetNativeImageData),
                 // TODO: This should be set directly on the JS Object rather than via an instanceAccessor see: https://github.com/BabylonJS/BabylonNative/issues/1030
                 InstanceAccessor("_imageContainer", &NativeCanvasImage::GetImageContainer, nullptr),
@@ -114,6 +138,11 @@ namespace Babylon::Polyfills::Internal
     {
         m_rgbaData.clear();
         m_cancellationSource->cancel();
+    }
+
+    void NativeCanvasImage::DisposeJs(const Napi::CallbackInfo&)
+    {
+        Dispose();
     }
 
     Napi::Value NativeCanvasImage::GetWidth(const Napi::CallbackInfo&)
@@ -233,7 +262,7 @@ namespace Babylon::Polyfills::Internal
 
         // try with URL
         UrlLib::UrlRequest request{};
-        request.Open(UrlLib::UrlMethod::Get, text);
+        request.Open(UrlLib::UrlMethod::Get, NormalizeImageUrl(text));
         request.ResponseType(UrlLib::UrlResponseType::Buffer);
         ScopedNativeCanvasImageRef pendingLoadRef{*this};
         request.SendAsync().then(m_runtimeScheduler, *m_cancellationSource, [env{info.Env()}, this, cancellationSource{m_cancellationSource}, request{std::move(request)}](arcana::expected<void, std::exception_ptr> result) {
