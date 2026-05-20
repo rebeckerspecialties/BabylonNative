@@ -16,6 +16,32 @@
 #include <napi/pointer.h>
 #include <basen.hpp>
 
+namespace
+{
+    std::string NormalizeImageUrl(std::string url)
+    {
+        if (url.rfind("http://", 0) != 0 && url.rfind("https://", 0) != 0)
+        {
+            return url;
+        }
+
+        std::string normalized;
+        normalized.reserve(url.size());
+        for (char ch : url)
+        {
+            if (ch == ' ')
+            {
+                normalized += "%20";
+            }
+            else
+            {
+                normalized += ch;
+            }
+        }
+        return normalized;
+    }
+}
+
 namespace Babylon::Polyfills::Internal
 {
     static constexpr auto JS_IMAGE_CONSTRUCTOR_NAME = "Image";
@@ -155,7 +181,7 @@ namespace Babylon::Polyfills::Internal
 
         // try with URL
         UrlLib::UrlRequest request{};
-        request.Open(UrlLib::UrlMethod::Get, text);
+        request.Open(UrlLib::UrlMethod::Get, NormalizeImageUrl(text));
         request.ResponseType(UrlLib::UrlResponseType::Buffer);
         request.SendAsync().then(m_runtimeScheduler, *m_cancellationSource, [env{info.Env()}, this, cancellationSource{m_cancellationSource}, request{std::move(request)}, text](arcana::expected<void, std::exception_ptr> result) {
             if (result.has_error())
