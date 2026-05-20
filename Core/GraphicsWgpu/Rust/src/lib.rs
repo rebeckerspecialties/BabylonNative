@@ -557,6 +557,28 @@ pub extern "C" fn babylon_wgpu_native_create_texture(descriptor_json: *const c_c
 }
 
 #[no_mangle]
+pub extern "C" fn babylon_wgpu_native_import_metal_texture(
+    native_texture: *const c_void,
+    descriptor_json: *const c_char,
+) -> u64 {
+    run_with_active_backend("NativeWebGPU.importMetalTexture", 0, |backend| {
+        backend.import_metal_texture(
+            native_texture,
+            read_c_string(descriptor_json, "GPUTextureDescriptor")?,
+        )
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn babylon_wgpu_native_get_metal_device() -> *mut c_void {
+    run_with_active_backend(
+        "NativeWebGPU.getMetalDevice",
+        ptr::null_mut(),
+        |backend| backend.get_metal_device(),
+    )
+}
+
+#[no_mangle]
 pub extern "C" fn babylon_wgpu_native_create_texture_view(
     texture_id: u64,
     descriptor_json: *const c_char,
@@ -1623,6 +1645,7 @@ mod upstream_wgpu_native {
     use std::borrow::Cow;
     use std::collections::HashMap;
     use std::ffi::c_void;
+    use std::ptr;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Mutex, OnceLock};
     use std::time::Instant;
@@ -3250,6 +3273,128 @@ mod upstream_wgpu_native {
                 );
             }
             Ok(id)
+        }
+
+        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos", target_os = "visionos"))]
+        pub fn import_metal_texture(
+            &mut self,
+            native_texture: *const c_void,
+            descriptor_json: &str,
+        ) -> Result<u64, String> {
+            if native_texture.is_null() {
+                return Err("native Metal texture pointer was null".to_string());
+            }
+
+            use objc2::rc::Retained;
+            use objc2::runtime::ProtocolObject;
+            use objc2_metal::MTLTexture as _;
+
+            let descriptor = parse_json(descriptor_json)?;
+            let size = descriptor
+                .get("size")
+                .map(parse_extent3d)
+                .unwrap_or(wgpu::Extent3d {
+                    width: 1,
+                    height: 1,
+                    depth_or_array_layers: 1,
+                });
+            let format_text = json_str(&descriptor, "format").unwrap_or("bgra8unorm");
+            let format = map_texture_format(format_text)
+                .ok_or_else(|| format!("unsupported GPUTexture format '{format_text}'"))?;
+            let usage = map_texture_usage(json_u32(&descriptor, "usage", 0x10))
+                | wgpu::TextureUsages::RENDER_ATTACHMENT;
+            let view_formats = compatible_view_formats(format);
+            let mip_level_count = json_u32(&descriptor, "mipLevelCount", 1).max(1);
+            let sample_count = json_u32(&descriptor, "sampleCount", 1).max(1);
+            let label = json_str(&descriptor, "label").map(str::to_owned);
+            let dimension = map_texture_dimension(json_str(&descriptor, "dimension"));
+
+            let raw = native_texture
+                as *mut ProtocolObject<dyn objc2_metal::MTLTexture>;
+            let retained = unsafe { Retained::retain(raw) }
+                .ok_or_else(|| "failed to retain native Metal texture".to_string())?;
+            let raw_type = retained.textureType();
+            let copy_size = wgpu::hal::CopyExtent {
+                width: size.width,
+                height: size.height,
+                depth: size.depth_or_array_layers,
+            };
+            let hal_texture = unsafe {
+                wgpu::hal::metal::Device::texture_from_raw(
+                    retained,
+                    format,
+                    raw_type,
+                    size.depth_or_array_layers,
+                    mip_level_count,
+                    copy_size,
+                )
+            };
+            let texture = unsafe {
+                self.runtime
+                    .device
+                    .create_texture_from_hal::<wgpu::hal::api::Metal>(
+                        hal_texture,
+                        &wgpu::TextureDescriptor {
+                            label: label.as_deref(),
+                            size,
+                            mip_level_count,
+                            sample_count,
+                            dimension,
+                            format,
+                            usage,
+                            view_formats: &view_formats,
+                        },
+                    )
+            };
+
+            let id = self.resources.next();
+            self.resources.textures.insert(
+                id,
+                TextureResource {
+                    texture,
+                    width: size.width,
+                    height: size.height,
+                    depth_or_array_layers: size.depth_or_array_layers,
+                    mip_level_count,
+                    sample_count,
+                    format,
+                },
+            );
+            if webgpu_memory_trace_enabled() {
+                eprintln!(
+                    "NativeWebGPU memory importMetalTexture id={} label={} size={}x{}x{} format={:?} usage={:?}",
+                    id,
+                    label.as_deref().unwrap_or("(unlabeled)"),
+                    size.width,
+                    size.height,
+                    size.depth_or_array_layers,
+                    format,
+                    usage
+                );
+            }
+            Ok(id)
+        }
+
+        #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "tvos", target_os = "visionos")))]
+        pub fn import_metal_texture(
+            &mut self,
+            _native_texture: *const c_void,
+            _descriptor_json: &str,
+        ) -> Result<u64, String> {
+            Err("native Metal texture import is only available on Apple platforms".to_string())
+        }
+
+        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos", target_os = "visionos"))]
+        pub fn get_metal_device(&mut self) -> Result<*mut c_void, String> {
+            let Some(hal_device) = (unsafe { self.runtime.device.as_hal::<wgpu::hal::api::Metal>() }) else {
+                return Ok(ptr::null_mut());
+            };
+            Ok(&**hal_device.raw_device() as *const _ as *mut c_void)
+        }
+
+        #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "tvos", target_os = "visionos")))]
+        pub fn get_metal_device(&mut self) -> Result<*mut c_void, String> {
+            Ok(ptr::null_mut())
         }
 
         pub fn create_texture_view(
