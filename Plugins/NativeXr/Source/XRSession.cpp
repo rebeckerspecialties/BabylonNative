@@ -4,7 +4,6 @@
 
 #include <XR.h>
 #include <Babylon/Graphics/DeviceContext.h>
-#include <Babylon/Graphics/FrameBuffer.h>
 
 #include "Constants.h"
 #include "PointerEvent.h"
@@ -571,7 +570,7 @@ namespace Babylon
             auto optionsObj = info[0].As<Napi::Object>();
             if (optionsObj.Has("planeDetectionState"))
             {
-                bool planeDetectionEnabled = optionsObj.Get("planeDetectionState").As<Napi::Object>().Get("enabled").ToBoolean();
+                bool planeDetectionEnabled = optionsObj.Get("planeDetectionState").As<Napi::Object>().Get("enabled").ToBoolean().Value();
                 m_xr->SetPlaneDetectionEnabled(planeDetectionEnabled);
             }
         }

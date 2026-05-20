@@ -14,6 +14,7 @@ namespace xr
         RGBA8_SRGB,
         BGRA8_SRGB,
         D24S8,
+        D32FS8,
         D16
     };
 

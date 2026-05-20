@@ -34,6 +34,7 @@ namespace Babylon
             Napi::ObjectReference m_jsXRViewerPose{};
             XRViewerPose& m_xrViewerPose;
             std::vector<Napi::ObjectReference> m_trackedAnchors{};
+            std::vector<Napi::ObjectReference> m_pendingAnchors{};
             std::unordered_map<xr::System::Session::Frame::Plane::Identifier, Napi::ObjectReference> m_trackedPlanes{};
             std::unordered_map<xr::System::Session::Frame::Mesh::Identifier, Napi::ObjectReference> m_trackedMeshes{};
             std::unordered_map<xr::System::Session::Frame::ImageTrackingResult::Identifier, Napi::ObjectReference> m_trackedImageIDToResultMap{};
@@ -64,6 +65,7 @@ namespace Babylon
             Napi::Value GetHitTestResults(const Napi::CallbackInfo& info);
             Napi::Value CreateAnchor(const Napi::CallbackInfo& info);
             Napi::Value GetTrackedAnchors(const Napi::CallbackInfo& info);
+            void PromotePendingAnchors();
             void UpdateAnchors();
             Napi::Value GetWorldInformation(const Napi::CallbackInfo& info);
             Napi::Value GetFeaturePointCloud(const Napi::CallbackInfo& info);
