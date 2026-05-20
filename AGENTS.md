@@ -248,6 +248,85 @@ Performance lessons from rejected experiments:
   trace validation was incomplete, so do not commit that idea without a fresh
   per-device retest.
 
+## NativeXR Portal Demo State
+
+The active AR portal test script is
+`Apps/Playground/Scripts/native_xr_babylon_portal_demo.js`. On iPhone 12, the
+manual launch command is:
+
+```sh
+xcrun devicectl device process launch --device B5D4CA48-8949-525C-8E5D-4F661161BD9D --terminate-existing --console com.rebeckerspecialties.BabylonNative.Playground app:///Scripts/native_xr_babylon_portal_demo.js
+```
+
+Current functional baseline as of 2026-05-20:
+
+- Physical iPhone 12 manual inspection showed camera passthrough, a world-fixed
+  portal, floor-plane placement from the marker torus, the original blue/glowing
+  torus and doorway, and the full Hill Valley scene visible inside the portal.
+- The Hill Valley package is local-only: `native_xr_portal_hillvalley.astc.glb`,
+  ASTC `.ktx` textures, `native_xr_portal_environment.ktx`, and
+  `native_xr_portal_blue_noise_rgb.png` live under
+  `Apps/Playground/Scripts/native_xr_portal_assets/`. The old loose
+  `.babylon`, JPG, and PNG asset set was removed from the packaged resources.
+- The portal asset CMake rule intentionally uses `GLOB_RECURSE` so nested local
+  assets are copied into app bundles. Do not change it back to single-level
+  globbing unless the asset layout changes.
+- Backdrop, panorama, sky, mountain, and welcome materials must remain
+  `KHR_materials_unlit` plus emissive/base-color texture. That is what keeps the
+  sky bright blue instead of becoming a dim PBR surface.
+- Runtime material overrides still mirror those GLB hints to protect the demo if
+  Babylon.js import behavior changes. Keep the GLB hints and the runtime safety
+  net in sync.
+- Scene reflection probes are default-off. Enabling the scene probe previously
+  regressed to "only the car is visible" / real room showing through most of the
+  portal. The packaged environment cube override is the current stable
+  reflection path.
+- IBL shadows are default-off. SSAO2 is enabled and tuned down, but the full
+  scene plus SSAO2 still needs a real GPU/CPU optimization pass before treating
+  it as a 60 fps target.
+- Do not reintroduce `scene.freezeActiveMeshes()` or manual active-mesh freezing
+  for this demo yet. It caused frustum/portal-stencil regressions where only a
+  subset of the scene rendered.
+- Anchor updates are intentionally ignored by default
+  (`__nativeArPortalApplyAnchorUpdates=false`) after creation. Applying ARKit
+  anchor updates directly caused visible portal drift/chasing; treat future
+  anchor-update work as a filtered/reconciliation problem.
+- Marker placement waits for a stable real floor-plane hit test by default.
+  Fallback placement and estimated-point placement stay disabled unless a
+  specific experiment opts into them.
+
+Useful portal diagnostics and regeneration commands:
+
+```sh
+node --check Apps/Playground/Scripts/native_xr_babylon_portal_demo.js
+node --check Apps/scripts/transcodeHillValleyToGltf.js
+node --check Apps/scripts/tuneHillValleyGltfMaterials.js
+node --check Apps/scripts/generateNativeXrPortalEnvironment.js
+node Apps/scripts/transcodeHillValleyToGltf.js --source /path/to/native_xr_portal_hillvalley.babylon
+node Apps/scripts/generateNativeXrPortalEnvironment.js --source-dir /path/to/loose/native_xr_portal_assets
+node Apps/scripts/tuneHillValleyGltfMaterials.js
+```
+
+`basisu` must be on `PATH` or passed with `--basisu`. The transcode path writes
+GPU-native ASTC KTX textures and avoids runtime CPU decompression on iOS. Use
+`__nativeArPortalLogMeshDiagnostics=true` only for targeted debugging; normal
+runs should not emit the active-mesh diagnostic stream.
+
+Open NativeXR portal questions for the next optimization session:
+
+- Establish device-side CPU/GPU evidence for the full portal scene on iPhone 12
+  and iPhone XS after this baseline commit. Pre-placement can be 60 fps, but
+  post-placement with the full scene and SSAO2 was still far below the 60 fps
+  goal in manual logs.
+- Native-side wins should come first: WebGPU render pass/submit behavior,
+  resource lifetime churn, compressed texture upload paths, camera background
+  compositing, and any ARKit frame synchronization overhead.
+- Browser-shaped Babylon.js changes are still acceptable when profiling proves
+  the API-compatible WebGPU path is doing unnecessary per-frame JavaScript work.
+- A true SpringBoard/display-compositor screenshot path is still needed for AR
+  camera passthrough validation. BabylonNative's in-app framebuffer readback is
+  not enough evidence for physical camera composition.
+
 ## Error Handling Expectations
 
 - NativeWebGPU does not ship glslang/twgsl. If Babylon.js code asks WebGPU to compile GLSL, surface an actionable JS error that names the shader/effect and says the path needs WGSL or an explicit NativeWebGPU exclusion.
