@@ -51,31 +51,43 @@ namespace Babylon
                 hasOffsetRay = true;
             }
 
+            bool entityTypesSpecified = false;
             if (options.Has("entityTypes"))
             {
-                const auto entityTypeArray = options.Get("entityTypes").As<Napi::Array>();
-                for (uint32_t i = 0; i < entityTypeArray.Length(); i++)
+                const auto entityTypesValue = options.Get("entityTypes");
+                if (entityTypesValue.IsArray())
                 {
-                    const auto entityType = entityTypeArray.Get(i).As<Napi::String>().Utf8Value();
-                    if (entityType == XRHitTestTrackableType::POINT)
+                    entityTypesSpecified = true;
+                    const auto entityTypeArray = entityTypesValue.As<Napi::Array>();
+                    for (uint32_t i = 0; i < entityTypeArray.Length(); i++)
                     {
-                        m_entityTypes |= xr::HitTestTrackableType::POINT;
-                    }
-                    else if (entityType == XRHitTestTrackableType::PLANE)
-                    {
-                        m_entityTypes |= xr::HitTestTrackableType::PLANE;
-                    }
-                    else if (entityType == XRHitTestTrackableType::MESH)
-                    {
-                        m_entityTypes |= xr::HitTestTrackableType::MESH;
+                        const auto entityTypeValue = entityTypeArray.Get(i);
+                        if (!entityTypeValue.IsString())
+                        {
+                            continue;
+                        }
+
+                        const auto entityType = entityTypeValue.As<Napi::String>().Utf8Value();
+                        if (entityType == XRHitTestTrackableType::POINT)
+                        {
+                            m_entityTypes |= xr::HitTestTrackableType::POINT;
+                        }
+                        else if (entityType == XRHitTestTrackableType::PLANE)
+                        {
+                            m_entityTypes |= xr::HitTestTrackableType::PLANE;
+                        }
+                        else if (entityType == XRHitTestTrackableType::MESH)
+                        {
+                            m_entityTypes |= xr::HitTestTrackableType::MESH;
+                        }
                     }
                 }
             }
 
-            // Default to MESH if unspecified.
-            if (m_entityTypes == xr::HitTestTrackableType::NONE)
+            // WebXR defaults an omitted entityTypes member to ["plane"].
+            if (!entityTypesSpecified && m_entityTypes == xr::HitTestTrackableType::NONE)
             {
-                m_entityTypes = xr::HitTestTrackableType::MESH;
+                m_entityTypes = xr::HitTestTrackableType::PLANE;
             }
         }
 

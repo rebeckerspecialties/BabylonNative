@@ -11,6 +11,9 @@
 #include <Babylon/Plugins/NativeOptimizations.h>
 #endif
 #include <Babylon/Plugins/NativeWebGPU.h>
+#if defined(BABYLON_NATIVE_PLAYGROUND_HAS_NATIVEXR)
+#include <Babylon/Plugins/NativeXr.h>
+#endif
 #if defined(BABYLON_NATIVE_PLAYGROUND_HAS_TESTUTILS)
 #include <Babylon/Plugins/TestUtils.h>
 #endif
@@ -296,6 +299,13 @@ AppContext::AppContext(
         Babylon::Plugins::NativeOptimizations::Initialize(env);
 #endif
         Babylon::Plugins::NativeWebGPU::Initialize(env);
+#if defined(BABYLON_NATIVE_PLAYGROUND_HAS_NATIVEXR)
+        m_xr.emplace(Babylon::Plugins::NativeXr::Initialize(env));
+        m_xr->UpdateWindow(m_xrWindowPtr);
+        m_xr->SetSessionStateChangedCallback([this](bool active) {
+            m_xrActive.store(active);
+        });
+#endif
 
         if (additionalInit)
         {
@@ -315,6 +325,17 @@ AppContext::AppContext(
         m_device->EnableRendering();
     });
 }
+
+#if defined(BABYLON_NATIVE_PLAYGROUND_HAS_NATIVEXR)
+void AppContext::UpdateXrWindow(void* windowPtr)
+{
+    m_xrWindowPtr = windowPtr;
+    if (m_xr)
+    {
+        m_xr->UpdateWindow(windowPtr);
+    }
+}
+#endif
 
 void AppContext::DispatchAnimationFrame()
 {

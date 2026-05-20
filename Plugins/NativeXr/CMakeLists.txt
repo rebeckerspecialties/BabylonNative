@@ -10,9 +10,9 @@ target_include_directories(NativeXr
 target_link_libraries(NativeXr
     PUBLIC napi
     PRIVATE arcana
-    PRIVATE bgfx
     PRIVATE GraphicsDeviceContext
     PRIVATE JsRuntimeInternal
+    PRIVATE NativeWebGPU
     PRIVATE xr)
 
 set_property(TARGET NativeXr PROPERTY FOLDER Plugins)

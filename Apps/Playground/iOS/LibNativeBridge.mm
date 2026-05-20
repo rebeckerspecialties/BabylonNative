@@ -172,6 +172,8 @@ namespace
         },
         playgroundOptions);
 
+    appContext->UpdateXrWindow(xrView);
+
     if (playgroundOptions.Scripts.empty() && !HasValidationIntent(playgroundOptions))
     {
         appContext->ScriptLoader().Eval(
@@ -311,7 +313,7 @@ namespace
 
 - (bool)isXRActive
 {
-    return false;
+    return appContext && appContext->IsXrActive();
 }
 
 @end
