@@ -1,4 +1,5 @@
 FILE(GLOB REFERENCE_IMAGES CONFIGURE_DEPENDS RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}" "ReferenceImages/*")
+FILE(GLOB NATIVE_XR_PORTAL_ASSETS CONFIGURE_DEPENDS RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}" "Scripts/native_xr_portal_assets/*")
 
 set(BABYLON_SCRIPTS
     "../node_modules/babylonjs-loaders/babylonjs.loaders.js"
@@ -22,9 +23,13 @@ set(SCRIPTS
     "Scripts/playground_runner.js"
     "Scripts/validation_native.js"
     "Scripts/validation_webgpu_native.js"
+    "Scripts/native_xr_babylon_portal_demo.js"
+    "Scripts/native_xr_wgpu_capture.js"
+    "Scripts/native_xr_wgpu_smoke.js"
     "Scripts/webgpu_smoke.js"
     "Scripts/RobotoSlab.ttf"
-    "Scripts/config.json")
+    "Scripts/config.json"
+    ${NATIVE_XR_PORTAL_ASSETS})
 
 set(SOURCES
     "Shared/AppContext.cpp"
@@ -196,6 +201,11 @@ endif()
 if(TARGET NativeOptimizations)
     target_link_libraries(Playground PRIVATE NativeOptimizations)
     target_compile_definitions(Playground PRIVATE BABYLON_NATIVE_PLAYGROUND_HAS_NATIVEOPTIMIZATIONS=1)
+endif()
+
+if(TARGET NativeXr)
+    target_link_libraries(Playground PRIVATE NativeXr)
+    target_compile_definitions(Playground PRIVATE BABYLON_NATIVE_PLAYGROUND_HAS_NATIVEXR=1)
 endif()
 
 # See https://gitlab.kitware.com/cmake/cmake/-/issues/23543
