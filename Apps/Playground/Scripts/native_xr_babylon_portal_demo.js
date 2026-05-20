@@ -12,20 +12,42 @@ setNativeArPortalDefault("__nativeArPortalUseGpuParticles", true);
 setNativeArPortalDefault("__nativeArPortalParticleCapacity", 1024);
 setNativeArPortalDefault("__nativeArPortalUseWebGPUFastPath", false);
 setNativeArPortalDefault("__nativeArPortalUseSceneStaticFastPath", false);
-setNativeArPortalDefault("__nativeArPortalFreezeActiveMeshes", false);
+setNativeArPortalDefault("__nativeArPortalFreezeMaterials", false);
+setNativeArPortalDefault("__nativeArPortalLogMeshDiagnostics", false);
 setNativeArPortalDefault("__nativeArPortalUseOfficialCrossingTest", true);
 setNativeArPortalDefault("__nativeArPortalEnablePlaneDetection", true);
 setNativeArPortalDefault("__nativeArPortalAllowFallbackPlacement", false);
 setNativeArPortalDefault("__nativeArPortalAllowEstimatedPointPlacement", false);
 setNativeArPortalDefault("__nativeArPortalUseAnchors", true);
+setNativeArPortalDefault("__nativeArPortalApplyAnchorUpdates", false);
 setNativeArPortalDefault("__nativeArPortalMarkerSettleFrames", 24);
 setNativeArPortalDefault("__nativeArPortalMarkerSettleDistanceMeters", 0.018);
 setNativeArPortalDefault("__nativeArPortalInvertOccluderSide", false);
+setNativeArPortalDefault("__nativeArPortalUseRealtimeLighting", true);
+setNativeArPortalDefault("__nativeArPortalUseImportedPunctualLights", false);
+setNativeArPortalDefault("__nativeArPortalUseDirectionalFillLight", false);
+setNativeArPortalDefault("__nativeArPortalUseSceneReflectionProbe", false);
+setNativeArPortalDefault("__nativeArPortalUseEnvironmentReflectionOverride", true);
+setNativeArPortalDefault("__nativeArPortalReflectionProbeSize", 128);
+setNativeArPortalDefault("__nativeArPortalUseSSAO2", true);
+setNativeArPortalDefault("__nativeArPortalUseIblShadows", false);
+setNativeArPortalDefault("__nativeArPortalSSAOScale", 0.30);
+setNativeArPortalDefault("__nativeArPortalSSAOBlurScale", 0.45);
+setNativeArPortalDefault("__nativeArPortalSSAOStrength", 0.42);
+setNativeArPortalDefault("__nativeArPortalSSAORadius", 0.85);
+setNativeArPortalDefault("__nativeArPortalSSAOBase", 0.76);
+setNativeArPortalDefault("__nativeArPortalSSAOSamples", 8);
+setNativeArPortalDefault("__nativeArPortalIblShadowScale", 0.22);
+setNativeArPortalDefault("__nativeArPortalIblShadowResolutionExp", 3);
+setNativeArPortalDefault("__nativeArPortalIblShadowMaxCasters", 24);
+setNativeArPortalDefault("__nativeArPortalIblShadowScreenSpace", false);
 
 (function () {
     var EXIT_DELAY_MS = 70000;
     var ASSET_ROOT_URL = "app:///Scripts/";
-    var HILL_VALLEY_FILE = "native_xr_portal_hillvalley.babylon";
+    var HILL_VALLEY_FILE = "native_xr_portal_hillvalley.astc.glb";
+    var ENVIRONMENT_CUBE_FILE = "native_xr_portal_environment.ktx";
+    var BLUE_NOISE_FILE = "native_xr_portal_blue_noise_rgb.png";
     var PARTICLE_TOP_FILE = "app:///Scripts/native_xr_portal_particle_488.json";
     var PARTICLE_SIDE_FILE = "app:///Scripts/native_xr_portal_particle_489.json";
     var lastStats = null;
@@ -436,6 +458,22 @@ setNativeArPortalDefault("__nativeArPortalInvertOccluderSide", false);
         reportStatus("native-xr-portal:image-shim=1");
     }
 
+    function installNativePortalAssetUrlShim() {
+        if (!BABYLON || !BABYLON.Tools || globalThis.__nativeArPortalAssetUrlShimInstalled) {
+            return;
+        }
+
+        globalThis.__nativeArPortalAssetUrlShimInstalled = true;
+        var originalGetAssetUrl = BABYLON.Tools.GetAssetUrl;
+        BABYLON.Tools.GetAssetUrl = function (url) {
+            if (String(url || "") === "https://assets.babylonjs.com/core/blue_noise/blue_noise_rgb.png") {
+                return ASSET_ROOT_URL + BLUE_NOISE_FILE;
+            }
+            return originalGetAssetUrl ? originalGetAssetUrl.call(BABYLON.Tools, url) : url;
+        };
+        reportStatus("native-xr-portal:asset-url-shim=1");
+    }
+
     function logTextureReadiness(scene, totalTextureCount, label) {
         var readyTextures = 0;
         var pendingSamples = [];
@@ -457,10 +495,435 @@ setNativeArPortalDefault("__nativeArPortalInvertOccluderSide", false);
             (pendingSamples.length ? ":pending=" + pendingSamples.join("|") : ""));
     }
 
+    function materialNameMatches(material, expression) {
+        return expression.test(String(material && material.name ? material.name : "").toLowerCase());
+    }
+
+    function isPortalBackdropMaterial(material) {
+        return materialNameMatches(material, /pano|fond|mountain|sky|ciel|background|welcome/);
+    }
+
+    function applyRealtimeMaterialOverrides(scene) {
+        if (globalThis.__nativeArPortalUseRealtimeLighting === false) {
+            return;
+        }
+
+        var pbrCount = 0;
+        var emissiveCount = 0;
+        var sharedAmbientTextureCount = 0;
+        var environmentReflectionCount = 0;
+        for (var materialIndex = 0; materialIndex < scene.materials.length; materialIndex++) {
+            var material = scene.materials[materialIndex];
+            if (!material) {
+                continue;
+            }
+
+            if ("unlit" in material) {
+                material.unlit = false;
+            }
+            if ("disableLighting" in material) {
+                material.disableLighting = false;
+            }
+            if ("environmentIntensity" in material) {
+                material.environmentIntensity = 1.08;
+            }
+            if ("directIntensity" in material) {
+                material.directIntensity = 0.65;
+            }
+
+            if (isPortalBackdropMaterial(material)) {
+                if ("unlit" in material) {
+                    material.unlit = true;
+                }
+                if ("disableLighting" in material) {
+                    material.disableLighting = true;
+                }
+                if ("emissiveTexture" in material && !material.emissiveTexture && material.albedoTexture) {
+                    material.emissiveTexture = material.albedoTexture;
+                }
+                if ("emissiveColor" in material) {
+                    material.emissiveColor = new BABYLON.Color3(1, 1, 1);
+                }
+                if ("emissiveIntensity" in material) {
+                    material.emissiveIntensity = 1.0;
+                }
+                if ("metallic" in material) {
+                    material.metallic = 0;
+                }
+                if ("roughness" in material) {
+                    material.roughness = 1;
+                }
+                emissiveCount++;
+                continue;
+            }
+
+            if ("metallic" in material && "roughness" in material) {
+                pbrCount++;
+                if (materialNameMatches(material, /metal|carrosserie|chrome|wheel|wheels|reactor|plate|vents|delorean/)) {
+                    material.metallic = materialNameMatches(material, /seat|volant|convecteur/) ? 0.25 : 0.8;
+                    material.roughness = materialNameMatches(material, /carrosserie|chrome|plate/) ? 0.2 : 0.34;
+                } else if (materialNameMatches(material, /cable|grid/)) {
+                    material.metallic = 0.35;
+                    material.roughness = 0.36;
+                } else if (material.roughness === undefined || material.roughness > 0.85) {
+                    material.roughness = 0.72;
+                }
+
+                if (materialNameMatches(material, /glass|vitre|window/)) {
+                    material.metallic = 0;
+                    material.roughness = 0.08;
+                    material.alpha = Math.min(Number(material.alpha || 1), materialNameMatches(material, /delorean/) ? 0.42 : 0.62);
+                }
+            }
+
+            if (globalThis.__nativeArPortalUseEnvironmentReflectionOverride === true && scene.environmentTexture && isPortalReflectiveMaterial(material)) {
+                if ("reflectionTexture" in material) {
+                    material.reflectionTexture = scene.environmentTexture;
+                }
+                if ("environmentIntensity" in material) {
+                    material.environmentIntensity = materialNameMatches(material, /carrosserie|chrome|plate/) ? 1.42 : 1.22;
+                }
+                environmentReflectionCount++;
+            }
+
+            if (materialNameMatches(material, /neon|feux|flare|convecteur_light/)) {
+                if ("emissiveTexture" in material && !material.emissiveTexture && material.albedoTexture) {
+                    material.emissiveTexture = material.albedoTexture;
+                }
+                if ("emissiveColor" in material) {
+                    material.emissiveColor = new BABYLON.Color3(0.82, 0.82, 0.82);
+                }
+                if ("emissiveIntensity" in material) {
+                    material.emissiveIntensity = 1.15;
+                }
+                emissiveCount++;
+            } else if (materialNameMatches(material, /lampe|lamp/)) {
+                if ("emissiveTexture" in material && !material.emissiveTexture && material.albedoTexture) {
+                    material.emissiveTexture = material.albedoTexture;
+                }
+                if ("emissiveColor" in material) {
+                    material.emissiveColor = new BABYLON.Color3(0.34, 0.34, 0.34);
+                }
+                if ("emissiveIntensity" in material) {
+                    material.emissiveIntensity = 0.35;
+                }
+                emissiveCount++;
+            } else if (material.albedoTexture && "emissiveTexture" in material && "emissiveColor" in material && !materialNameMatches(material, /sky|glass|vitre|window|metal|chrome|carrosserie/)) {
+                material.emissiveTexture = material.albedoTexture;
+                material.emissiveColor = new BABYLON.Color3(0.16, 0.16, 0.16);
+                sharedAmbientTextureCount++;
+            }
+        }
+
+        reportStatus("native-xr-portal:realtime-materials:pbr=" + String(pbrCount) +
+            ":emissive=" + String(emissiveCount) +
+            ":sharedAmbient=" + String(sharedAmbientTextureCount) +
+            ":envReflections=" + String(environmentReflectionCount));
+    }
+
+    function includeOnlyPortalMeshes(light, meshes) {
+        if (!light || !meshes || !("includedOnlyMeshes" in light)) {
+            return;
+        }
+
+        light.includedOnlyMeshes = [];
+        for (var meshIndex = 0; meshIndex < meshes.length; meshIndex++) {
+            var mesh = meshes[meshIndex];
+            if (mesh && mesh.getTotalVertices && mesh.getTotalVertices() > 0) {
+                light.includedOnlyMeshes.push(mesh);
+            }
+        }
+    }
+
+    function configurePortalRealtimeLights(scene, meshes) {
+        if (globalThis.__nativeArPortalUseRealtimeLighting === false) {
+            return;
+        }
+
+        var importedLightCount = 0;
+        for (var lightIndex = scene.lights.length - 1; lightIndex >= 0; lightIndex--) {
+            var light = scene.lights[lightIndex];
+            if (!light || /^native-xr-portal-/.test(String(light.name || ""))) {
+                continue;
+            }
+            if (globalThis.__nativeArPortalUseImportedPunctualLights === true) {
+                importedLightCount++;
+                if ("intensity" in light) {
+                    light.intensity = Math.max(Number(light.intensity || 0), 0.55);
+                }
+                includeOnlyPortalMeshes(light, meshes);
+            } else if (typeof light.dispose === "function") {
+                light.dispose();
+            }
+        }
+
+        if (globalThis.__nativeArPortalUseDirectionalFillLight === true) {
+            var key = new BABYLON.DirectionalLight("native-xr-portal-key-light", new BABYLON.Vector3(0.35, -0.82, 0.42), scene);
+            key.intensity = 0.55;
+            key.diffuse = new BABYLON.Color3(1.0, 0.96, 0.9);
+            key.specular = new BABYLON.Color3(0.55, 0.58, 0.62);
+            includeOnlyPortalMeshes(key, meshes);
+        }
+
+        var fill = new BABYLON.HemisphericLight("native-xr-portal-fill-light", new BABYLON.Vector3(-0.25, 1.0, 0.35), scene);
+        fill.intensity = 0.48;
+        fill.diffuse = new BABYLON.Color3(0.78, 0.88, 1.0);
+        fill.groundColor = new BABYLON.Color3(0.28, 0.22, 0.18);
+        includeOnlyPortalMeshes(fill, meshes);
+
+        reportStatus("native-xr-portal:lights=runtime-fill:imported=" + String(importedLightCount));
+    }
+
+    function isPortalReflectiveMaterial(material) {
+        return materialNameMatches(material, /carrosserie|chrome|delorean|reactor|plate|wheel|wheels|metal_01|convecteur/);
+    }
+
+    function isPortalProbeRenderMesh(mesh) {
+        if (!mesh || !mesh.getTotalVertices || mesh.getTotalVertices() <= 0 || !mesh.isEnabled()) {
+            return false;
+        }
+        var name = String(mesh.name || "").toLowerCase();
+        if (/d1_|delorean/.test(name)) {
+            return false;
+        }
+        return true;
+    }
+
+    function computePortalReflectionProbePosition(meshes, fallback) {
+        var center = new BABYLON.Vector3();
+        var count = 0;
+        for (var meshIndex = 0; meshIndex < meshes.length; meshIndex++) {
+            var mesh = meshes[meshIndex];
+            if (!mesh || !/d1_|delorean/i.test(String(mesh.name || "")) || !mesh.getBoundingInfo) {
+                continue;
+            }
+            mesh.computeWorldMatrix(true);
+            center.addInPlace(mesh.getBoundingInfo().boundingBox.centerWorld);
+            count++;
+        }
+
+        if (count > 0) {
+            center.scaleInPlace(1 / count);
+            center.y += 0.45;
+            return center;
+        }
+
+        return fallback ? fallback.clone() : BABYLON.Vector3.Zero();
+    }
+
+    function createSceneReflectionProbeForPortal(scene, meshes, fallbackPosition) {
+        if (globalThis.__nativeArPortalUseSceneReflectionProbe === false || !BABYLON.ReflectionProbe) {
+            reportStatus("native-xr-portal:reflection-probe=disabled");
+            return null;
+        }
+
+        try {
+            var size = Math.max(64, Math.min(256, Number(globalThis.__nativeArPortalReflectionProbeSize || 128)));
+            var probe = new BABYLON.ReflectionProbe("native-xr-portal-scene-probe", size, scene, true);
+            probe.samples = 1;
+            probe.refreshRate = BABYLON.RenderTargetTexture && BABYLON.RenderTargetTexture.REFRESHRATE_RENDER_ONCE !== undefined ? BABYLON.RenderTargetTexture.REFRESHRATE_RENDER_ONCE : 1;
+            probe.position.copyFrom(computePortalReflectionProbePosition(meshes, fallbackPosition));
+
+            var renderList = [];
+            for (var meshIndex = 0; meshIndex < meshes.length; meshIndex++) {
+                if (isPortalProbeRenderMesh(meshes[meshIndex])) {
+                    renderList.push(meshes[meshIndex]);
+                }
+            }
+            probe.renderList = renderList;
+
+            var materialCount = 0;
+            for (var materialIndex = 0; materialIndex < scene.materials.length; materialIndex++) {
+                var material = scene.materials[materialIndex];
+                if (material && isPortalReflectiveMaterial(material) && "reflectionTexture" in material) {
+                    material.reflectionTexture = probe.cubeTexture;
+                    if ("environmentIntensity" in material) {
+                        material.environmentIntensity = 1.15;
+                    }
+                    materialCount++;
+                }
+            }
+
+            if (probe.cubeTexture && typeof probe.cubeTexture.resetRefreshCounter === "function") {
+                probe.cubeTexture.resetRefreshCounter();
+            }
+            reportStatus("native-xr-portal:reflection-probe=scene:size=" + String(size) +
+                ":meshes=" + String(renderList.length) +
+                ":materials=" + String(materialCount) +
+                ":position=" + formatVector3(probe.position));
+            return probe;
+        } catch (error) {
+            reportStatus("native-xr-portal:reflection-probe-error:" + String(error && error.message ? error.message : error));
+            return null;
+        }
+    }
+
+    function createPortalEnvironmentTexture(scene) {
+        if (globalThis.__nativeArPortalUseRealtimeLighting === false || !BABYLON.CubeTexture) {
+            return null;
+        }
+
+        try {
+            var environmentUrl = ASSET_ROOT_URL + ENVIRONMENT_CUBE_FILE;
+            var environmentTexture = new BABYLON.CubeTexture(
+                environmentUrl,
+                scene,
+                {
+                    // Passing an explicit empty file list keeps Babylon from expanding
+                    // a single compressed cubemap into six cascade URLs.
+                    files: [],
+                    noMipmap: false,
+                    forcedExtension: ".ktx",
+                    createPolynomials: true,
+                    lodScale: 0.8,
+                    lodOffset: 0,
+                    useSRGBBuffer: true,
+                    onLoad: function () {
+                        reportStatus("native-xr-portal:environment-ready");
+                    },
+                    onError: function (message, exception) {
+                        reportStatus("native-xr-portal:environment-error:" + String(message || "") +
+                            (exception && exception.message ? ":" + exception.message : ""));
+                    }
+                });
+            environmentTexture.name = "native-xr-portal-environment";
+            environmentTexture.coordinatesMode = BABYLON.Texture.CUBIC_MODE;
+            environmentTexture.level = 1.0;
+            scene.environmentTexture = environmentTexture;
+            scene.environmentIntensity = 1.0;
+            reportStatus("native-xr-portal:environment=ktx-cube");
+            return environmentTexture;
+        } catch (error) {
+            reportStatus("native-xr-portal:environment-error:" + String(error && error.message ? error.message : error));
+            return null;
+        }
+    }
+
+    function enablePortalSSAO2(scene, camera) {
+        if (globalThis.__nativeArPortalUseSSAO2 === false || !BABYLON.SSAO2RenderingPipeline) {
+            reportStatus("native-xr-portal:ssao2=disabled");
+            return null;
+        }
+
+        try {
+            var ratio = {
+                ssaoRatio: Math.max(0.25, Math.min(1, Number(globalThis.__nativeArPortalSSAOScale || 0.45))),
+                blurRatio: Math.max(0.25, Math.min(1, Number(globalThis.__nativeArPortalSSAOBlurScale || 0.5)))
+            };
+            var geometryBufferRenderer = scene.geometryBufferRenderer || (typeof scene.enableGeometryBufferRenderer === "function" ? scene.enableGeometryBufferRenderer() : null);
+            if (!geometryBufferRenderer) {
+                reportStatus("native-xr-portal:ssao2=disabled:no-geometry-buffer");
+                return null;
+            }
+            var pipeline = new BABYLON.SSAO2RenderingPipeline("native-xr-portal-ssao2", scene, ratio, [camera], geometryBufferRenderer);
+            pipeline.samples = Math.max(4, Math.min(16, Number(globalThis.__nativeArPortalSSAOSamples || 8)));
+            pipeline.textureSamples = 1;
+            pipeline.radius = Math.max(0.05, Number(globalThis.__nativeArPortalSSAORadius || 0.85));
+            pipeline.totalStrength = Math.max(0, Number(globalThis.__nativeArPortalSSAOStrength || 0.42));
+            pipeline.base = Math.max(0, Math.min(1, Number(globalThis.__nativeArPortalSSAOBase || 0.76)));
+            pipeline.maxZ = 48;
+            pipeline.expensiveBlur = false;
+            pipeline.bilateralSamples = 8;
+            if ("epsilon" in pipeline) {
+                pipeline.epsilon = 0.04;
+            }
+            if ("bilateralSoften" in pipeline) {
+                pipeline.bilateralSoften = 0.45;
+            }
+            if ("bilateralTolerance" in pipeline) {
+                pipeline.bilateralTolerance = 0.25;
+            }
+            reportStatus("native-xr-portal:ssao2=enabled:ratio=" + ratio.ssaoRatio.toFixed(2) +
+                ":blur=" + ratio.blurRatio.toFixed(2) +
+                ":samples=" + String(pipeline.samples) +
+                ":radius=" + pipeline.radius.toFixed(2) +
+                ":strength=" + pipeline.totalStrength.toFixed(2) +
+                ":base=" + pipeline.base.toFixed(2));
+            return pipeline;
+        } catch (error) {
+            reportStatus("native-xr-portal:ssao2-error:" + String(error && error.message ? error.message : error));
+            return null;
+        }
+    }
+
+    function selectIblShadowCasters(meshes) {
+        var maxCasters = Math.max(0, Number(globalThis.__nativeArPortalIblShadowMaxCasters || 96));
+        var candidates = [];
+        for (var meshIndex = 0; meshIndex < meshes.length; meshIndex++) {
+            var mesh = meshes[meshIndex];
+            if (!mesh || !mesh.getTotalVertices || mesh.getTotalVertices() <= 0 || !mesh.isEnabled()) {
+                continue;
+            }
+            if (materialNameMatches(mesh.material, /sky|glass|vitre|neon|light|lampe|lamp|flare/)) {
+                continue;
+            }
+            var vertexCount = Number(mesh.getTotalVertices() || 0);
+            candidates.push({ mesh: mesh, score: vertexCount });
+        }
+        candidates.sort(function (a, b) {
+            return b.score - a.score;
+        });
+        var selected = [];
+        for (var index = 0; index < candidates.length && selected.length < maxCasters; index++) {
+            selected.push(candidates[index].mesh);
+        }
+        return selected;
+    }
+
+    function enablePortalIblShadows(scene, camera, meshes) {
+        if (globalThis.__nativeArPortalUseIblShadows === false || !BABYLON.IblShadowsRenderPipeline || !scene.environmentTexture) {
+            reportStatus("native-xr-portal:ibl-shadows=disabled");
+            return null;
+        }
+
+        try {
+            var pipeline = new BABYLON.IblShadowsRenderPipeline("native-xr-portal-ibl-shadows", scene, {
+                resolutionExp: Math.max(3, Math.min(6, Number(globalThis.__nativeArPortalIblShadowResolutionExp || 5))),
+                shadowRenderSizeFactor: Math.max(0.2, Math.min(1, Number(globalThis.__nativeArPortalIblShadowScale || 0.35))),
+                shadowOpacity: 0.28,
+                voxelShadowOpacity: 0.32,
+                ssShadowsEnabled: globalThis.__nativeArPortalIblShadowScreenSpace === true,
+                ssShadowSampleCount: 4,
+                ssShadowStride: 12,
+                ssShadowDistanceScale: 0.95,
+                ssShadowThicknessScale: 1.2,
+                shadowRemanence: 0.88,
+                sampleDirections: 1,
+                triPlanarVoxelization: false
+            }, [camera]);
+            pipeline.coloredShadows = false;
+            pipeline.addShadowReceivingMaterial();
+            var casters = selectIblShadowCasters(meshes);
+            pipeline.addShadowCastingMesh(casters);
+            pipeline.toggleShadow(false);
+            reportStatus("native-xr-portal:ibl-shadows=prepared:casters=" + String(casters.length));
+            return pipeline;
+        } catch (error) {
+            reportStatus("native-xr-portal:ibl-shadows-error:" + String(error && error.message ? error.message : error));
+            return null;
+        }
+    }
+
+    function updatePortalIblShadowsAfterPlacement(pipeline) {
+        if (!pipeline) {
+            return;
+        }
+
+        try {
+            pipeline.toggleShadow(true);
+            pipeline.updateSceneBounds();
+            pipeline.updateVoxelization();
+            reportStatus("native-xr-portal:ibl-shadows=voxelizing");
+        } catch (error) {
+            reportStatus("native-xr-portal:ibl-shadows-update-error:" + String(error && error.message ? error.message : error));
+        }
+    }
+
     async function createPortalScene(engine) {
         reportStatus("native-xr-portal:local-createScene");
         ensureBrowserLocationForLoaders();
         installNativeWebGPUImageLoadingShim();
+        installNativePortalAssetUrlShim();
         engine.enableOfflineSupport = false;
 
         var canvas = typeof engine.getRenderingCanvas === "function" ? engine.getRenderingCanvas() : globalThis.canvas;
@@ -495,6 +958,7 @@ setNativeArPortalDefault("__nativeArPortalInvertOccluderSide", false);
             entityTypes: nativeHitTestEntityTypes
         });
         var xrCamera = xr.baseExperience.camera;
+        createPortalEnvironmentTexture(scene);
         var nativePlaneDetector = null;
         var nativeAnchorSystem = null;
         var nativePortalAnchor = null;
@@ -715,18 +1179,34 @@ setNativeArPortalDefault("__nativeArPortalInvertOccluderSide", false);
 
         var gl = new BABYLON.GlowLayer("glow", scene, {
             mainTextureSamples: 1,
-            mainTextureFixedSize: 128,
-            blurKernelSize: 48
+            mainTextureFixedSize: 256,
+            blurKernelSize: 64
         });
         gl.neutralColor = new BABYLON.Color4(0, 0, 0, 0);
+        gl.intensity = 2.2;
+        gl.customEmissiveColorSelector = function (_mesh, _subMesh, _material, result) {
+            result.set(0.04, 0.65, 1.0, 1.0);
+        };
 
+        function registerGlowMesh(mesh) {
+            gl.addIncludedOnlyMesh(mesh);
+            if (typeof gl.setEffectIntensity === "function") {
+                gl.setEffectIntensity(mesh, 2.35);
+            }
+        }
+
+        var neonColor = new BABYLON.Color3(0.04, 0.55, 1.0);
         var neonMaterial = new BABYLON.StandardMaterial("neonMaterial", scene);
-        neonMaterial.emissiveColor = new BABYLON.Color3(0.35, 0.96, 0.88);
+        neonMaterial.disableLighting = true;
+        neonMaterial.diffuseColor = neonColor;
+        neonMaterial.emissiveColor = neonColor;
+        neonMaterial.specularColor = BABYLON.Color3.Black();
 
         var marker = BABYLON.MeshBuilder.CreateTorus("marker", { diameter: 0.15, thickness: 0.05, tessellation: 32 }, scene);
         marker.isVisible = false;
+        marker.isPickable = false;
         marker.rotationQuaternion = new BABYLON.Quaternion();
-        gl.addIncludedOnlyMesh(marker);
+        registerGlowMesh(marker);
         marker.material = neonMaterial;
 
         var hitTest;
@@ -740,13 +1220,13 @@ setNativeArPortalDefault("__nativeArPortalInvertOccluderSide", false);
         var nativeNearHitSkipLogged = false;
         xrTest.onHitTestResultObservable.add(function (results) {
             if (portalAppearded) {
-                marker.isVisible = false;
+                applyMarkerVisibility(false);
                 return;
             }
 
             var floorHit = selectSemanticFloorHitResult(results);
             if (floorHit) {
-                marker.isVisible = true;
+                applyMarkerVisibility(true);
                 updateMarkerPlacementCandidate(floorHit);
                 if (!nativeHitTestLogged) {
                     nativeHitTestLogged = true;
@@ -759,7 +1239,7 @@ setNativeArPortalDefault("__nativeArPortalInvertOccluderSide", false);
                     nativeAutoPlacePortal("settled-hit-test");
                 }
             } else {
-                marker.isVisible = false;
+                applyMarkerVisibility(false);
                 markerSettleHasCandidate = false;
                 markerSettleFrames = 0;
                 markerSettleFloorPlaneId = null;
@@ -818,11 +1298,35 @@ setNativeArPortalDefault("__nativeArPortalInvertOccluderSide", false);
 
         var virtualWorldResult = await BABYLON.SceneLoader.ImportMeshAsync("", ASSET_ROOT_URL, HILL_VALLEY_FILE, scene);
         scene.clearColor = new BABYLON.Color4(0, 0, 0, 0);
+        configurePortalRealtimeLights(scene, virtualWorldResult.meshes);
+        applyRealtimeMaterialOverrides(scene);
+        var nativePortalIblShadows = enablePortalIblShadows(scene, xrCamera, virtualWorldResult.meshes);
+        var nativePortalSSAO2 = enablePortalSSAO2(scene, xrCamera);
+        void nativePortalSSAO2;
 
         var nativeHillDebugMaterial = new BABYLON.StandardMaterial("nativeHillDebugMaterial", scene);
         nativeHillDebugMaterial.disableLighting = true;
         nativeHillDebugMaterial.diffuseColor = new BABYLON.Color3(0.1, 1, 0.25);
         nativeHillDebugMaterial.emissiveColor = new BABYLON.Color3(0.1, 1, 0.25);
+
+        var importedNodes = [];
+        for (var importedMeshIndex = 0; importedMeshIndex < virtualWorldResult.meshes.length; importedMeshIndex++) {
+            importedNodes.push(virtualWorldResult.meshes[importedMeshIndex]);
+        }
+        if (virtualWorldResult.transformNodes) {
+            for (var importedTransformIndex = 0; importedTransformIndex < virtualWorldResult.transformNodes.length; importedTransformIndex++) {
+                importedNodes.push(virtualWorldResult.transformNodes[importedTransformIndex]);
+            }
+        }
+
+        function isImportedNode(node) {
+            for (var importedNodeIndex = 0; importedNodeIndex < importedNodes.length; importedNodeIndex++) {
+                if (importedNodes[importedNodeIndex] === node) {
+                    return true;
+                }
+            }
+            return false;
+        }
 
         for (var childIndex = 0; childIndex < virtualWorldResult.meshes.length; childIndex++) {
             var child = virtualWorldResult.meshes[childIndex];
@@ -831,7 +1335,15 @@ setNativeArPortalDefault("__nativeArPortalInvertOccluderSide", false);
                 child.material = nativeHillDebugMaterial;
             }
             prepareStaticMeshForFastPath(child);
-            child.parent = rootScene;
+            if (!isImportedNode(child.parent)) {
+                child.parent = rootScene;
+            }
+        }
+        for (var nodeIndex = 0; nodeIndex < importedNodes.length; nodeIndex++) {
+            var importedNode = importedNodes[nodeIndex];
+            if (importedNode && !isImportedNode(importedNode.parent)) {
+                importedNode.parent = rootScene;
+            }
         }
 
         var nativeTextureCount = scene.textures ? scene.textures.length : 0;
@@ -894,6 +1406,8 @@ setNativeArPortalDefault("__nativeArPortalInvertOccluderSide", false);
         var portalLastSignedDistance = null;
         var portalLastLocalCoordinates = { x: 0, y: 0, z: 0 };
         var portalLastInAperture = false;
+        var portalMeshDiagnosticLogged = false;
+        var portalMeshDiagnosticFrames = 0;
         var portalPlaneCenter = new BABYLON.Vector3();
         var portalRight = new BABYLON.Vector3(1, 0, 0);
         var portalUp = new BABYLON.Vector3(0, 1, 0);
@@ -901,6 +1415,7 @@ setNativeArPortalDefault("__nativeArPortalInvertOccluderSide", false);
         var portalRotationQuaternion = new BABYLON.Quaternion();
         var portalAnchorPosition = new BABYLON.Vector3();
         var portalAnchorRotation = new BABYLON.Quaternion();
+        var portalAnchorUpdateIgnoredLogged = false;
         var portalYaw = 0;
         var portalHalfWidth = 0.62;
         var portalHalfHeight = 1.08;
@@ -1043,6 +1558,22 @@ setNativeArPortalDefault("__nativeArPortalInvertOccluderSide", false);
                 }
 
                 anchor.transformationMatrix.decompose(undefined, portalAnchorRotation, portalAnchorPosition);
+                if (globalThis.__nativeArPortalApplyAnchorUpdates !== true) {
+                    if (!portalAnchorUpdateIgnoredLogged) {
+                        portalAnchorUpdateIgnoredLogged = true;
+                        reportStatus("native-xr-portal:anchor-update-ignored:delta=" + vectorDistance(portalAnchorPosition, portalPosition).toFixed(3) +
+                            ":anchor=" + formatVector3(portalAnchorPosition) +
+                            ":portal=" + formatVector3(portalPosition));
+                    }
+                    return;
+                }
+
+                if (vectorDistance(portalAnchorPosition, portalPosition) > 0.35) {
+                    reportStatus("native-xr-portal:anchor-update-rejected:delta=" + vectorDistance(portalAnchorPosition, portalPosition).toFixed(3) +
+                        ":anchor=" + formatVector3(portalAnchorPosition) +
+                        ":portal=" + formatVector3(portalPosition));
+                    return;
+                }
                 rootPortal.position.copyFrom(portalAnchorPosition);
                 portalPosition.copyFrom(portalAnchorPosition);
             });
@@ -1058,43 +1589,70 @@ setNativeArPortalDefault("__nativeArPortalInvertOccluderSide", false);
                 }
             }
 
-            for (var materialIndex = 0; materialIndex < scene.materials.length; materialIndex++) {
-                if (scene.materials[materialIndex] && typeof scene.materials[materialIndex].freeze === "function") {
-                    scene.materials[materialIndex].freeze();
+            var frozenMaterialCount = 0;
+            if (globalThis.__nativeArPortalFreezeMaterials === true) {
+                for (var materialIndex = 0; materialIndex < scene.materials.length; materialIndex++) {
+                    if (scene.materials[materialIndex] && typeof scene.materials[materialIndex].freeze === "function") {
+                        scene.materials[materialIndex].freeze();
+                        frozenMaterialCount++;
+                    }
                 }
             }
 
-            if (globalThis.__nativeArPortalFreezeActiveMeshes !== false && typeof scene.freezeActiveMeshes === "function") {
-                try {
-                    if (!scene._frustumPlanes && typeof scene.updateTransformMatrix === "function") {
-                        scene.updateTransformMatrix();
-                    }
-                    if (typeof scene._evaluateActiveMeshes === "function") {
-                        scene._evaluateActiveMeshes();
-                    }
-                    var activeMeshes = scene._activeMeshes && scene._activeMeshes.data ? scene._activeMeshes.data : [];
-                    var activeMeshCount = scene._activeMeshes && scene._activeMeshes.length !== undefined ? scene._activeMeshes.length : activeMeshes.length;
-                    for (var activeMeshIndex = 0; activeMeshIndex < activeMeshCount; activeMeshIndex++) {
-                        if (activeMeshes[activeMeshIndex] && typeof activeMeshes[activeMeshIndex]._freeze === "function") {
-                            activeMeshes[activeMeshIndex]._freeze();
-                        }
-                    }
-                    scene._activeMeshesFrozen = true;
-                    scene._activeMeshesFrozenButKeepClipping = false;
-                    scene._skipEvaluateActiveMeshesCompletely = true;
-                    scene.blockMaterialDirtyMechanism = true;
-                    reportStatus("native-xr-portal:active-meshes-forced:count=" + String(activeMeshCount));
-                } catch (error) {
-                    reportStatus("native-xr-portal:active-meshes-force-error:" + String(error && error.message ? error.message : error));
-                }
-                scene.freezeActiveMeshes(true, function () {
-                    scene.blockMaterialDirtyMechanism = true;
-                    reportStatus("native-xr-portal:active-meshes-frozen");
-                }, function (message) {
-                    reportStatus("native-xr-portal:active-meshes-freeze-error:" + String(message));
-                }, true, false);
+            reportStatus("native-xr-portal:static-meshes-frozen:materials=" + String(frozenMaterialCount));
+        }
+
+        function logPortalMeshDiagnostics(label) {
+            if (globalThis.__nativeArPortalLogMeshDiagnostics !== true) {
+                return;
             }
-            reportStatus("native-xr-portal:static-meshes-frozen:materials=" + String(scene.materials.length));
+            if (portalMeshDiagnosticLogged) {
+                return;
+            }
+            portalMeshDiagnosticLogged = true;
+
+            var rootMeshes = rootScene && typeof rootScene.getChildMeshes === "function" ? rootScene.getChildMeshes(false) : [];
+            var activeMeshes = scene._activeMeshes && scene._activeMeshes.data ? scene._activeMeshes.data : [];
+            var activeMeshCount = scene._activeMeshes && scene._activeMeshes.length !== undefined ? scene._activeMeshes.length : activeMeshes.length;
+            var activeRootMeshes = 0;
+            var activeDeloreanMeshes = 0;
+            var activeNonDeloreanMeshes = 0;
+            var enabledRootMeshes = 0;
+            var visibleRootMeshes = 0;
+
+            var rootMeshSet = new Set();
+            for (var rootMeshIndex = 0; rootMeshIndex < rootMeshes.length; rootMeshIndex++) {
+                var rootMesh = rootMeshes[rootMeshIndex];
+                rootMeshSet.add(rootMesh);
+                if (rootMesh && rootMesh.isEnabled && rootMesh.isEnabled()) {
+                    enabledRootMeshes++;
+                }
+                if (rootMesh && rootMesh.isVisible !== false && rootMesh.visibility !== 0) {
+                    visibleRootMeshes++;
+                }
+            }
+
+            for (var activeMeshIndex = 0; activeMeshIndex < activeMeshCount; activeMeshIndex++) {
+                var activeMesh = activeMeshes[activeMeshIndex];
+                if (!rootMeshSet.has(activeMesh)) {
+                    continue;
+                }
+
+                activeRootMeshes++;
+                if (/d1_|delorean/i.test(String(activeMesh.name || ""))) {
+                    activeDeloreanMeshes++;
+                } else {
+                    activeNonDeloreanMeshes++;
+                }
+            }
+
+            reportStatus("native-xr-portal:mesh-diagnostics:" + String(label || "post-place") +
+                ":root=" + String(rootMeshes.length) +
+                ":enabled=" + String(enabledRootMeshes) +
+                ":visible=" + String(visibleRootMeshes) +
+                ":activeRoot=" + String(activeRootMeshes) +
+                ":activeDelorean=" + String(activeDeloreanMeshes) +
+                ":activeNonDelorean=" + String(activeNonDeloreanMeshes));
         }
 
         function updateMarkerPlacementCandidate(result) {
@@ -1197,7 +1755,7 @@ setNativeArPortalDefault("__nativeArPortalInvertOccluderSide", false);
 
                 rootScene.setEnabled(true);
                 rootOccluder.setEnabled(true);
-                marker.isVisible = false;
+                applyMarkerVisibility(false);
                 if (xrTest) {
                     xrTest.paused = true;
                 }
@@ -1256,12 +1814,14 @@ setNativeArPortalDefault("__nativeArPortalInvertOccluderSide", false);
                 rootPilar.translate(BABYLON.Axis.Y, 1);
                 rootPilar.translate(BABYLON.Axis.X, -0.5);
                 rootPilar.translate(BABYLON.Axis.Z, 0.05);
+                createSceneReflectionProbeForPortal(scene, virtualWorldResult.meshes, rootPortal.position);
                 resetPortalCrossingState(currentCameraPosition());
                 tryCreatePortalAnchor(hitTest);
+                updatePortalIblShadowsAfterPlacement(nativePortalIblShadows);
 
-                gl.addIncludedOnlyMesh(pilar1);
-                gl.addIncludedOnlyMesh(pilar2);
-                gl.addIncludedOnlyMesh(pilar3);
+                registerGlowMesh(pilar1);
+                registerGlowMesh(pilar2);
+                registerGlowMesh(pilar3);
                 pilar1.material = neonMaterial;
                 pilar2.material = neonMaterial;
                 pilar3.material = neonMaterial;
@@ -1328,7 +1888,7 @@ setNativeArPortalDefault("__nativeArPortalInvertOccluderSide", false);
         }, 6500);
 
         scene.onBeforeRenderObservable.add(function () {
-            applyMarkerVisibility(!portalAppearded);
+            applyMarkerVisibility(!portalAppearded && markerSettleHasCandidate);
 
             if (portalPosition && portalAppearded) {
                 var now = performance.now();
@@ -1357,7 +1917,19 @@ setNativeArPortalDefault("__nativeArPortalInvertOccluderSide", false);
                     applyPortalOcclusionForInsideState(updatePortalInsideState(currentCameraPosition()));
                 }
             }
+
         });
+
+        if (globalThis.__nativeArPortalLogMeshDiagnostics === true) {
+            scene.onAfterRenderObservable.add(function () {
+                if (portalAppearded && !portalMeshDiagnosticLogged) {
+                    portalMeshDiagnosticFrames++;
+                    if (portalMeshDiagnosticFrames >= 8) {
+                        logPortalMeshDiagnostics("post-place");
+                    }
+                }
+            });
+        }
 
         return scene;
     }

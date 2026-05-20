@@ -1170,7 +1170,7 @@ namespace Babylon::Plugins::NativeWebGPU
             return promiseCtorValue.As<Napi::Function>().New({executor});
         }
 
-        Napi::Object CreateSet(Napi::Env env)
+        Napi::Object CreateSet(Napi::Env env, std::initializer_list<const char*> values = {})
         {
             auto setCtorValue = env.Global().Get("Set");
             if (!setCtorValue.IsFunction())
@@ -1178,7 +1178,27 @@ namespace Babylon::Plugins::NativeWebGPU
                 return Napi::Array::New(env);
             }
 
-            return setCtorValue.As<Napi::Function>().New({});
+            auto set = setCtorValue.As<Napi::Function>().New({});
+            auto addValue = set.Get("add");
+            if (addValue.IsFunction())
+            {
+                auto add = addValue.As<Napi::Function>();
+                for (const char* value : values)
+                {
+                    add.Call(set, {Napi::String::New(env, value)});
+                }
+            }
+
+            return set;
+        }
+
+        Napi::Object CreateFeatureSet(Napi::Env env)
+        {
+#if defined(__APPLE__)
+            return CreateSet(env, {"texture-compression-astc"});
+#else
+            return CreateSet(env);
+#endif
         }
 
         // TODO(spec-compliance): These limits are hardcoded conservative defaults rather
@@ -2252,7 +2272,7 @@ namespace Babylon::Plugins::NativeWebGPU
             auto device = Napi::Object::New(env);
             auto noOp = GetNoOpFunction(env);
 
-            device.Set("features", CreateSet(env));
+            device.Set("features", CreateFeatureSet(env));
             device.Set("limits", CreateLimits(env));
             device.Set("queue", CreateGpuQueue(env));
             // TODO(spec-compliance): device.lost is a never-resolving promise. The shim
@@ -2597,7 +2617,7 @@ namespace Babylon::Plugins::NativeWebGPU
         {
             auto adapter = Napi::Object::New(env);
 
-            adapter.Set("features", CreateSet(env));
+            adapter.Set("features", CreateFeatureSet(env));
             adapter.Set("limits", CreateLimits(env));
             adapter.Set("isFallbackAdapter", Napi::Boolean::New(env, false));
 
