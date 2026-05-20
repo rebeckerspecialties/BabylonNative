@@ -3,6 +3,9 @@
 #include <napi/env.h>
 #include <Babylon/Api.h>
 
+#include <functional>
+#include <memory>
+
 namespace Babylon::Plugins
 {
     class NativeXr final

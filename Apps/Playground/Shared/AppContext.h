@@ -5,6 +5,9 @@
 #include <Babylon/AppRuntime.h>
 #include <Babylon/Graphics/Device.h>
 #include <Babylon/Polyfills/Console.h>
+#if defined(BABYLON_NATIVE_PLAYGROUND_HAS_NATIVEXR)
+#include <Babylon/Plugins/NativeXr.h>
+#endif
 #include <Babylon/ScriptLoader.h>
 #if defined(BABYLON_NATIVE_PLAYGROUND_HAS_CANVAS)
 #include <Babylon/Polyfills/Canvas.h>
@@ -52,6 +55,13 @@ public:
     Babylon::Plugins::NativeInput* Input() { return m_input; }
     Babylon::ScriptLoader& ScriptLoader() { return *m_scriptLoader; }
     void DispatchAnimationFrame();
+#if defined(BABYLON_NATIVE_PLAYGROUND_HAS_NATIVEXR)
+    void UpdateXrWindow(void* windowPtr);
+    bool IsXrActive() const { return m_xrActive.load(); }
+#else
+    void UpdateXrWindow(void*) {}
+    bool IsXrActive() const { return false; }
+#endif
 
 private:
     std::optional<Babylon::Graphics::Device> m_device;
@@ -62,5 +72,10 @@ private:
     std::optional<Babylon::ScriptLoader> m_scriptLoader;
 #if defined(BABYLON_NATIVE_PLAYGROUND_HAS_CANVAS)
     std::optional<Babylon::Polyfills::Canvas> m_canvas;
+#endif
+#if defined(BABYLON_NATIVE_PLAYGROUND_HAS_NATIVEXR)
+    std::optional<Babylon::Plugins::NativeXr> m_xr;
+    void* m_xrWindowPtr{};
+    std::atomic_bool m_xrActive{false};
 #endif
 };

@@ -45,7 +45,7 @@ namespace Babylon
             // This is correct for devices with a single view, but is likely incorrect for devices with multiple views (eg. VR/AR headsets with binocular views).
             if (frame.Views.size() > 0)
             {
-                m_transform.Update(frame.Views[0].Space, true);
+                m_transform.Update(frame.Views[0].Space, false);
             }
 
             // Update the views array if necessary.

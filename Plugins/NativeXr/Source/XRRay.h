@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cmath>
+
 namespace Babylon
 {
     // Implementation of XRRay: https://immersive-web.github.io/hit-test/#xrray-interface
@@ -52,10 +54,10 @@ namespace Babylon
                     xr::Pose pose{transform->GetNativePose()};
                     tempVals.Origin = pose.Position;
 
-                    // Grab forward direction from quaternion
-                    tempVals.Direction.X = 2 * ((pose.Orientation.X * pose.Orientation.Z) + (pose.Orientation.W * pose.Orientation.Y));
-                    tempVals.Direction.Y = 2 * ((pose.Orientation.Y * pose.Orientation.Z) - (pose.Orientation.W * pose.Orientation.X));
-                    tempVals.Direction.Z = 1 - (2 * ((pose.Orientation.X * pose.Orientation.X) + (pose.Orientation.Y * pose.Orientation.Y)));
+                    // XRRay constructed from an XRRigidTransform points down the transform's -Z axis.
+                    tempVals.Direction.X = -2 * ((pose.Orientation.X * pose.Orientation.Z) + (pose.Orientation.W * pose.Orientation.Y));
+                    tempVals.Direction.Y = -2 * ((pose.Orientation.Y * pose.Orientation.Z) - (pose.Orientation.W * pose.Orientation.X));
+                    tempVals.Direction.Z = -1 + (2 * ((pose.Orientation.X * pose.Orientation.X) + (pose.Orientation.Y * pose.Orientation.Y)));
                 }
                 else
                 {
@@ -100,8 +102,20 @@ namespace Babylon
             }
 
             // Normalize the direction
-            auto norm{bx::normalize(bx::Vec3(tempVals.Direction.X, tempVals.Direction.Y, tempVals.Direction.Z))};
-            tempVals.Direction = {norm.x, norm.y, norm.z};
+            const auto directionLength = std::sqrt(
+                (tempVals.Direction.X * tempVals.Direction.X) +
+                (tempVals.Direction.Y * tempVals.Direction.Y) +
+                (tempVals.Direction.Z * tempVals.Direction.Z));
+            if (directionLength > 0.f)
+            {
+                tempVals.Direction.X /= directionLength;
+                tempVals.Direction.Y /= directionLength;
+                tempVals.Direction.Z /= directionLength;
+            }
+            else
+            {
+                tempVals.Direction = {0.f, 0.f, -1.f};
+            }
 
             m_origin.Set("x", Napi::Value::From(info.Env(), tempVals.Origin.X));
             m_origin.Set("y", Napi::Value::From(info.Env(), tempVals.Origin.Y));

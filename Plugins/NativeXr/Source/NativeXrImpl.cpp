@@ -5,39 +5,103 @@
 #include <XR.h>
 
 #include <Babylon/Graphics/DeviceContext.h>
-#include <Babylon/Graphics/FrameBuffer.h>
+#include <Babylon/Graphics/WgpuInterop.h>
+#include <Babylon/Plugins/NativeWebGPU.h>
 #include <napi/napi.h>
-#include <napi/pointer.h>
 #include <arcana/threading/task.h>
 #include <arcana/tracing/trace_region.h>
+#include <array>
+#include <cstdio>
+#include <cstdlib>
+#include <sstream>
 #include "NativeXrImpl.h"
 
 namespace Babylon
 {
     namespace
     {
-        bgfx::TextureFormat::Enum XrTextureFormatToBgfxFormat(xr::TextureFormat format)
+        constexpr uint32_t WEBGPU_TEXTURE_USAGE_COPY_SRC{0x01};
+        constexpr uint32_t WEBGPU_TEXTURE_USAGE_TEXTURE_BINDING{0x04};
+        constexpr uint32_t WEBGPU_TEXTURE_USAGE_RENDER_ATTACHMENT{0x10};
+
+        const char* XrTextureFormatToWebGpuFormat(xr::TextureFormat format)
         {
             switch (format)
             {
-                // Color Formats
-                // NOTE: Use linear formats even though XR requests sRGB to match what happens on the web.
-                //       WebGL shaders expect sRGB output while native shaders expect linear output.
             case xr::TextureFormat::BGRA8_SRGB:
-                return bgfx::TextureFormat::BGRA8;
+                return "bgra8unorm";
             case xr::TextureFormat::RGBA8_SRGB:
-                return bgfx::TextureFormat::RGBA8;
-
-                // Depth Formats
+                return "rgba8unorm";
+            case xr::TextureFormat::D32FS8:
+                return "depth32float-stencil8";
             case xr::TextureFormat::D24S8:
-                return bgfx::TextureFormat::D24S8;
+                return "depth24plus-stencil8";
             case xr::TextureFormat::D16:
-                return bgfx::TextureFormat::D16;
+                return "depth16unorm";
 
             default:
                 throw std::runtime_error{ "Unsupported texture format" };
             }
         }
+
+        const char* XrDepthTextureFormatToWebGpuFormat(xr::TextureFormat format)
+        {
+            switch (format)
+            {
+            case xr::TextureFormat::D32FS8:
+            case xr::TextureFormat::D24S8:
+                // WebGPU requires an optional feature for depth32float-stencil8.
+                // NativeXR owns this wgpu depth target, so prefer the portable
+                // browser-shaped depth/stencil format instead of mirroring ARKit.
+                return "depth24plus-stencil8";
+
+            default:
+                return XrTextureFormatToWebGpuFormat(format);
+            }
+        }
+
+        std::string MakeTextureDescriptorJson(
+            const char* label,
+            uint32_t width,
+            uint32_t height,
+            uint32_t depthOrArrayLayers,
+            const char* format,
+            uint32_t usage)
+        {
+            std::ostringstream descriptor{};
+            descriptor
+                << "{\"label\":\"" << label
+                << "\",\"size\":{\"width\":" << width
+                << ",\"height\":" << height
+                << ",\"depthOrArrayLayers\":" << std::max<uint32_t>(1, depthOrArrayLayers)
+                << "},\"mipLevelCount\":1,\"sampleCount\":1,\"dimension\":\"2d\",\"format\":\""
+                << format << "\",\"usage\":" << usage << "}";
+            return descriptor.str();
+        }
+
+        std::string GetLastWgpuError()
+        {
+            std::array<char, 2048> buffer{};
+            if (babylon_wgpu_get_last_error(buffer.data(), buffer.size()) && buffer[0] != '\0')
+            {
+                return buffer.data();
+            }
+
+            return {};
+        }
+
+        bool ShouldUseAsyncXrComposite()
+        {
+            static const bool enabled = std::getenv("BABYLON_NATIVE_XR_ASYNC_COMPOSITE") != nullptr;
+            static bool didLog{};
+            if (enabled && !didLog)
+            {
+                didLog = true;
+                std::fprintf(stderr, "NativeXR async composite enabled: skipping per-frame WebGPU queue wait before AR compositing.\n");
+            }
+            return enabled;
+        }
+
     }
 
     namespace Plugins
@@ -96,7 +160,13 @@ namespace Babylon
                         throw std::runtime_error{"Failed to initialize xr system."};
                     }
 
-                    return xr::System::Session::CreateAsync(m_system, bgfx::getInternalData()->context, bgfx::getInternalData()->commandQueue, [this, thisRef{shared_from_this()}] { return m_windowPtr; })
+                    auto* metalDevice = babylon_wgpu_native_get_metal_device();
+                    if (metalDevice == nullptr)
+                    {
+                        throw std::runtime_error{"NativeXR requires an initialized Metal-backed NativeWebGPU device."};
+                    }
+
+                    return xr::System::Session::CreateAsync(m_system, metalDevice, nullptr, [this, thisRef{shared_from_this()}] { return m_windowPtr; })
                         .then(m_sessionState->GraphicsContext.AfterRenderScheduler(), arcana::cancellation::none(), [this, thisRef{shared_from_this()}](std::shared_ptr<xr::System::Session> session) {
                             m_sessionState->Session = std::move(session);
                             NotifySessionStateChanged(true);
@@ -113,11 +183,27 @@ namespace Babylon
 
             m_sessionState->CancellationSource.cancel();
 
+            if (!m_sessionState->DestroyRenderTexture.IsEmpty())
+            {
+                for (auto& entry : m_sessionState->TextureToViewConfigurationMap)
+                {
+                    auto& viewConfig = entry.second;
+                    for (auto& renderTarget : viewConfig.RenderTargets)
+                    {
+                        if (!renderTarget.JsRenderTarget.IsEmpty())
+                        {
+                            m_sessionState->DestroyRenderTexture.Call({renderTarget.JsRenderTarget.Value()});
+                        }
+                    }
+                }
+            }
+
             m_sessionState->ActiveViewConfigurations.clear();
             m_sessionState->ViewConfigurationStartViewIdx.clear();
             m_sessionState->TextureToViewConfigurationMap.clear();
             m_sessionState->ScheduleFrameCallbacks.clear();
             m_sessionState->CreateRenderTexture.Reset();
+            m_sessionState->DestroyRenderTexture.Reset();
 
             // Don't try to end the session while it is still starting.
             m_endTask = m_beginTask->then(arcana::inline_scheduler, arcana::cancellation::none(), [this, thisRef{shared_from_this()}] {
@@ -152,23 +238,36 @@ namespace Babylon
 
         void NativeXr::Impl::ScheduleFrame(std::function<void(const std::shared_ptr<const xr::System::Session::Frame>&)>&& callback)
         {
+            assert(m_sessionState != nullptr);
+
+            // Queue callbacks even while a frame is in progress. WebXR render
+            // loops request the next frame from inside the current frame
+            // callback; starting it immediately races BeginFrame/EndFrame.
+            m_sessionState->ScheduleFrameCallbacks.emplace_back(std::move(callback));
+
             if (m_sessionState->FrameScheduled)
+            {
+                return;
+            }
+
+            SchedulePendingFrame();
+        }
+
+        void NativeXr::Impl::SchedulePendingFrame()
+        {
+            assert(m_sessionState != nullptr);
+
+            if (m_sessionState->FrameScheduled || m_sessionState->ScheduleFrameCallbacks.empty())
             {
                 return;
             }
 
             m_sessionState->FrameScheduled = true;
 
-            // REVIEW: This should technically be before the check for m_frameScheduled, but for some
-            // reason requestAnimationFrame is being called twice when starting XR.
-            m_sessionState->ScheduleFrameCallbacks.emplace_back(callback);
-
             m_sessionState->FrameTask = arcana::make_task(m_sessionState->Update.Scheduler(), m_sessionState->CancellationSource, [this, thisRef{shared_from_this()}] {
                 BeginFrame();
 
                 return arcana::make_task(m_runtimeScheduler, m_sessionState->CancellationSource, [this, updateToken{m_sessionState->Update.GetUpdateToken()}, thisRef{shared_from_this()}]() {
-                    m_sessionState->FrameScheduled = false;
-
                     BeginUpdate();
 
                     {
@@ -188,6 +287,8 @@ namespace Babylon
                       }
                   }).then(m_sessionState->GraphicsContext.AfterRenderScheduler(), arcana::cancellation::none(), [this, thisRef{shared_from_this()}](const arcana::expected<void, std::exception_ptr>&) {
                     EndFrame();
+                    m_sessionState->FrameScheduled = false;
+                    SchedulePendingFrame();
                 });
             });
         }
@@ -207,11 +308,15 @@ namespace Babylon
                     if (itViewConfig != m_sessionState->TextureToViewConfigurationMap.end())
                     {
                         auto& viewConfig = itViewConfig->second;
-                        auto& frameBuffers = viewConfig.FrameBuffers;
-                        for (const auto& frameBuffer : frameBuffers)
+                        if (!m_sessionState->DestroyRenderTexture.IsEmpty())
                         {
-                            auto& jsTexture = viewConfig.JsTextures[frameBuffer];
-                            m_sessionState->DestroyRenderTexture.Call({jsTexture.Value()});
+                            for (auto& renderTarget : viewConfig.RenderTargets)
+                            {
+                                if (!renderTarget.JsRenderTarget.IsEmpty())
+                                {
+                                    m_sessionState->DestroyRenderTexture.Call({renderTarget.JsRenderTarget.Value()});
+                                }
+                            }
                         }
 
                         m_sessionState->TextureToViewConfigurationMap.erase(texturePointer);
@@ -247,88 +352,76 @@ namespace Babylon
                     viewConfig.DepthTexturePointer = view.DepthTexturePointer;
                     viewConfig.ViewTextureSize = view.ColorTextureSize;
 
-                    // If a texture width or height is 0, bgfx will assert (can't create 0 sized texture). Asserting here instead of deeper in bgfx rendering.
-                    // Depth (numLayers) can be 0, bgfx will just reinterpret it as max(numLayers, 1).
                     assert(view.ColorTextureSize.Width != 0);
                     assert(view.ColorTextureSize.Height != 0);
                     assert(view.ColorTextureSize.Width == view.DepthTextureSize.Width);
                     assert(view.ColorTextureSize.Height == view.DepthTextureSize.Height);
                     assert(view.ColorTextureSize.Depth == view.DepthTextureSize.Depth);
 
-                    const auto textureWidth = static_cast<uint16_t>(view.ColorTextureSize.Width);
-                    const auto textureHeight = static_cast<uint16_t>(view.ColorTextureSize.Height);
-                    const auto textureLayers = std::max(static_cast<uint16_t>(1), static_cast<uint16_t>(view.ColorTextureSize.Depth));
+                    const auto textureWidth = static_cast<uint32_t>(view.ColorTextureSize.Width);
+                    const auto textureHeight = static_cast<uint32_t>(view.ColorTextureSize.Height);
+                    const auto textureLayers = std::max<uint32_t>(1, static_cast<uint32_t>(view.ColorTextureSize.Depth));
+                    const auto* colorFormat = XrTextureFormatToWebGpuFormat(view.ColorTextureFormat);
+                    const auto* depthFormat = XrDepthTextureFormatToWebGpuFormat(view.DepthTextureFormat);
+                    const auto colorUsage = WEBGPU_TEXTURE_USAGE_COPY_SRC | WEBGPU_TEXTURE_USAGE_TEXTURE_BINDING | WEBGPU_TEXTURE_USAGE_RENDER_ATTACHMENT;
+                    const auto depthUsage = WEBGPU_TEXTURE_USAGE_RENDER_ATTACHMENT;
+                    const auto colorDescriptor = MakeTextureDescriptorJson("NativeXR.color", textureWidth, textureHeight, textureLayers, colorFormat, colorUsage);
+                    const auto depthDescriptor = MakeTextureDescriptorJson("NativeXR.depth", textureWidth, textureHeight, textureLayers, depthFormat, depthUsage);
+                    const auto colorTextureId = babylon_wgpu_native_import_metal_texture(view.ColorTexturePointer, colorDescriptor.c_str());
+                    const auto depthTextureId = babylon_wgpu_native_create_texture(depthDescriptor.c_str());
 
-                    // Create textures with the desired size. It will be freed and replaced with overrideInternal call
-                    // This is mandatory as overrideInternal do not update texture size.
-                    // And size is used for determining viewport when rendering to texture.
-                    auto colorTextureFormat = XrTextureFormatToBgfxFormat(view.ColorTextureFormat);
-                    auto colorTexture = bgfx::createTexture2D(textureWidth, textureHeight, false, textureLayers, colorTextureFormat, BGFX_TEXTURE_RT);
-                    m_sessionState->GraphicsContext.AddTexture(colorTexture, textureWidth, textureHeight, false, textureLayers, colorTextureFormat);
-
-                    auto depthTextureFormat = XrTextureFormatToBgfxFormat(view.DepthTextureFormat);
-                    auto depthTexture = bgfx::createTexture2D(textureWidth, textureHeight, false, textureLayers, depthTextureFormat, BGFX_TEXTURE_RT);
-                    m_sessionState->GraphicsContext.AddTexture(depthTexture, textureWidth, textureHeight, false, textureLayers, depthTextureFormat);
+                    if (colorTextureId == 0 || depthTextureId == 0)
+                    {
+                        std::ostringstream error{};
+                        error << "NativeXR failed to create WebGPU render targets for ARKit frame"
+                            << " (colorImportId=" << colorTextureId
+                            << ", depthCreateId=" << depthTextureId << ")";
+                        const auto detail = GetLastWgpuError();
+                        if (!detail.empty())
+                        {
+                            error << ": " << detail;
+                        }
+                        throw std::runtime_error{error.str()};
+                    }
 
                     auto requiresAppClear = view.RequiresAppClear;
 
-                    arcana::make_task(m_sessionState->GraphicsContext.AfterRenderScheduler(), arcana::cancellation::none(), [colorTexture, depthTexture, &viewConfig]() {
-                        bgfx::overrideInternal(colorTexture, reinterpret_cast<uintptr_t>(viewConfig.ColorTexturePointer));
-                        bgfx::overrideInternal(depthTexture, reinterpret_cast<uintptr_t>(viewConfig.DepthTexturePointer));
-                    }).then(m_runtimeScheduler, m_sessionState->CancellationSource, [this, thisRef{shared_from_this()}, colorTexture, depthTexture, colorTextureFormat, requiresAppClear, &viewConfig]() {
-                          const auto eyeCount = std::max(static_cast<uint16_t>(1), static_cast<uint16_t>(viewConfig.ViewTextureSize.Depth));
-                          // TODO (rgerd): Remove old framebuffers from resource table?
-                          viewConfig.FrameBuffers.resize(eyeCount);
-                          for (uint16_t eyeIdx = 0; eyeIdx < eyeCount; eyeIdx++)
-                          {
-                              // See NativeEngine::CreateFrameBuffer: gate BGFX_RESOLVE_AUTO_GEN_MIPS on format caps and
-                              // always pass BGFX_RESOLVE_NONE for depth (depth formats don't support autogen mips).
-                              const bgfx::Caps* caps = bgfx::getCaps();
-                              const uint8_t colorResolve = 0 != (caps->formats[colorTextureFormat] & BGFX_CAPS_FORMAT_TEXTURE_MIP_AUTOGEN)
-                                  ? BGFX_RESOLVE_AUTO_GEN_MIPS
-                                  : BGFX_RESOLVE_NONE;
+                    const auto eyeCount = std::max<uint32_t>(1, static_cast<uint32_t>(viewConfig.ViewTextureSize.Depth));
+                    viewConfig.RenderTargets.resize(eyeCount);
+                    for (uint32_t eyeIdx = 0; eyeIdx < eyeCount; eyeIdx++)
+                    {
+                        auto& renderTarget = viewConfig.RenderTargets[eyeIdx];
+                        auto jsColorTexture = Plugins::NativeWebGPU::CreateTextureFromNativeId(
+                            m_env,
+                            colorTextureId,
+                            "NativeXR.color",
+                            colorFormat,
+                            textureWidth,
+                            textureHeight,
+                            textureLayers,
+                            colorUsage);
+                        auto jsDepthTexture = Plugins::NativeWebGPU::CreateTextureFromNativeId(
+                            m_env,
+                            depthTextureId,
+                            "NativeXR.depth",
+                            depthFormat,
+                            textureWidth,
+                            textureHeight,
+                            textureLayers,
+                            depthUsage);
 
-                              std::array<bgfx::Attachment, 2> attachments{};
-                              attachments[0].init(colorTexture, bgfx::Access::Write, eyeIdx, 1, 0, colorResolve);
-                              attachments[1].init(depthTexture, bgfx::Access::Write, eyeIdx, 1, 0, BGFX_RESOLVE_NONE);
+                        auto jsWidth{Napi::Value::From(m_env, textureWidth)};
+                        auto jsHeight{Napi::Value::From(m_env, textureHeight)};
+                        auto jsRenderTarget = m_sessionState->CreateRenderTexture.Call({jsWidth, jsHeight, m_env.Null(), jsColorTexture, jsDepthTexture}).As<Napi::Object>();
+                        jsRenderTarget.Set("skipInitialClear", Napi::Boolean::New(m_env, !requiresAppClear));
 
-                              auto frameBufferHandle = bgfx::createFrameBuffer(static_cast<uint8_t>(attachments.size()), attachments.data(), false);
-
-                              const auto frameBufferPtr = new Graphics::FrameBuffer(
-                                  m_sessionState->GraphicsContext,
-                                  frameBufferHandle,
-                                  static_cast<uint16_t>(viewConfig.ViewTextureSize.Width),
-                                  static_cast<uint16_t>(viewConfig.ViewTextureSize.Height),
-                                  true,
-                                  true,
-                                  true);
-
-                              auto& frameBuffer = *frameBufferPtr;
-
-                              // WebXR, at least in its current implementation, specifies an implicit default clear to black.
-                              // https://immersive-web.github.io/webxr/#xrwebgllayer-interface
-                              frameBuffer.Clear(*m_sessionState->Update.GetUpdateToken().GetEncoder(), BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH | BGFX_CLEAR_STENCIL, 0, 1.0f, 0);
-
-                              viewConfig.FrameBuffers[eyeIdx] = frameBufferPtr;
-
-                              auto jsWidth{Napi::Value::From(m_env, viewConfig.ViewTextureSize.Width)};
-                              auto jsHeight{Napi::Value::From(m_env, viewConfig.ViewTextureSize.Height)};
-                              auto jsFrameBuffer{Napi::Pointer<Graphics::FrameBuffer>::Create(m_env, frameBufferPtr, Napi::NapiPointerDeleter(frameBufferPtr))};
-                              viewConfig.JsTextures[frameBufferPtr] = Napi::Persistent(m_sessionState->CreateRenderTexture.Call({jsWidth, jsHeight, jsFrameBuffer}).As<Napi::Object>());
-                              // OpenXR doesn't pre-clear textures, and so we need to make sure the render target gets cleared before rendering the scene.
-                              // ARCore and ARKit effectively pre-clear by pre-compositing the camera feed.
-                              if (requiresAppClear)
-                              {
-                                  viewConfig.JsTextures[frameBufferPtr].Set("skipInitialClear", false);
-                              }
-                          }
-                          viewConfig.Initialized = true;
-                      }).then(arcana::inline_scheduler, m_sessionState->CancellationSource, [env{m_env}](const arcana::expected<void, std::exception_ptr>& result) {
-                        if (result.has_error())
-                        {
-                            Napi::Error::New(env, result.error()).ThrowAsJavaScriptException();
-                        }
-                    });
+                        renderTarget.ColorTextureId = colorTextureId;
+                        renderTarget.DepthTextureId = depthTextureId;
+                        renderTarget.JsColorTexture = Napi::Persistent(jsColorTexture);
+                        renderTarget.JsDepthTexture = Napi::Persistent(jsDepthTexture);
+                        renderTarget.JsRenderTarget = Napi::Persistent(jsRenderTarget);
+                    }
+                    viewConfig.Initialized = true;
                 }
                 else
                 {
@@ -353,6 +446,11 @@ namespace Babylon
             assert(m_sessionState->Frame != nullptr);
 
             arcana::trace_region endFrameRegion{"NativeXR::EndFrame"};
+
+            if (!ShouldUseAsyncXrComposite() && !babylon_wgpu_native_queue_wait_submitted_work())
+            {
+                throw std::runtime_error{"NativeXR failed while waiting for NativeWebGPU frame work before AR compositing."};
+            }
 
             m_sessionState->Frame->Render();
             m_sessionState->Frame.reset();

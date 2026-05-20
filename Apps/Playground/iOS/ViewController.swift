@@ -12,7 +12,10 @@ class ViewController: UIViewController {
 
     private let comparisonWidth = 600
     private let comparisonHeight = 400
+    private let maxDrawableDimension: CGFloat = 16384
     private var didInitializeBridge = false
+    private var lastXrActive = false
+    private var isApplyingDrawableSize = false
     #if os(tvOS)
     private var displayModeSwitchObserver: NSObjectProtocol?
     private var displayModeSwitchFallback: DispatchWorkItem?
@@ -72,6 +75,14 @@ class ViewController: UIViewController {
         initializeBridgeIfNeeded()
     }
 
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+
+        if didInitializeBridge, mtkView != nil, xrView != nil, mtkView.delegate != nil {
+            applyDrawableSize(initialDrawableSize(), notifyBridge: true)
+        }
+    }
+
     deinit {
         #if os(tvOS)
         removeDisplayModeSwitchObserver()
@@ -102,9 +113,12 @@ class ViewController: UIViewController {
         
         let device = MTLCreateSystemDefaultDevice()
         mtkView.device = device
+        xrView.device = device
         
         configureFrameRate(mtkView)
+        configureFrameRate(xrView)
         configureDrawable(mtkView)
+        configureDrawable(xrView)
         mtkView.depthStencilPixelFormat = .depth32Float
         
         #if !os(tvOS)
@@ -118,8 +132,9 @@ class ViewController: UIViewController {
         mtkView.addGestureRecognizer(gesture)
         #endif
         
+        view.layoutIfNeeded()
         let initialSize = initialDrawableSize()
-        mtkView.drawableSize = initialSize
+        applyDrawableSize(initialSize, notifyBridge: false)
         let initialWidth = drawableDimension(initialSize.width)
         let initialHeight = drawableDimension(initialSize.height)
         logDisplayState("initial drawable")
@@ -186,14 +201,24 @@ class ViewController: UIViewController {
     private func initialDrawableSize() -> CGSize {
         #if os(tvOS)
         let nativeBounds = currentScreen()?.nativeBounds ?? .zero
-        if nativeBounds.width > 0 && nativeBounds.height > 0 {
+        if isValidDrawableSize(nativeBounds.size) {
             return nativeBounds.size
         }
         let scale = nativeScale()
-        return CGSize(width: max(view.bounds.size.width * scale, 1), height: max(view.bounds.size.height * scale, 1))
+        return validDrawableSize(from: [
+            scaledSize(view.bounds.size, scale: scale),
+            CGSize(width: 480, height: 320),
+        ])
         #else
-        let scale = view.contentScaleFactor
-        return CGSize(width: view.bounds.size.width * scale, height: view.bounds.size.height * scale)
+        let screen = currentScreen() ?? UIScreen.main
+        let scale = screenScale()
+        return validDrawableSize(from: [
+            scaledSize(view.bounds.size, scale: scale),
+            scaledSize(view.window?.bounds.size ?? .zero, scale: scale),
+            scaledSize(screen.bounds.size, scale: scale),
+            screen.nativeBounds.size,
+            CGSize(width: 480, height: 320),
+        ])
         #endif
     }
 
@@ -206,22 +231,22 @@ class ViewController: UIViewController {
     }
 
     private func nativeScale() -> CGFloat {
-        #if os(tvOS)
         if let screen = currentScreen() {
-            return screen.nativeScale > 0 ? screen.nativeScale : screen.scale
+            if isValidScale(screen.nativeScale) {
+                return screen.nativeScale
+            }
+            if isValidScale(screen.scale) {
+                return screen.scale
+            }
         }
-        return view.contentScaleFactor > 0 ? view.contentScaleFactor : 1
-        #else
-        return view.contentScaleFactor
-        #endif
+        return isValidScale(view.contentScaleFactor) ? view.contentScaleFactor : 1
     }
 
     private func screenScale() -> CGFloat {
-        #if os(tvOS)
-        return currentScreen()?.scale ?? nativeScale()
-        #else
-        return UIScreen.main.scale
-        #endif
+        if let scale = currentScreen()?.scale, isValidScale(scale) {
+            return scale
+        }
+        return nativeScale()
     }
 
     private func drawableDimension(_ value: CGFloat) -> Int32 {
@@ -229,7 +254,73 @@ class ViewController: UIViewController {
             return 1
         }
 
-        return Int32(min(value.rounded(), CGFloat(Int32.max)))
+        return Int32(min(value.rounded(), maxDrawableDimension))
+    }
+
+    private func isValidScale(_ value: CGFloat) -> Bool {
+        return value.isFinite && value > 0 && value <= 8
+    }
+
+    private func isValidDrawableSize(_ size: CGSize) -> Bool {
+        return size.width.isFinite
+            && size.height.isFinite
+            && size.width > 0
+            && size.height > 0
+            && size.width <= maxDrawableDimension
+            && size.height <= maxDrawableDimension
+    }
+
+    private func scaledSize(_ size: CGSize, scale: CGFloat) -> CGSize {
+        guard isValidScale(scale) else {
+            return .zero
+        }
+        return CGSize(width: size.width * scale, height: size.height * scale)
+    }
+
+    private func validDrawableSize(from candidates: [CGSize]) -> CGSize {
+        for candidate in candidates {
+            if isValidDrawableSize(candidate) {
+                return candidate
+            }
+        }
+        return CGSize(width: 480, height: 320)
+    }
+
+    private func needsDrawableSizeUpdate(_ current: CGSize, _ next: CGSize) -> Bool {
+        return abs(current.width - next.width) >= 0.5 || abs(current.height - next.height) >= 0.5
+    }
+
+    private func applyDrawableSizeIfNeeded(to view: MTKView, size: CGSize) {
+        if needsDrawableSizeUpdate(view.drawableSize, size) {
+            view.drawableSize = size
+        }
+
+        if let layer = view.layer as? CAMetalLayer, needsDrawableSizeUpdate(layer.drawableSize, size) {
+            layer.drawableSize = size
+        }
+    }
+
+    private func applyDrawableSize(_ size: CGSize, notifyBridge: Bool) {
+        guard isValidDrawableSize(size) else {
+            NSLog("[Playground] Ignoring invalid resolved drawable size: %.3fx%.3f", size.width, size.height)
+            return
+        }
+
+        if isApplyingDrawableSize {
+            return
+        }
+
+        isApplyingDrawableSize = true
+        defer {
+            isApplyingDrawableSize = false
+        }
+
+        applyDrawableSizeIfNeeded(to: mtkView, size: size)
+        applyDrawableSizeIfNeeded(to: xrView, size: size)
+
+        if notifyBridge, let appDelegate = UIApplication.shared.delegate as? AppDelegate {
+            appDelegate._bridge?.resize(drawableDimension(size.width), height: drawableDimension(size.height))
+        }
     }
 
     private func logDisplayState(_ label: String) {
@@ -285,10 +376,8 @@ class ViewController: UIViewController {
     }
 
     private func configureDrawable(_ view: MTKView) {
+        view.autoResizeDrawable = false
         if isHdr10Run {
-            #if os(tvOS)
-            view.autoResizeDrawable = false
-            #endif
             view.colorPixelFormat = .rgba16Float
             if let layer = view.layer as? CAMetalLayer {
                 layer.pixelFormat = view.colorPixelFormat
@@ -305,7 +394,6 @@ class ViewController: UIViewController {
         }
 
         #if os(tvOS)
-        view.autoResizeDrawable = false
         view.colorPixelFormat = .bgra8Unorm_srgb
         if let layer = view.layer as? CAMetalLayer {
             layer.pixelFormat = view.colorPixelFormat
@@ -319,6 +407,7 @@ class ViewController: UIViewController {
     func setupViews() {
         mtkView = MTKView()
         mtkView.translatesAutoresizingMaskIntoConstraints = false
+        mtkView.layer.zPosition = 0
         view.addSubview(mtkView)
         let mtkViews = ["mtkView" : mtkView!]
         view.addConstraints(NSLayoutConstraint.constraints(withVisualFormat: "|[mtkView]|", options: [], metrics: nil, views: mtkViews))
@@ -328,11 +417,61 @@ class ViewController: UIViewController {
         configureDrawable(xrView)
         xrView.translatesAutoresizingMaskIntoConstraints = false
         xrView.isUserInteractionEnabled = false
-        xrView.isHidden = true
+        xrView.isPaused = true
+        xrView.enableSetNeedsDisplay = false
+        xrView.isOpaque = true
+        xrView.alpha = 0.001
+        xrView.layer.opacity = 0.001
+        xrView.layer.zPosition = 1
         view.addSubview(xrView)
         let xrViews = ["xrView" : xrView!]
         view.addConstraints(NSLayoutConstraint.constraints(withVisualFormat: "|[xrView]|", options: [], metrics: nil, views: xrViews))
         view.addConstraints(NSLayoutConstraint.constraints(withVisualFormat: "V:|[xrView]|", options: [], metrics: nil, views: xrViews))
+    }
+
+    private func applyXrPresentation(active xrActive: Bool) {
+        guard xrView != nil else { return }
+
+        let alpha: CGFloat = xrActive ? 1.0 : 0.001
+        xrView.isHidden = false
+        xrView.layer.isHidden = false
+        xrView.alpha = alpha
+        xrView.layer.opacity = Float(alpha)
+        xrView.layer.zPosition = 1
+
+        if xrActive {
+            #if swift(>=6.0)
+            view.bringSubviewToFront(xrView)
+            #else
+            view.bringSubview(toFront: xrView)
+            #endif
+        }
+
+        applyDrawableSize(initialDrawableSize(), notifyBridge: false)
+
+        NSLog("[Playground] XR view active=%d alpha=%.3f hidden=%d layerHidden=%d opacity=%.3f drawable=%.0fx%.0f bounds=%.0fx%.0f window=%d superview=%d z=%.1f",
+            xrActive ? 1 : 0,
+            xrView.alpha,
+            xrView.isHidden ? 1 : 0,
+            xrView.layer.isHidden ? 1 : 0,
+            xrView.layer.opacity,
+            xrView.drawableSize.width,
+            xrView.drawableSize.height,
+            xrView.bounds.width,
+            xrView.bounds.height,
+            xrView.window == nil ? 0 : 1,
+            xrView.superview == nil ? 0 : 1,
+            xrView.layer.zPosition)
+    }
+
+    private func updateXrPresentation(active xrActive: Bool) {
+        if Thread.isMainThread {
+            applyXrPresentation(active: xrActive)
+        } else {
+            DispatchQueue.main.async { [weak self] in
+                self?.applyXrPresentation(active: xrActive)
+            }
+        }
     }
 }
 
@@ -340,28 +479,30 @@ class ViewController: UIViewController {
 extension ViewController: MTKViewDelegate {
     func draw(in view: MTKView) {
         guard let appDelegate = UIApplication.shared.delegate as? AppDelegate else { return }
-        xrView.isHidden = !(appDelegate._bridge?.isXRActive() ?? false)
+        let xrActive = appDelegate._bridge?.isXRActive() ?? false
+        if xrActive != lastXrActive {
+            lastXrActive = xrActive
+            updateXrPresentation(active: xrActive)
+        }
         appDelegate._bridge?.render()
     }
     
     func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {
         guard let appDelegate = UIApplication.shared.delegate as? AppDelegate else { return }
-        guard
-            size.width.isFinite,
-            size.height.isFinite,
-            size.width > 0,
-            size.height > 0,
-            size.width <= CGFloat(Int32.max),
-            size.height <= CGFloat(Int32.max)
-        else {
-            NSLog("[Playground] Ignoring invalid drawable size: %.3fx%.3f", size.width, size.height)
+        if isApplyingDrawableSize {
             return
         }
 
+        let resolvedSize = validDrawableSize(from: [size, initialDrawableSize()])
+        if !isValidDrawableSize(size) {
+            NSLog("[Playground] Ignoring invalid drawable size: %.3fx%.3f", size.width, size.height)
+        }
+
         #if os(tvOS)
-        NSLog("[Playground] MTKView drawableSizeWillChange=%.0fx%.0f", size.width, size.height)
+        NSLog("[Playground] MTKView drawableSizeWillChange=%.0fx%.0f", resolvedSize.width, resolvedSize.height)
         logDisplayState("drawable size changed")
         #endif
-        appDelegate._bridge?.resize(drawableDimension(size.width), height: drawableDimension(size.height))
+        applyDrawableSize(resolvedSize, notifyBridge: false)
+        appDelegate._bridge?.resize(drawableDimension(resolvedSize.width), height: drawableDimension(resolvedSize.height))
     }
 }

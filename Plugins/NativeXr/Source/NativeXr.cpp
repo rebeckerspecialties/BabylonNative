@@ -4,7 +4,6 @@
 
 #include <XR.h>
 #include <Babylon/Graphics/DeviceContext.h>
-#include <Babylon/Graphics/FrameBuffer.h>
 
 
 #include <napi/napi.h>

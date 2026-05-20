@@ -258,6 +258,7 @@ set(BABYLON_NATIVE_POLYFILL_CANVAS_WGPU ON CACHE BOOL "Use the wgpu/femtovg Canv
 # bgfx-dependent plugins: disabled on wgpu branch (no bgfx consumer exists).
 # ShaderCache/ShaderCompiler/ShaderTool use BgfxShaderInfo and bgfx shader binaries.
 # NativeEngine is the bgfx rendering backend replaced by NativeWebGPU.
+# NativeXr is enabled on supported mobile platforms through NativeWebGPU texture interop.
 # TODO(bgfx-removal): Remove these FORCE overrides when bgfx is fully removed.
 set(BABYLON_NATIVE_PLUGIN_EXTERNALTEXTURE OFF CACHE BOOL "" FORCE)
 set(BABYLON_NATIVE_PLUGIN_NATIVECAMERA OFF CACHE BOOL "" FORCE)
@@ -268,7 +269,7 @@ set(BABYLON_NATIVE_PLUGIN_NATIVEENGINE_LOAD_IMAGES OFF CACHE BOOL "" FORCE)
 set(BABYLON_NATIVE_PLUGIN_NATIVEENGINE_WEBP OFF CACHE BOOL "" FORCE)
 set(BABYLON_NATIVE_PLUGIN_NATIVEENGINE_COMPILESHADERS OFF CACHE BOOL "" FORCE)
 set(BABYLON_NATIVE_PLUGIN_NATIVETRACING OFF CACHE BOOL "" FORCE)
-set(BABYLON_NATIVE_PLUGIN_NATIVEXR OFF CACHE BOOL "" FORCE)
+set(BABYLON_NATIVE_PLUGIN_NATIVEXR ON CACHE BOOL "Include Babylon Native Plugin XR." FORCE)
 set(BABYLON_NATIVE_PLUGIN_SHADERCACHE OFF CACHE BOOL "" FORCE)
 set(BABYLON_NATIVE_PLUGIN_SHADERCOMPILER OFF CACHE BOOL "" FORCE)
 set(BABYLON_NATIVE_PLUGIN_SHADERTOOL OFF CACHE BOOL "" FORCE)

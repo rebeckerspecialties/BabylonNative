@@ -6,7 +6,11 @@ import AVKit
 import CoreMedia
 #endif
 
+#if swift(>=6.0)
+@main
+#else
 @UIApplicationMain
+#endif
 class AppDelegate: UIResponder, UIApplicationDelegate {
 
     var window: UIWindow?

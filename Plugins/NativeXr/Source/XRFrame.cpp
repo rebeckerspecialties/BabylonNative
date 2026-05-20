@@ -81,6 +81,11 @@ namespace Babylon
             // update the viewer pose here because we don't yet know the desired reference space.
             m_frame = frame;
 
+            // Anchors created during the previous XR frame become observable from this frame.
+            // Babylon's WebXRAnchorSystem registers a future anchor after createAnchor() resolves;
+            // exposing the native anchor in the same frame can make the feature miss that future.
+            PromotePendingAnchors();
+
             // Update anchor positions.
             UpdateAnchors();
 
@@ -107,18 +112,29 @@ namespace Babylon
             auto* xrAnchor = XRAnchor::Unwrap(napiAnchor.Value());
             xrAnchor->SetAnchor(nativeAnchor);
 
-            // Add the anchor to the list of tracked anchors.
-            m_trackedAnchors.emplace_back(std::move(napiAnchor));
+            // Expose the anchor to trackedAnchors on the next XR frame. Browser WebXR does
+            // not make a hit-test-created anchor observable until a later frame, and Babylon's
+            // anchor feature relies on that ordering to resolve its future anchor record.
+            m_pendingAnchors.emplace_back(std::move(napiAnchor));
 
             // Resolve the promise with the newly created anchor.
             auto deferred = Napi::Promise::Deferred::New(info.Env());
-            deferred.Resolve(m_trackedAnchors.back().Value());
+            deferred.Resolve(m_pendingAnchors.back().Value());
             return deferred.Promise();
         }
 
         Napi::Value XRFrame::DeclareNativeAnchor(const Napi::Env& env, xr::NativeAnchorPtr nativeAnchor)
         {
             for (const auto& anchor : m_trackedAnchors)
+            {
+                const auto xrAnchor = XRAnchor::Unwrap(anchor.Value());
+                if (xrAnchor->GetNativeAnchor().NativeAnchor == nativeAnchor)
+                {
+                    return anchor.Value();
+                }
+            }
+
+            for (const auto& anchor : m_pendingAnchors)
             {
                 const auto xrAnchor = XRAnchor::Unwrap(anchor.Value());
                 if (xrAnchor->GetNativeAnchor().NativeAnchor == nativeAnchor)
@@ -296,6 +312,20 @@ namespace Babylon
             }
 
             return anchorSet;
+        }
+
+        void XRFrame::PromotePendingAnchors()
+        {
+            if (m_pendingAnchors.empty())
+            {
+                return;
+            }
+
+            for (auto& anchor : m_pendingAnchors)
+            {
+                m_trackedAnchors.emplace_back(std::move(anchor));
+            }
+            m_pendingAnchors.clear();
         }
 
         void XRFrame::UpdateAnchors()

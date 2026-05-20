@@ -35,7 +35,11 @@ namespace Babylon
 
                 const auto viewConfig = activeViewConfigs[viewIndex];
                 const auto startViewIdx = m_sessionState->ViewConfigurationStartViewIdx[viewConfig];
-                return viewConfig->JsTextures[viewConfig->FrameBuffers[viewIndex - startViewIdx]].Value();
+                if (viewConfig->RenderTargets.size() <= viewIndex - startViewIdx)
+                {
+                    return m_env.Null();
+                }
+                return viewConfig->RenderTargets[viewIndex - startViewIdx].JsRenderTarget.Value();
             }
 
             void SetDepthsNarFar(float depthNear, float depthFar)
@@ -99,11 +103,19 @@ namespace Babylon
 
             struct ViewConfiguration final
             {
+                struct RenderTarget final
+                {
+                    Napi::ObjectReference JsRenderTarget{};
+                    Napi::ObjectReference JsColorTexture{};
+                    Napi::ObjectReference JsDepthTexture{};
+                    uint64_t ColorTextureId{};
+                    uint64_t DepthTextureId{};
+                };
+
                 void* ColorTexturePointer{nullptr};
                 void* DepthTexturePointer{nullptr};
                 xr::Size ViewTextureSize{};
-                std::vector<Graphics::FrameBuffer*> FrameBuffers{};
-                std::map<Graphics::FrameBuffer*, Napi::ObjectReference> JsTextures{};
+                std::vector<RenderTarget> RenderTargets{};
                 bool Initialized{false};
             };
 
@@ -137,6 +149,7 @@ namespace Babylon
             void BeginUpdate();
             void EndUpdate();
             void EndFrame();
+            void SchedulePendingFrame();
 
             void NotifySessionStateChanged(bool isSessionActive);
         };

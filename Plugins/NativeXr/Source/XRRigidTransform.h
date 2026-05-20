@@ -1,6 +1,7 @@
 #pragma once
 
-#include <bx/math.h>
+#include <array>
+#include <cstring>
 
 namespace Babylon
 {
@@ -13,7 +14,33 @@ namespace Babylon
     };
     // clang-format on
 
-    inline std::array<float, 16> CreateTransformMatrix(const xr::Space& space, bool viewSpace = true)
+    inline std::array<float, 16> InvertRigidTransformMatrix(const std::array<float, 16>& matrix)
+    {
+        auto inverse{ IDENTITY_MATRIX };
+
+        inverse[0] = matrix[0];
+        inverse[1] = matrix[4];
+        inverse[2] = matrix[8];
+
+        inverse[4] = matrix[1];
+        inverse[5] = matrix[5];
+        inverse[6] = matrix[9];
+
+        inverse[8] = matrix[2];
+        inverse[9] = matrix[6];
+        inverse[10] = matrix[10];
+
+        const auto tx = matrix[12];
+        const auto ty = matrix[13];
+        const auto tz = matrix[14];
+        inverse[12] = -((matrix[0] * tx) + (matrix[1] * ty) + (matrix[2] * tz));
+        inverse[13] = -((matrix[4] * tx) + (matrix[5] * ty) + (matrix[6] * tz));
+        inverse[14] = -((matrix[8] * tx) + (matrix[9] * ty) + (matrix[10] * tz));
+
+        return inverse;
+    }
+
+    inline std::array<float, 16> CreateTransformMatrix(const xr::Space& space, bool inverse = false)
     {
         auto& quat = space.Pose.Orientation;
         auto& pos = space.Pose.Position;
@@ -52,13 +79,9 @@ namespace Babylon
         worldSpaceTransform[14] = pos.Z;
         worldSpaceTransform[15] = 1.f;
 
-        if (viewSpace)
+        if (inverse)
         {
-            // Invert to get the view space transform.
-            std::array<float, 16> viewSpaceTransform{};
-            bx::mtxInverse(viewSpaceTransform.data(), worldSpaceTransform.data());
-
-            return viewSpaceTransform;
+            return InvertRigidTransformMatrix(worldSpaceTransform);
         }
         else
         {
@@ -126,7 +149,7 @@ namespace Babylon
             Update({transform->GetNativePose()}, false);
         }
 
-        void Update(const xr::Space& space, bool isViewSpace)
+        void Update(const xr::Space& space, bool inverse)
         {
             auto position = m_position.Value();
             position.Set("x", space.Pose.Position.X);
@@ -140,10 +163,10 @@ namespace Babylon
             orientation.Set("z", space.Pose.Orientation.Z);
             orientation.Set("w", space.Pose.Orientation.W);
 
-            std::memcpy(m_matrix.Value().Data(), CreateTransformMatrix(space, isViewSpace).data(), m_matrix.Value().ByteLength());
+            std::memcpy(m_matrix.Value().Data(), CreateTransformMatrix(space, inverse).data(), m_matrix.Value().ByteLength());
         }
 
-        void Update(const xr::Space& space, Napi::ArrayBuffer& outVectorData, Napi::ArrayBuffer& outMatrixData, bool isViewSpace)
+        void Update(const xr::Space& space, Napi::ArrayBuffer& outVectorData, Napi::ArrayBuffer& outMatrixData, bool inverse)
         {
             float posAndOrientationData[8];
             posAndOrientationData[0] = space.Pose.Position.X;
@@ -156,13 +179,13 @@ namespace Babylon
             posAndOrientationData[7] = space.Pose.Orientation.W;
 
             std::memcpy(outVectorData.Data(), posAndOrientationData, sizeof(float) * 8);
-            std::memcpy(outMatrixData.Data(), CreateTransformMatrix(space, isViewSpace).data(), sizeof(float) * 16);
+            std::memcpy(outMatrixData.Data(), CreateTransformMatrix(space, inverse).data(), sizeof(float) * 16);
         }
 
         void Update(const xr::Pose& pose)
         {
             xr::Space space{{pose}};
-            Update(space, true);
+            Update(space, false);
         }
 
         xr::Pose GetNativePose()
