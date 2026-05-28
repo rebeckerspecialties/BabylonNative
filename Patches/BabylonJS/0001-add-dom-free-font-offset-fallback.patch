@@ -1,0 +1,196 @@
+From 7f5846606bc1ffdeb15e9eac7d43b1735ad7c133 Mon Sep 17 00:00:00 2001
+From: Matt Hargett <plaztiksyke@gmail.com>
+Date: Sat, 16 May 2026 19:37:43 -0700
+Subject: [PATCH 1/2] Add DOM-free font offset fallback
+
+Make GetFontOffset robust when DOM layout is unavailable or reports zero metrics by falling back to canvas text metrics, then to a CSS font-size estimate.
+
+This lets native runtimes use GUI resizeToFit without carrying validation-only font metric shims.
+---
+ .../dev/core/src/Engines/engine.common.ts     | 70 ++++++++++++++++++-
+ .../test/unit/Engines/engine.common.test.ts   | 64 +++++++++++++++++
+ 2 files changed, 133 insertions(+), 1 deletion(-)
+ create mode 100644 packages/dev/core/test/unit/Engines/engine.common.test.ts
+
+diff --git a/packages/dev/core/src/Engines/engine.common.ts b/packages/dev/core/src/Engines/engine.common.ts
+index 783778f957aa..ddc5e7d7f83f 100644
+--- a/packages/dev/core/src/Engines/engine.common.ts
++++ b/packages/dev/core/src/Engines/engine.common.ts
+@@ -143,6 +143,24 @@ export function _CommonDispose(commonEngine: AbstractEngine, canvas: Nullable<HT
+  * @returns an object containing ascent, height and descent
+  */
+ export function GetFontOffset(font: string): { ascent: number; height: number; descent: number } {
++    const domFontOffset = GetFontOffsetFromDom(font);
++    if (domFontOffset) {
++        return domFontOffset;
++    }
++
++    const canvasFontOffset = GetFontOffsetFromCanvas(font);
++    if (canvasFontOffset) {
++        return canvasFontOffset;
++    }
++
++    return GetFallbackFontOffset(font);
++}
++
++function GetFontOffsetFromDom(font: string): Nullable<{ ascent: number; height: number; descent: number }> {
++    if (!IsDocumentAvailable() || !document.body) {
++        return null;
++    }
++
+     const text = document.createElement("span");
+     text.textContent = "Hg";
+     text.style.font = font;
+@@ -169,7 +187,57 @@ export function GetFontOffset(font: string): { ascent: number; height: number; d
+     } finally {
+         document.body.removeChild(div);
+     }
+-    return { ascent: fontAscent, height: fontHeight, descent: fontHeight - fontAscent };
++
++    const offset = { ascent: fontAscent, height: fontHeight, descent: fontHeight - fontAscent };
++    return IsValidFontOffset(offset) ? offset : null;
++}
++
++function GetFontOffsetFromCanvas(font: string): Nullable<{ ascent: number; height: number; descent: number }> {
++    let canvas: Nullable<OffscreenCanvas | HTMLCanvasElement> = null;
++    try {
++        if (typeof OffscreenCanvas !== "undefined") {
++            canvas = new OffscreenCanvas(64, 64);
++        } else if (IsDocumentAvailable() && typeof document.createElement === "function") {
++            canvas = document.createElement("canvas");
++            canvas.width = 64;
++            canvas.height = 64;
++        }
++
++        const context = canvas?.getContext("2d") as Nullable<CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D>;
++        if (!context) {
++            return null;
++        }
++
++        context.font = font;
++        const metrics = context.measureText("Hg");
++        const ascent = Number(metrics.fontBoundingBoxAscent ?? metrics.actualBoundingBoxAscent);
++        const descent = Number(metrics.fontBoundingBoxDescent ?? metrics.actualBoundingBoxDescent);
++        const offset = { ascent, height: ascent + descent, descent };
++        return IsValidFontOffset(offset) ? offset : null;
++    } catch {
++        return null;
++    } finally {
++        const disposableCanvas = canvas as Nullable<{ dispose?: () => void }>;
++        if (typeof disposableCanvas?.dispose === "function") {
++            disposableCanvas.dispose();
++        }
++    }
++}
++
++function GetFallbackFontOffset(font: string): { ascent: number; height: number; descent: number } {
++    const size = Math.max(1, GetCssPixelFontSize(font));
++    const ascent = size * 0.8;
++    const descent = size * 0.2;
++    return { ascent, height: ascent + descent, descent };
++}
++
++function GetCssPixelFontSize(font: string): number {
++    const match = /(?:^|\s)([0-9]+(?:\.[0-9]+)?)px(?:\s|$)/.exec(String(font || ""));
++    return match ? Number(match[1]) : 16;
++}
++
++function IsValidFontOffset(offset: { ascent: number; height: number; descent: number }): boolean {
++    return Number.isFinite(offset.ascent) && Number.isFinite(offset.height) && Number.isFinite(offset.descent) && offset.height > 0;
+ }
+ 
+ /** @internal */
+diff --git a/packages/dev/core/test/unit/Engines/engine.common.test.ts b/packages/dev/core/test/unit/Engines/engine.common.test.ts
+new file mode 100644
+index 000000000000..19cf47e08ae0
+--- /dev/null
++++ b/packages/dev/core/test/unit/Engines/engine.common.test.ts
+@@ -0,0 +1,64 @@
++/**
++ * @vitest-environment jsdom
++ */
++
++import { GetFontOffset } from "core/Engines/engine.common";
++import { afterEach, describe, expect, it, vi } from "vitest";
++
++describe("GetFontOffset", () => {
++    const originalOffscreenCanvas = globalThis.OffscreenCanvas;
++
++    afterEach(() => {
++        vi.restoreAllMocks();
++        Object.defineProperty(globalThis, "OffscreenCanvas", {
++            configurable: true,
++            writable: true,
++            value: originalOffscreenCanvas,
++        });
++    });
++
++    it("falls back to canvas text metrics when DOM layout reports zero font bounds", () => {
++        Object.defineProperty(globalThis, "OffscreenCanvas", {
++            configurable: true,
++            writable: true,
++            value: undefined,
++        });
++
++        const createElement = document.createElement.bind(document);
++        vi.spyOn(document, "createElement").mockImplementation(((tagName: string) => {
++            if (tagName.toLowerCase() === "canvas") {
++                return {
++                    width: 0,
++                    height: 0,
++                    getContext: () => ({
++                        font: "",
++                        measureText: () => ({
++                            fontBoundingBoxAscent: 17,
++                            fontBoundingBoxDescent: 5,
++                        }),
++                    }),
++                } as unknown as HTMLElement;
++            }
++
++            const element = createElement(tagName);
++            vi.spyOn(element, "getBoundingClientRect").mockReturnValue({
++                x: 0,
++                y: 0,
++                top: 0,
++                left: 0,
++                right: 0,
++                bottom: 0,
++                width: 0,
++                height: 0,
++                toJSON: () => ({}),
++            });
++            return element;
++        }) as typeof document.createElement);
++
++        expect(GetFontOffset("24px droidsans")).toEqual({
++            ascent: 17,
++            height: 22,
++            descent: 5,
++        });
++    });
++});
+
+From 0a41fe99e9b3c256cf274f273d5e4828b0109b5c Mon Sep 17 00:00:00 2001
+From: Matt Hargett <plaztiksyke@gmail.com>
+Date: Sun, 17 May 2026 11:57:07 -0700
+Subject: [PATCH 2/2] broaden the match for more valid CSS variations
+
+Co-authored-by: Copilot Autofix powered by AI <175728472+Copilot@users.noreply.github.com>
+---
+ packages/dev/core/src/Engines/engine.common.ts | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/packages/dev/core/src/Engines/engine.common.ts b/packages/dev/core/src/Engines/engine.common.ts
+index ddc5e7d7f83f..cc5c64f5c306 100644
+--- a/packages/dev/core/src/Engines/engine.common.ts
++++ b/packages/dev/core/src/Engines/engine.common.ts
+@@ -232,7 +232,7 @@ function GetFallbackFontOffset(font: string): { ascent: number; height: number;
+ }
+ 
+ function GetCssPixelFontSize(font: string): number {
+-    const match = /(?:^|\s)([0-9]+(?:\.[0-9]+)?)px(?:\s|$)/.exec(String(font || ""));
++    const match = /(?:^|\s)([0-9]+(?:\.[0-9]+)?)px(?:\/|\s|$)/.exec(String(font || ""));
+     return match ? Number(match[1]) : 16;
+ }
+ 

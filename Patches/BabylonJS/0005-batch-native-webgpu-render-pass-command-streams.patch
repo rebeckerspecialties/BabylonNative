@@ -1,0 +1,420 @@
+diff --git a/packages/dev/core/src/Engines/webgpuEngine.ts b/packages/dev/core/src/Engines/webgpuEngine.ts
+index aa2c3fa4af..a1e7fdcbda 100644
+--- a/packages/dev/core/src/Engines/webgpuEngine.ts
++++ b/packages/dev/core/src/Engines/webgpuEngine.ts
+@@ -114,6 +114,16 @@ const ViewDescriptorSwapChain: GPUTextureViewDescriptor = {
+     arrayLayerCount: 1,
+ };
+ const TempColor4 = new Color4();
++const NativeRenderPassCommand = {
++    setPipeline: 1,
++    setBindGroup: 2,
++    setVertexBuffer: 3,
++    setIndexBuffer: 4,
++    draw: 9,
++    drawIndexed: 10,
++    drawIndirect: 11,
++    drawIndexedIndirect: 12,
++} as const;
+ 
+ /** @internal */
+ interface IWebGPURenderPassWrapper {
+@@ -125,6 +135,10 @@ interface IWebGPURenderPassWrapper {
+     depthTextureFormat: GPUTextureFormat | undefined;
+ }
+ 
++interface IWebGPUNativeRenderPassCommandStream extends GPURenderPassEncoder {
++    _recordCommands?: (commands: Uint32Array, drawCount: number, multiDrawCallCount: number, multiDrawDrawCount: number, wordCount: number) => boolean;
++}
++
+ /**
+  * Options to load the associated Glslang library
+  */
+@@ -420,6 +434,16 @@ export class WebGPUEngine extends ThinWebGPUEngine {
+     private _currentVertexBuffers: { [key: string]: Nullable<VertexBuffer> } = {};
+     private _currentOverrideVertexBuffers: Nullable<{ [key: string]: Nullable<VertexBuffer> }> = null;
+     private _currentIndexBuffer: Nullable<DataBuffer> = null;
++    private _nativeRenderPassCommandWords = new Uint32Array(256);
++    private _nativeRenderPassCommandWordCount = 0;
++    private _nativeRenderPassCommandDrawCount = 0;
++    private _nativeRenderPassCommandRenderPass: Nullable<GPURenderPassEncoder | GPURenderBundleEncoder> = null;
++    private _nativeRenderPassCommandPipelineId = 0;
++    private _nativeRenderPassCommandIndexBufferId = 0;
++    private _nativeRenderPassCommandIndexFormat: Nullable<GPUIndexFormat> = null;
++    private _nativeRenderPassCommandVertexBufferIds: number[] = [];
++    private _nativeRenderPassCommandVertexBufferOffsets: number[] = [];
++    private _nativeRenderPassCommandBindGroupIds: number[] = [];
+     private _dummyIndexBuffer: WebGPUDataBuffer;
+     private _colorWriteLocal = true;
+     private _forceEnableEffect = false;
+@@ -1337,6 +1361,12 @@ export class WebGPUEngine extends ThinWebGPUEngine {
+         return this._currentRenderPass!;
+     }
+ 
++    /** @internal */
++    public override _endCurrentRenderPass(): number {
++        this._flushNativeRenderPassCommandStream();
++        return super._endCurrentRenderPass();
++    }
++
+     /** @internal */
+     public _getCurrentRenderPassWrapper() {
+         return this._currentRenderTarget ? this._rttRenderPassWrapper : this._mainRenderPassWrapper;
+@@ -1444,6 +1474,7 @@ export class WebGPUEngine extends ThinWebGPUEngine {
+         if (bundleList) {
+             bundleList.addItem(new WebGPURenderItemViewport(x, y, w, h));
+         } else {
++            this._flushNativeRenderPassCommandStream();
+             this._getCurrentRenderPass().setViewport(x, y, w, h, 0, 1);
+         }
+     }
+@@ -1485,6 +1516,7 @@ export class WebGPUEngine extends ThinWebGPUEngine {
+         if (bundleList) {
+             bundleList.addItem(new WebGPURenderItemScissor(this._scissorCached.x, y, this._scissorCached.z, this._scissorCached.w));
+         } else {
++            this._flushNativeRenderPassCommandStream();
+             this._getCurrentRenderPass().setScissorRect(this._scissorCached.x, y, this._scissorCached.z, this._scissorCached.w);
+         }
+     }
+@@ -1519,6 +1551,7 @@ export class WebGPUEngine extends ThinWebGPUEngine {
+         if (bundleList) {
+             bundleList.addItem(new WebGPURenderItemStencilRef(this._stencilStateComposer.funcRef ?? 0));
+         } else {
++            this._flushNativeRenderPassCommandStream();
+             this._getCurrentRenderPass().setStencilReference(this._stencilStateComposer.funcRef ?? 0);
+         }
+     }
+@@ -1548,6 +1581,7 @@ export class WebGPUEngine extends ThinWebGPUEngine {
+         if (bundleList) {
+             bundleList.addItem(new WebGPURenderItemBlendColor(this._alphaState._blendConstants.slice()));
+         } else {
++            this._flushNativeRenderPassCommandStream();
+             this._getCurrentRenderPass().setBlendConstant(this._alphaState._blendConstants as GPUColor);
+         }
+     }
+@@ -1605,6 +1639,8 @@ export class WebGPUEngine extends ThinWebGPUEngine {
+     }
+ 
+     private _clearFullQuad(clearColor?: Nullable<IColor4Like>, clearDepth?: boolean, clearStencil?: boolean): void {
++        this._flushNativeRenderPassCommandStream();
++
+         const renderPass = !this.compatibilityMode ? null : this._getCurrentRenderPass();
+ 
+         this._clearQuad.setColorFormat(this._colorFormat);
+@@ -3635,14 +3671,236 @@ export class WebGPUEngine extends ThinWebGPUEngine {
+         this._stencilStateComposer.stencilMaterial = stencil;
+     }
+ 
++    private _getNativeResourceId(resource: Nullable<object>): number {
++        const id = (resource as Record<string, unknown> | null)?.["__babylonNativeWebGPUHandleId"];
++        return typeof id === "number" && id > 0 ? id : 0;
++    }
++
++    private _resetNativeRenderPassCommandStream(): void {
++        this._nativeRenderPassCommandWordCount = 0;
++        this._nativeRenderPassCommandDrawCount = 0;
++        this._nativeRenderPassCommandRenderPass = null;
++        this._nativeRenderPassCommandPipelineId = 0;
++        this._nativeRenderPassCommandIndexBufferId = 0;
++        this._nativeRenderPassCommandIndexFormat = null;
++        this._nativeRenderPassCommandVertexBufferIds.length = 0;
++        this._nativeRenderPassCommandVertexBufferOffsets.length = 0;
++        this._nativeRenderPassCommandBindGroupIds.length = 0;
++    }
++
++    private _ensureNativeRenderPassCommandCapacity(additionalWords: number): void {
++        const requiredWords = this._nativeRenderPassCommandWordCount + additionalWords;
++        if (requiredWords <= this._nativeRenderPassCommandWords.length) {
++            return;
++        }
++
++        let capacity = this._nativeRenderPassCommandWords.length;
++        while (capacity < requiredWords) {
++            capacity *= 2;
++        }
++        const commands = new Uint32Array(capacity);
++        commands.set(this._nativeRenderPassCommandWords.subarray(0, this._nativeRenderPassCommandWordCount));
++        this._nativeRenderPassCommandWords = commands;
++    }
++
++    private _pushNativeRenderPassCommandU32(value: number): void {
++        this._ensureNativeRenderPassCommandCapacity(1);
++        this._nativeRenderPassCommandWords[this._nativeRenderPassCommandWordCount++] = value >>> 0;
++    }
++
++    private _pushNativeRenderPassCommandU64(value: number): void {
++        const normalized = Number.isFinite(value) && value > 0 ? value : 0;
++        this._ensureNativeRenderPassCommandCapacity(2);
++        this._nativeRenderPassCommandWords[this._nativeRenderPassCommandWordCount++] = normalized >>> 0;
++        this._nativeRenderPassCommandWords[this._nativeRenderPassCommandWordCount++] = Math.floor(normalized / 0x100000000) >>> 0;
++    }
++
++    private _pushNativeRenderPassCommandU64Max(): void {
++        this._ensureNativeRenderPassCommandCapacity(2);
++        this._nativeRenderPassCommandWords[this._nativeRenderPassCommandWordCount++] = 0xffffffff;
++        this._nativeRenderPassCommandWords[this._nativeRenderPassCommandWordCount++] = 0xffffffff;
++    }
++
++    private _flushNativeRenderPassCommandStream(): boolean {
++        const renderPass = this._nativeRenderPassCommandRenderPass;
++        const wordCount = this._nativeRenderPassCommandWordCount;
++        if (!renderPass || wordCount === 0) {
++            this._resetNativeRenderPassCommandStream();
++            return false;
++        }
++
++        const recordCommands = (renderPass as IWebGPUNativeRenderPassCommandStream)._recordCommands;
++        if (typeof recordCommands !== "function") {
++            this._resetNativeRenderPassCommandStream();
++            throw new Error("NativeWebGPU render pass command stream cannot be flushed because the active render pass does not support command recording.");
++        }
++
++        const drawCount = this._nativeRenderPassCommandDrawCount;
++        const success = recordCommands.call(renderPass, this._nativeRenderPassCommandWords, drawCount, 0, 0, wordCount) === true;
++        this._resetNativeRenderPassCommandStream();
++
++        if (!success) {
++            let detail = "";
++            try {
++                const stats = (navigator.gpu as unknown as { _backendStats?: () => { lastError?: unknown } })._backendStats?.();
++                detail = typeof stats?.lastError === "string" && stats.lastError.length > 0 ? `: ${stats.lastError}` : "";
++            } catch {
++                // Ignore diagnostics failures while surfacing the original render-pass error.
++            }
++            throw new Error(`NativeWebGPU failed to record a render pass command stream${detail}.`);
++        }
++
++        return true;
++    }
++
++    private _tryRecordNativeDrawCommands(
++        renderPass: GPURenderPassEncoder | GPURenderBundleEncoder,
++        drawType: number,
++        pipeline: GPURenderPipeline,
++        bindGroups: GPUBindGroup[],
++        vertexBuffers: VertexBuffer[],
++        indexBuffer: Nullable<DataBuffer>,
++        indexFormat: Nullable<GPUIndexFormat>,
++        count: number,
++        instancesCount: number,
++        start: number,
++        indirectDrawBuffer: Nullable<GPUBuffer>
++    ): boolean {
++        if (!this.compatibilityMode || this._snapshotRendering.record) {
++            return false;
++        }
++
++        if ((globalThis as typeof globalThis & Record<string, unknown>)["__babylonNativeEnableRenderPassCommandStream"] !== true) {
++            return false;
++        }
++
++        const recordCommands = (renderPass as IWebGPUNativeRenderPassCommandStream)._recordCommands;
++        if (typeof recordCommands !== "function") {
++            return false;
++        }
++
++        const pipelineId = this._getNativeResourceId(pipeline);
++        if (pipelineId === 0) {
++            return false;
++        }
++
++        if (indexBuffer) {
++            const indexBufferId = this._getNativeResourceId(indexBuffer.underlyingResource);
++            if (indexBufferId === 0 || !indexFormat) {
++                return false;
++            }
++        }
++
++        for (let index = 0; index < vertexBuffers.length; index++) {
++            const buffer = vertexBuffers[index].effectiveBuffer;
++            if (buffer && this._getNativeResourceId(buffer.underlyingResource) === 0) {
++                return false;
++            }
++        }
++
++        for (let i = 0; i < bindGroups.length; i++) {
++            if (this._getNativeResourceId(bindGroups[i]) === 0) {
++                return false;
++            }
++        }
++
++        if (indirectDrawBuffer && this._getNativeResourceId(indirectDrawBuffer) === 0) {
++            return false;
++        }
++
++        if (this._nativeRenderPassCommandRenderPass && this._nativeRenderPassCommandRenderPass !== renderPass) {
++            this._flushNativeRenderPassCommandStream();
++        }
++
++        this._nativeRenderPassCommandRenderPass = renderPass;
++        if (this._nativeRenderPassCommandPipelineId !== pipelineId) {
++            this._pushNativeRenderPassCommandU32(NativeRenderPassCommand.setPipeline);
++            this._pushNativeRenderPassCommandU64(pipelineId);
++            this._nativeRenderPassCommandPipelineId = pipelineId;
++        }
++
++        if (indexBuffer) {
++            const indexBufferId = this._getNativeResourceId(indexBuffer.underlyingResource);
++            if (this._nativeRenderPassCommandIndexBufferId !== indexBufferId || this._nativeRenderPassCommandIndexFormat !== indexFormat) {
++                this._pushNativeRenderPassCommandU32(NativeRenderPassCommand.setIndexBuffer);
++                this._pushNativeRenderPassCommandU64(indexBufferId);
++                this._pushNativeRenderPassCommandU32(indexFormat === WebGPUConstants.IndexFormat.Uint32 ? 1 : 0);
++                this._pushNativeRenderPassCommandU64(0);
++                this._pushNativeRenderPassCommandU64Max();
++                this._nativeRenderPassCommandIndexBufferId = indexBufferId;
++                this._nativeRenderPassCommandIndexFormat = indexFormat;
++            }
++        }
++
++        for (let index = 0; index < vertexBuffers.length; index++) {
++            const vertexBuffer = vertexBuffers[index];
++            const buffer = vertexBuffer.effectiveBuffer;
++            if (!buffer) {
++                continue;
++            }
++
++            const bufferId = this._getNativeResourceId(buffer.underlyingResource);
++            const offset = vertexBuffer._validOffsetRange ? 0 : vertexBuffer.byteOffset;
++            if (this._nativeRenderPassCommandVertexBufferIds[index] !== bufferId || this._nativeRenderPassCommandVertexBufferOffsets[index] !== offset) {
++                this._pushNativeRenderPassCommandU32(NativeRenderPassCommand.setVertexBuffer);
++                this._pushNativeRenderPassCommandU32(index);
++                this._pushNativeRenderPassCommandU64(bufferId);
++                this._pushNativeRenderPassCommandU64(offset);
++                this._pushNativeRenderPassCommandU64Max();
++                this._nativeRenderPassCommandVertexBufferIds[index] = bufferId;
++                this._nativeRenderPassCommandVertexBufferOffsets[index] = offset;
++            }
++        }
++
++        for (let i = 0; i < bindGroups.length; i++) {
++            const bindGroupId = this._getNativeResourceId(bindGroups[i]);
++            if (this._nativeRenderPassCommandBindGroupIds[i] !== bindGroupId) {
++                this._pushNativeRenderPassCommandU32(NativeRenderPassCommand.setBindGroup);
++                this._pushNativeRenderPassCommandU32(i);
++                this._pushNativeRenderPassCommandU64(bindGroupId);
++                this._pushNativeRenderPassCommandU32(0);
++                this._nativeRenderPassCommandBindGroupIds[i] = bindGroupId;
++            }
++        }
++
++        if (indirectDrawBuffer) {
++            const indirectBufferId = this._getNativeResourceId(indirectDrawBuffer);
++            this._pushNativeRenderPassCommandU32(drawType === 0 ? NativeRenderPassCommand.drawIndexedIndirect : NativeRenderPassCommand.drawIndirect);
++            this._pushNativeRenderPassCommandU64(indirectBufferId);
++            this._pushNativeRenderPassCommandU64(0);
++        } else if (drawType === 0) {
++            this._pushNativeRenderPassCommandU32(NativeRenderPassCommand.drawIndexed);
++            this._pushNativeRenderPassCommandU32(count);
++            this._pushNativeRenderPassCommandU32(instancesCount || 1);
++            this._pushNativeRenderPassCommandU32(start);
++            this._pushNativeRenderPassCommandU32(0);
++            this._pushNativeRenderPassCommandU32(0);
++        } else {
++            this._pushNativeRenderPassCommandU32(NativeRenderPassCommand.draw);
++            this._pushNativeRenderPassCommandU32(count);
++            this._pushNativeRenderPassCommandU32(instancesCount || 1);
++            this._pushNativeRenderPassCommandU32(start);
++            this._pushNativeRenderPassCommandU32(0);
++        }
++
++        this._nativeRenderPassCommandDrawCount++;
++        return true;
++    }
++
+     private _applyRenderPassChanges(bundleList: Nullable<WebGPUBundleList>): void {
++        const mustUpdateViewport = this._mustUpdateViewport();
++        const mustUpdateScissor = this._mustUpdateScissor();
+         const mustUpdateStencilRef = !this._stencilStateComposer.enabled ? false : this._mustUpdateStencilRef();
+         const mustUpdateBlendColor = !this._alphaState.alphaBlend ? false : this._mustUpdateBlendColor();
+ 
+-        if (this._mustUpdateViewport()) {
++        if (mustUpdateViewport || mustUpdateScissor || mustUpdateStencilRef || mustUpdateBlendColor) {
++            this._flushNativeRenderPassCommandStream();
++        }
++
++        if (mustUpdateViewport) {
+             this._applyViewport(bundleList);
+         }
+-        if (this._mustUpdateScissor()) {
++        if (mustUpdateScissor) {
+             this._applyScissor(bundleList);
+         }
+         if (mustUpdateStencilRef) {
+@@ -3726,6 +3984,8 @@ export class WebGPUEngine extends ThinWebGPUEngine {
+         const pipeline = this._cacheRenderPipeline.getRenderPipeline(fillMode, this._currentEffect!, this.currentSampleCount, textureState);
+ 
+         const bindGroups = this._cacheBindGroups.getBindGroups(webgpuPipelineContext, this._currentDrawContext, this._currentMaterialContext);
++        const vertexBuffers = this._cacheRenderPipeline.vertexBuffers;
++        const indexFormat = this._currentIndexBuffer ? (this._currentIndexBuffer.is32Bits ? WebGPUConstants.IndexFormat.Uint32 : WebGPUConstants.IndexFormat.Uint16) : null;
+ 
+         if (!this._snapshotRendering.record) {
+             this._applyRenderPassChanges(!this.compatibilityMode ? bundleList : null);
+@@ -3739,19 +3999,44 @@ export class WebGPUEngine extends ThinWebGPUEngine {
+             }
+         }
+ 
++        const nonCompatMode = !this.compatibilityMode && !this._snapshotRendering.record;
++        const indirectDrawBuffer =
++            (nonCompatMode || this._currentDrawContext._enableIndirectDrawInCompatMode) && this._currentDrawContext.indirectDrawBuffer
++                ? this._currentDrawContext.indirectDrawBuffer
++                : null;
++        if (indirectDrawBuffer) {
++            this._currentDrawContext.setIndirectData(count, instancesCount || 1, start);
++        }
++
++        if (
++            this._tryRecordNativeDrawCommands(
++                renderPass2,
++                drawType,
++                pipeline,
++                bindGroups,
++                vertexBuffers,
++                this._currentIndexBuffer,
++                indexFormat,
++                count,
++                instancesCount,
++                start,
++                indirectDrawBuffer
++            )
++        ) {
++            this._reportDrawCall();
++            return;
++        }
++
++        this._flushNativeRenderPassCommandStream();
++
+         // bind pipeline
+         renderPass2.setPipeline(pipeline);
+ 
+         // bind index/vertex buffers
+         if (this._currentIndexBuffer) {
+-            renderPass2.setIndexBuffer(
+-                this._currentIndexBuffer.underlyingResource,
+-                this._currentIndexBuffer.is32Bits ? WebGPUConstants.IndexFormat.Uint32 : WebGPUConstants.IndexFormat.Uint16,
+-                0
+-            );
++            renderPass2.setIndexBuffer(this._currentIndexBuffer.underlyingResource, indexFormat!, 0);
+         }
+ 
+-        const vertexBuffers = this._cacheRenderPipeline.vertexBuffers;
+         for (let index = 0; index < vertexBuffers.length; index++) {
+             const vertexBuffer = vertexBuffers[index];
+ 
+@@ -3767,14 +4052,11 @@ export class WebGPUEngine extends ThinWebGPUEngine {
+         }
+ 
+         // draw
+-        const nonCompatMode = !this.compatibilityMode && !this._snapshotRendering.record;
+-
+-        if ((nonCompatMode || this._currentDrawContext._enableIndirectDrawInCompatMode) && this._currentDrawContext.indirectDrawBuffer) {
+-            this._currentDrawContext.setIndirectData(count, instancesCount || 1, start);
++        if (indirectDrawBuffer) {
+             if (drawType === 0) {
+-                renderPass2.drawIndexedIndirect(this._currentDrawContext.indirectDrawBuffer, 0);
++                renderPass2.drawIndexedIndirect(indirectDrawBuffer, 0);
+             } else {
+-                renderPass2.drawIndirect(this._currentDrawContext.indirectDrawBuffer, 0);
++                renderPass2.drawIndirect(indirectDrawBuffer, 0);
+             }
+         } else if (drawType === 0) {
+             renderPass2.drawIndexed(count, instancesCount || 1, start, 0, 0);
