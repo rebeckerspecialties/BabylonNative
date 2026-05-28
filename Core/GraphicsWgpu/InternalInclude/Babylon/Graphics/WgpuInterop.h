@@ -26,6 +26,17 @@ struct BabylonWgpuInfo final
     char adapter_name[128]{};
 };
 
+struct BabylonWgpuFeatureInfo final
+{
+    uint32_t shader_f16{};
+    uint32_t indirect_first_instance{};
+    uint32_t subgroup{};
+    uint32_t subgroup_barrier{};
+    uint32_t multi_draw_indirect_count{};
+    uint32_t min_subgroup_size{};
+    uint32_t max_subgroup_size{};
+};
+
 extern "C"
 {
     void* babylon_wgpu_create(const BabylonWgpuConfig* config);
@@ -36,6 +47,7 @@ extern "C"
     bool babylon_wgpu_get_screenshot_info(const void* context, uint32_t* width, uint32_t* height, size_t* byte_len);
     bool babylon_wgpu_copy_screenshot(const void* context, uint8_t* output, size_t output_len);
     bool babylon_wgpu_get_info(const void* context, BabylonWgpuInfo* output_info);
+    bool babylon_wgpu_get_feature_info(BabylonWgpuFeatureInfo* output_info);
     bool babylon_wgpu_get_last_error(char* output, size_t output_len);
 
     bool babylon_wgpu_dispatch_compute_global(
@@ -56,6 +68,7 @@ extern "C"
     uint32_t babylon_wgpu_get_debug_texture_width();
     uint32_t babylon_wgpu_get_debug_texture_height();
     uint64_t babylon_wgpu_get_estimated_gpu_memory_bytes();
+    uint64_t babylon_wgpu_refresh_estimated_gpu_memory_bytes();
     uint64_t babylon_wgpu_get_canvas_texture_import_skip_count();
     // TODO(bgfx-removal): Remove this legacy alias.
     uint64_t babylon_wgpu_get_debug_texture_import_skip_count();
@@ -171,6 +184,20 @@ extern "C"
         uint64_t pass_id,
         uint64_t buffer_id,
         uint64_t offset);
+    bool babylon_wgpu_native_render_pass_multi_draw_indirect(
+        uint64_t pass_id,
+        uint64_t buffer_id,
+        uint64_t offset,
+        uint32_t count);
+    bool babylon_wgpu_native_render_pass_multi_draw_indexed_indirect(
+        uint64_t pass_id,
+        uint64_t buffer_id,
+        uint64_t offset,
+        uint32_t count);
+    bool babylon_wgpu_native_render_pass_record_commands(
+        uint64_t pass_id,
+        const uint32_t* commands,
+        size_t command_word_count);
     bool babylon_wgpu_native_render_pass_end(uint64_t pass_id);
     bool babylon_wgpu_native_compute_pass_set_pipeline(uint64_t pass_id, uint64_t pipeline_id);
     bool babylon_wgpu_native_compute_pass_set_bind_group(
