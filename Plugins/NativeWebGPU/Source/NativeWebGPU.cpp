@@ -37,6 +37,10 @@ namespace Babylon::Plugins::NativeWebGPU
         std::atomic_uint64_t g_renderPassBeginCount{0};
         std::atomic_uint64_t g_queueSubmitCount{0};
         std::atomic_uint64_t g_drawCallCount{0};
+        std::atomic_uint64_t g_multiDrawIndirectCallCount{0};
+        std::atomic_uint64_t g_multiDrawIndirectDrawCount{0};
+        std::atomic_uint64_t g_renderPassCommandStreamCount{0};
+        std::atomic_uint64_t g_renderPassCommandStreamWordCount{0};
         std::atomic_uint64_t g_textureCreateCount{0};
         std::atomic_uint64_t g_textureViewCreateCount{0};
         std::atomic_uint64_t g_bindGroupCreateCount{0};
@@ -238,6 +242,17 @@ namespace Babylon::Plugins::NativeWebGPU
             const uint32_t start = info.Length() > index + 1 ? ToUint32(info[index + 1], 0) : 0;
             const uint32_t available = start < sourceLength ? sourceLength - start : 0;
             const uint32_t count = info.Length() > index + 2 ? std::min(ToUint32(info[index + 2], available), available) : available;
+            if (info[index].IsTypedArray())
+            {
+                const auto typedArray = info[index].As<Napi::TypedArray>();
+                if (typedArray.TypedArrayType() == napi_typedarray_type::napi_uint32_array)
+                {
+                    const auto uint32Array = info[index].As<Napi::Uint32Array>();
+                    const auto* source = uint32Array.Data() + start;
+                    dynamicOffsets.assign(source, source + count);
+                    return dynamicOffsets;
+                }
+            }
             dynamicOffsets.reserve(count);
             for (uint32_t i = 0; i < count; ++i)
             {
@@ -794,6 +809,28 @@ namespace Babylon::Plugins::NativeWebGPU
             babylon_wgpu_mark_webgpu_draw_requested();
         }
 
+        void MarkDrawCalls(uint32_t count)
+        {
+            if (count == 0)
+            {
+                return;
+            }
+            g_sawWebGpuDrawCall.store(true, std::memory_order_release);
+            g_drawCallCount.fetch_add(count, std::memory_order_relaxed);
+            babylon_wgpu_mark_webgpu_draw_requested();
+        }
+
+        void MarkMultiDrawCalls(uint32_t count)
+        {
+            if (count == 0)
+            {
+                return;
+            }
+            g_multiDrawIndirectCallCount.fetch_add(1, std::memory_order_relaxed);
+            g_multiDrawIndirectDrawCount.fetch_add(count, std::memory_order_relaxed);
+            MarkDrawCalls(count);
+        }
+
         Napi::Function GetCachedFunction(Napi::Env env, const char* key, void (*callback)(const Napi::CallbackInfo&))
         {
             auto nativeObject = JsRuntime::NativeObject::GetFromJavaScript(env);
@@ -1192,13 +1229,64 @@ namespace Babylon::Plugins::NativeWebGPU
             return set;
         }
 
+        void AddSetValue(Napi::Env env, Napi::Object set, const char* value)
+        {
+            auto addValue = set.Get("add");
+            if (addValue.IsFunction())
+            {
+                addValue.As<Napi::Function>().Call(set, {Napi::String::New(env, value)});
+            }
+        }
+
         Napi::Object CreateFeatureSet(Napi::Env env)
         {
+            auto set = CreateSet(env);
 #if defined(__APPLE__)
-            return CreateSet(env, {"texture-compression-astc"});
-#else
-            return CreateSet(env);
+            BabylonWgpuFeatureInfo featureInfo{};
+            if (babylon_wgpu_get_feature_info(&featureInfo))
+            {
+                AddSetValue(env, set, "bgra8unorm-storage");
+                AddSetValue(env, set, "texture-compression-astc");
+                if (featureInfo.indirect_first_instance)
+                {
+                    AddSetValue(env, set, "indirect-first-instance");
+                }
+                if (featureInfo.shader_f16)
+                {
+                    AddSetValue(env, set, "shader-f16");
+                }
+                if (featureInfo.subgroup)
+                {
+                    AddSetValue(env, set, "subgroups");
+                }
+            }
+            else
+            {
+                AddSetValue(env, set, "bgra8unorm-storage");
+                AddSetValue(env, set, "indirect-first-instance");
+                AddSetValue(env, set, "shader-f16");
+                AddSetValue(env, set, "texture-compression-astc");
+            }
 #endif
+            return set;
+        }
+
+        Napi::Object CreateNativeFeatureSet(Napi::Env env)
+        {
+            auto set = CreateSet(env, {"multi-draw-indirect"});
+            BabylonWgpuFeatureInfo featureInfo{};
+            if (babylon_wgpu_get_feature_info(&featureInfo))
+            {
+                if (featureInfo.multi_draw_indirect_count)
+                {
+                    AddSetValue(env, set, "multi-draw-indirect-count");
+                }
+                if (featureInfo.subgroup_barrier)
+                {
+                    AddSetValue(env, set, "subgroup-barrier");
+                }
+            }
+            return set;
         }
 
         // TODO(spec-compliance): These limits are hardcoded conservative defaults rather
@@ -1237,6 +1325,12 @@ namespace Babylon::Plugins::NativeWebGPU
             limits.Set("maxComputeWorkgroupSizeY", Napi::Number::From(env, 256));
             limits.Set("maxComputeWorkgroupSizeZ", Napi::Number::From(env, 64));
             limits.Set("maxComputeWorkgroupsPerDimension", Napi::Number::From(env, 65535));
+            BabylonWgpuFeatureInfo featureInfo{};
+            if (babylon_wgpu_get_feature_info(&featureInfo) && featureInfo.subgroup)
+            {
+                limits.Set("minSubgroupSize", Napi::Number::From(env, featureInfo.min_subgroup_size));
+                limits.Set("maxSubgroupSize", Napi::Number::From(env, featureInfo.max_subgroup_size));
+            }
 
             return limits;
         }
@@ -1561,6 +1655,66 @@ namespace Babylon::Plugins::NativeWebGPU
                 {
                     MarkDrawCallCallback(info);
                 }
+            }));
+            pass.Set("multiDrawIndirect", Napi::Function::New(env, [](const Napi::CallbackInfo& info) {
+                const auto passId = GetNativeHandleId(info.This(), NativeResourceKind::RenderPass);
+                const auto bufferId = info.Length() > 0 ? GetNativeHandleId(info[0], NativeResourceKind::Buffer) : 0;
+                const auto offset = info.Length() > 1 && info[1].IsNumber()
+                    ? static_cast<uint64_t>(std::max<int64_t>(0, info[1].As<Napi::Number>().Int64Value()))
+                    : 0;
+                const auto count = info.Length() > 2 ? ToUint32(info[2], 0) : 0;
+                if (babylon_wgpu_native_render_pass_multi_draw_indirect(passId, bufferId, offset, count))
+                {
+                    MarkMultiDrawCalls(count);
+                }
+            }));
+            pass.Set("multiDrawIndexedIndirect", Napi::Function::New(env, [](const Napi::CallbackInfo& info) {
+                const auto passId = GetNativeHandleId(info.This(), NativeResourceKind::RenderPass);
+                const auto bufferId = info.Length() > 0 ? GetNativeHandleId(info[0], NativeResourceKind::Buffer) : 0;
+                const auto offset = info.Length() > 1 && info[1].IsNumber()
+                    ? static_cast<uint64_t>(std::max<int64_t>(0, info[1].As<Napi::Number>().Int64Value()))
+                    : 0;
+                const auto count = info.Length() > 2 ? ToUint32(info[2], 0) : 0;
+                if (babylon_wgpu_native_render_pass_multi_draw_indexed_indirect(passId, bufferId, offset, count))
+                {
+                    MarkMultiDrawCalls(count);
+                }
+            }));
+            pass.Set("_recordCommands", Napi::Function::New(env, [](const Napi::CallbackInfo& info) -> Napi::Value {
+                const auto passId = GetNativeHandleId(info.This(), NativeResourceKind::RenderPass);
+                if (passId == 0 || info.Length() == 0 || !info[0].IsTypedArray())
+                {
+                    return Napi::Boolean::New(info.Env(), false);
+                }
+
+                const auto typedArray = info[0].As<Napi::TypedArray>();
+                if (typedArray.TypedArrayType() != napi_typedarray_type::napi_uint32_array)
+                {
+                    return Napi::Boolean::New(info.Env(), false);
+                }
+
+                const auto commands = info[0].As<Napi::Uint32Array>();
+                const auto wordCount = std::min<size_t>(
+                    commands.ElementLength(),
+                    info.Length() > 4 ? ToUint32(info[4], static_cast<uint32_t>(commands.ElementLength())) : commands.ElementLength());
+                if (babylon_wgpu_native_render_pass_record_commands(passId, commands.Data(), wordCount))
+                {
+                    g_renderPassCommandStreamCount.fetch_add(1, std::memory_order_relaxed);
+                    g_renderPassCommandStreamWordCount.fetch_add(wordCount, std::memory_order_relaxed);
+
+                    const auto drawCount = info.Length() > 1 ? ToUint32(info[1], 0) : 0;
+                    const auto multiDrawCallCount = info.Length() > 2 ? ToUint32(info[2], 0) : 0;
+                    const auto multiDrawDrawCount = info.Length() > 3 ? ToUint32(info[3], 0) : 0;
+                    if (multiDrawCallCount > 0)
+                    {
+                        g_multiDrawIndirectCallCount.fetch_add(multiDrawCallCount, std::memory_order_relaxed);
+                        g_multiDrawIndirectDrawCount.fetch_add(multiDrawDrawCount, std::memory_order_relaxed);
+                    }
+                    MarkDrawCalls(drawCount);
+                    return Napi::Boolean::New(info.Env(), true);
+                }
+
+                return Napi::Boolean::New(info.Env(), false);
             }));
             pass.Set("executeBundles", Napi::Function::New(env, [](const Napi::CallbackInfo& info) {
                 if (info.Length() == 0 || !info[0].IsArray())
@@ -2115,17 +2269,38 @@ namespace Babylon::Plugins::NativeWebGPU
 
             queue.Set("submit", Napi::Function::New(env, [](const Napi::CallbackInfo& info) {
                 g_queueSubmitCount.fetch_add(1, std::memory_order_relaxed);
-                std::vector<uint64_t> commandBufferIds;
+                std::array<uint64_t, 8> commandBufferIdStack{};
+                std::vector<uint64_t> commandBufferIdOverflow;
+                uint64_t* commandBufferIds = commandBufferIdStack.data();
+                size_t commandBufferCount{};
+                auto appendCommandBufferId = [&](uint64_t id) {
+                    if (commandBufferCount < commandBufferIdStack.size() && commandBufferIdOverflow.empty())
+                    {
+                        commandBufferIdStack[commandBufferCount++] = id;
+                        return;
+                    }
+
+                    if (commandBufferIdOverflow.empty())
+                    {
+                        commandBufferIdOverflow.assign(commandBufferIdStack.begin(), commandBufferIdStack.begin() + commandBufferCount);
+                    }
+                    commandBufferIdOverflow.push_back(id);
+                    commandBufferIds = commandBufferIdOverflow.data();
+                    commandBufferCount = commandBufferIdOverflow.size();
+                };
                 if (info.Length() > 0 && info[0].IsArray())
                 {
                     auto array = info[0].As<Napi::Array>();
-                    commandBufferIds.reserve(array.Length());
+                    if (array.Length() > commandBufferIdStack.size())
+                    {
+                        commandBufferIdOverflow.reserve(array.Length());
+                    }
                     for (uint32_t i = 0; i < array.Length(); ++i)
                     {
                         const auto id = GetNativeHandleId(array.Get(i), NativeResourceKind::CommandBuffer);
                         if (id != 0)
                         {
-                            commandBufferIds.push_back(id);
+                            appendCommandBufferId(id);
                             if (auto* state = GetNativeHandleState(array.Get(i)))
                             {
                                 state->Id = 0;
@@ -2135,11 +2310,11 @@ namespace Babylon::Plugins::NativeWebGPU
                 }
                 if (IsWebGpuTraceEnabled())
                 {
-                    std::fprintf(stderr, "NativeWebGPU trace queue.submit: commandBuffers=%zu\n", commandBufferIds.size());
+                    std::fprintf(stderr, "NativeWebGPU trace queue.submit: commandBuffers=%zu\n", commandBufferCount);
                 }
                 babylon_wgpu_native_queue_submit(
-                    commandBufferIds.empty() ? nullptr : commandBufferIds.data(),
-                    commandBufferIds.size());
+                    commandBufferCount == 0 ? nullptr : commandBufferIds,
+                    commandBufferCount);
                 if (g_sawWebGpuDrawCall.load(std::memory_order_acquire))
                 {
                     babylon_wgpu_mark_webgpu_draw_requested();
@@ -2273,6 +2448,7 @@ namespace Babylon::Plugins::NativeWebGPU
             auto noOp = GetNoOpFunction(env);
 
             device.Set("features", CreateFeatureSet(env));
+            device.Set("_nativeFeatures", CreateNativeFeatureSet(env));
             device.Set("limits", CreateLimits(env));
             device.Set("queue", CreateGpuQueue(env));
             // TODO(spec-compliance): device.lost is a never-resolving promise. The shim
@@ -2618,6 +2794,7 @@ namespace Babylon::Plugins::NativeWebGPU
             auto adapter = Napi::Object::New(env);
 
             adapter.Set("features", CreateFeatureSet(env));
+            adapter.Set("_nativeFeatures", CreateNativeFeatureSet(env));
             adapter.Set("limits", CreateLimits(env));
             adapter.Set("isFallbackAdapter", Napi::Boolean::New(env, false));
 
@@ -2626,6 +2803,12 @@ namespace Babylon::Plugins::NativeWebGPU
             info.Set("architecture", Napi::String::New(env, "wgpu"));
             info.Set("description", Napi::String::New(env, "BabylonNative WGPU adapter"));
             info.Set("device", Napi::String::New(env, "0"));
+            BabylonWgpuFeatureInfo featureInfo{};
+            if (babylon_wgpu_get_feature_info(&featureInfo) && featureInfo.subgroup)
+            {
+                info.Set("subgroupMinSize", Napi::Number::From(env, featureInfo.min_subgroup_size));
+                info.Set("subgroupMaxSize", Napi::Number::From(env, featureInfo.max_subgroup_size));
+            }
             adapter.Set("info", info);
 
             adapter.Set("requestAdapterInfo", Napi::Function::New(env, [](const Napi::CallbackInfo& callbackInfo) -> Napi::Value {
@@ -2635,6 +2818,12 @@ namespace Babylon::Plugins::NativeWebGPU
                     adapterInfo.Set("architecture", Napi::String::New(callbackEnv, "wgpu"));
                     adapterInfo.Set("description", Napi::String::New(callbackEnv, "BabylonNative WGPU adapter"));
                     adapterInfo.Set("device", Napi::String::New(callbackEnv, "0"));
+                    BabylonWgpuFeatureInfo featureInfo{};
+                    if (babylon_wgpu_get_feature_info(&featureInfo) && featureInfo.subgroup)
+                    {
+                        adapterInfo.Set("subgroupMinSize", Napi::Number::From(callbackEnv, featureInfo.min_subgroup_size));
+                        adapterInfo.Set("subgroupMaxSize", Napi::Number::From(callbackEnv, featureInfo.max_subgroup_size));
+                    }
                     return adapterInfo;
                 }, "GPUAdapter.requestAdapterInfo");
             }));
@@ -2717,6 +2906,50 @@ namespace Babylon::Plugins::NativeWebGPU
             }
         }
 
+        Napi::Function CreateBackendStatsFunction(Napi::Env env)
+        {
+            return Napi::Function::New(env, [](const Napi::CallbackInfo& info) -> Napi::Value {
+                auto env = info.Env();
+                auto stats = Napi::Object::New(env);
+                stats.Set("renderPipelineCreateCount", Napi::Number::From(env, static_cast<double>(g_renderPipelineCreateCount.load(std::memory_order_relaxed))));
+                stats.Set("commandEncoderCreateCount", Napi::Number::From(env, static_cast<double>(g_commandEncoderCreateCount.load(std::memory_order_relaxed))));
+                stats.Set("renderPassBeginCount", Napi::Number::From(env, static_cast<double>(g_renderPassBeginCount.load(std::memory_order_relaxed))));
+                stats.Set("queueSubmitCount", Napi::Number::From(env, static_cast<double>(g_queueSubmitCount.load(std::memory_order_relaxed))));
+                stats.Set("drawCallCount", Napi::Number::From(env, static_cast<double>(g_drawCallCount.load(std::memory_order_relaxed))));
+                stats.Set("multiDrawIndirectCallCount", Napi::Number::From(env, static_cast<double>(g_multiDrawIndirectCallCount.load(std::memory_order_relaxed))));
+                stats.Set("multiDrawIndirectDrawCount", Napi::Number::From(env, static_cast<double>(g_multiDrawIndirectDrawCount.load(std::memory_order_relaxed))));
+                stats.Set("renderPassCommandStreamCount", Napi::Number::From(env, static_cast<double>(g_renderPassCommandStreamCount.load(std::memory_order_relaxed))));
+                stats.Set("renderPassCommandStreamWordCount", Napi::Number::From(env, static_cast<double>(g_renderPassCommandStreamWordCount.load(std::memory_order_relaxed))));
+                stats.Set("textureCreateCount", Napi::Number::From(env, static_cast<double>(g_textureCreateCount.load(std::memory_order_relaxed))));
+                stats.Set("textureViewCreateCount", Napi::Number::From(env, static_cast<double>(g_textureViewCreateCount.load(std::memory_order_relaxed))));
+                stats.Set("bindGroupCreateCount", Napi::Number::From(env, static_cast<double>(g_bindGroupCreateCount.load(std::memory_order_relaxed))));
+                stats.Set("bufferCreateCount", Napi::Number::From(env, static_cast<double>(g_bufferCreateCount.load(std::memory_order_relaxed))));
+                stats.Set("bufferRequestedBytes", Napi::Number::From(env, static_cast<double>(g_bufferRequestedBytes.load(std::memory_order_relaxed))));
+                stats.Set("drawPathActive", Napi::Boolean::New(env, babylon_wgpu_is_webgpu_draw_enabled()));
+                stats.Set("nativeRenderFrameCount", Napi::Number::From(env, static_cast<double>(babylon_wgpu_get_render_frame_count())));
+                stats.Set("canvasTextureHash", Napi::Number::From(env, static_cast<double>(babylon_wgpu_get_canvas_texture_hash())));
+                stats.Set("canvasTextureWidth", Napi::Number::From(env, static_cast<double>(babylon_wgpu_get_canvas_texture_width())));
+                stats.Set("canvasTextureHeight", Napi::Number::From(env, static_cast<double>(babylon_wgpu_get_canvas_texture_height())));
+                // Legacy stat keys kept for compatibility with older scripts.
+                stats.Set("debugTextureHash", Napi::Number::From(env, static_cast<double>(babylon_wgpu_get_canvas_texture_hash())));
+                stats.Set("debugTextureWidth", Napi::Number::From(env, static_cast<double>(babylon_wgpu_get_canvas_texture_width())));
+                stats.Set("debugTextureHeight", Napi::Number::From(env, static_cast<double>(babylon_wgpu_get_canvas_texture_height())));
+                stats.Set("estimatedGpuMemoryBytes", Napi::Number::From(env, static_cast<double>(babylon_wgpu_get_estimated_gpu_memory_bytes())));
+                stats.Set("canvasTextureImportSkipCount", Napi::Number::From(env, static_cast<double>(babylon_wgpu_get_canvas_texture_import_skip_count())));
+                stats.Set("debugTextureImportSkipCount", Napi::Number::From(env, static_cast<double>(babylon_wgpu_get_canvas_texture_import_skip_count())));
+                stats.Set("externalImageUploadBorrowedCount", Napi::Number::From(env, static_cast<double>(babylon_wgpu_native_get_external_image_upload_borrowed_count())));
+                stats.Set("externalImageUploadBorrowedBytes", Napi::Number::From(env, static_cast<double>(babylon_wgpu_native_get_external_image_upload_borrowed_bytes())));
+                stats.Set("externalImageUploadOwnedCount", Napi::Number::From(env, static_cast<double>(babylon_wgpu_native_get_external_image_upload_owned_count())));
+                stats.Set("externalImageUploadOwnedBytes", Napi::Number::From(env, static_cast<double>(babylon_wgpu_native_get_external_image_upload_owned_bytes())));
+                stats.Set("backendMode", Napi::String::New(env, kBackendMode));
+                stats.Set("presentationPath", Napi::String::New(env, "webgpu-offscreen-present"));
+                stats.Set("placeholderRendererActive", Napi::Boolean::New(env, false));
+                stats.Set("developerFeaturesMode", Napi::String::New(env, kWebGpuDeveloperFeaturesMode));
+                stats.Set("lastError", Napi::String::New(env, GetLastWgpuError()));
+                return stats;
+            });
+        }
+
         Napi::Value ImportCanvasTextureFromNative(const Napi::CallbackInfo& info)
         {
             if (info.Length() == 0)
@@ -2759,6 +2992,11 @@ namespace Babylon::Plugins::NativeWebGPU
                 return CreateGpuCanvasContext(info.Env());
             }));
 
+            auto backendStats = CreateBackendStatsFunction(env);
+            gpu.Set("_backendStats", backendStats);
+            // Back-compat alias kept for existing tests/scripts.
+            gpu.Set("_debugStats", backendStats);
+
             if (developerFeaturesEnabled)
             {
                 // Non-standard helper for native validation to execute a WGSL compute shader
@@ -2789,46 +3027,6 @@ namespace Babylon::Plugins::NativeWebGPU
                     (void)info;
                     return Napi::Boolean::New(info.Env(), babylon_wgpu_is_webgpu_draw_enabled());
                 }));
-
-                auto backendStats = Napi::Function::New(env, [](const Napi::CallbackInfo& info) -> Napi::Value {
-                    auto env = info.Env();
-                    auto stats = Napi::Object::New(env);
-                    stats.Set("renderPipelineCreateCount", Napi::Number::From(env, static_cast<double>(g_renderPipelineCreateCount.load(std::memory_order_relaxed))));
-                    stats.Set("commandEncoderCreateCount", Napi::Number::From(env, static_cast<double>(g_commandEncoderCreateCount.load(std::memory_order_relaxed))));
-                    stats.Set("renderPassBeginCount", Napi::Number::From(env, static_cast<double>(g_renderPassBeginCount.load(std::memory_order_relaxed))));
-                    stats.Set("queueSubmitCount", Napi::Number::From(env, static_cast<double>(g_queueSubmitCount.load(std::memory_order_relaxed))));
-                    stats.Set("drawCallCount", Napi::Number::From(env, static_cast<double>(g_drawCallCount.load(std::memory_order_relaxed))));
-                    stats.Set("textureCreateCount", Napi::Number::From(env, static_cast<double>(g_textureCreateCount.load(std::memory_order_relaxed))));
-                    stats.Set("textureViewCreateCount", Napi::Number::From(env, static_cast<double>(g_textureViewCreateCount.load(std::memory_order_relaxed))));
-                    stats.Set("bindGroupCreateCount", Napi::Number::From(env, static_cast<double>(g_bindGroupCreateCount.load(std::memory_order_relaxed))));
-                    stats.Set("bufferCreateCount", Napi::Number::From(env, static_cast<double>(g_bufferCreateCount.load(std::memory_order_relaxed))));
-                    stats.Set("bufferRequestedBytes", Napi::Number::From(env, static_cast<double>(g_bufferRequestedBytes.load(std::memory_order_relaxed))));
-                    stats.Set("drawPathActive", Napi::Boolean::New(env, babylon_wgpu_is_webgpu_draw_enabled()));
-                    stats.Set("nativeRenderFrameCount", Napi::Number::From(env, static_cast<double>(babylon_wgpu_get_render_frame_count())));
-                    stats.Set("canvasTextureHash", Napi::Number::From(env, static_cast<double>(babylon_wgpu_get_canvas_texture_hash())));
-                    stats.Set("canvasTextureWidth", Napi::Number::From(env, static_cast<double>(babylon_wgpu_get_canvas_texture_width())));
-                    stats.Set("canvasTextureHeight", Napi::Number::From(env, static_cast<double>(babylon_wgpu_get_canvas_texture_height())));
-                    // Legacy stat keys kept for compatibility with older scripts.
-                    stats.Set("debugTextureHash", Napi::Number::From(env, static_cast<double>(babylon_wgpu_get_canvas_texture_hash())));
-                    stats.Set("debugTextureWidth", Napi::Number::From(env, static_cast<double>(babylon_wgpu_get_canvas_texture_width())));
-                    stats.Set("debugTextureHeight", Napi::Number::From(env, static_cast<double>(babylon_wgpu_get_canvas_texture_height())));
-                    stats.Set("estimatedGpuMemoryBytes", Napi::Number::From(env, static_cast<double>(babylon_wgpu_get_estimated_gpu_memory_bytes())));
-                    stats.Set("canvasTextureImportSkipCount", Napi::Number::From(env, static_cast<double>(babylon_wgpu_get_canvas_texture_import_skip_count())));
-                    stats.Set("debugTextureImportSkipCount", Napi::Number::From(env, static_cast<double>(babylon_wgpu_get_canvas_texture_import_skip_count())));
-                    stats.Set("externalImageUploadBorrowedCount", Napi::Number::From(env, static_cast<double>(babylon_wgpu_native_get_external_image_upload_borrowed_count())));
-                    stats.Set("externalImageUploadBorrowedBytes", Napi::Number::From(env, static_cast<double>(babylon_wgpu_native_get_external_image_upload_borrowed_bytes())));
-                    stats.Set("externalImageUploadOwnedCount", Napi::Number::From(env, static_cast<double>(babylon_wgpu_native_get_external_image_upload_owned_count())));
-                    stats.Set("externalImageUploadOwnedBytes", Napi::Number::From(env, static_cast<double>(babylon_wgpu_native_get_external_image_upload_owned_bytes())));
-                    stats.Set("backendMode", Napi::String::New(env, kBackendMode));
-                    stats.Set("presentationPath", Napi::String::New(env, "webgpu-offscreen-present"));
-                    stats.Set("placeholderRendererActive", Napi::Boolean::New(env, false));
-                    stats.Set("developerFeaturesMode", Napi::String::New(env, kWebGpuDeveloperFeaturesMode));
-                    stats.Set("lastError", Napi::String::New(env, GetLastWgpuError()));
-                    return stats;
-                });
-                gpu.Set("_backendStats", backendStats);
-                // Back-compat alias kept for existing tests/scripts.
-                gpu.Set("_debugStats", backendStats);
             }
 
             if (unsafeWebGpuEnabled)
@@ -2852,6 +3050,10 @@ namespace Babylon::Plugins::NativeWebGPU
                 g_renderPassBeginCount.store(0, std::memory_order_relaxed);
                 g_queueSubmitCount.store(0, std::memory_order_relaxed);
                 g_drawCallCount.store(0, std::memory_order_relaxed);
+                g_multiDrawIndirectCallCount.store(0, std::memory_order_relaxed);
+                g_multiDrawIndirectDrawCount.store(0, std::memory_order_relaxed);
+                g_renderPassCommandStreamCount.store(0, std::memory_order_relaxed);
+                g_renderPassCommandStreamWordCount.store(0, std::memory_order_relaxed);
                 g_textureCreateCount.store(0, std::memory_order_relaxed);
                 g_textureViewCreateCount.store(0, std::memory_order_relaxed);
                 g_bindGroupCreateCount.store(0, std::memory_order_relaxed);

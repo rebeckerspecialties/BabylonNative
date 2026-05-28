@@ -36,6 +36,34 @@ fn bytes_to_mib(bytes: u64) -> f64 {
     bytes as f64 / (1024.0 * 1024.0)
 }
 
+fn estimated_gpu_memory_bytes() -> u64 {
+    ESTIMATED_GPU_MEMORY_BYTES.load(Ordering::Relaxed)
+}
+
+fn set_estimated_gpu_memory_bytes(bytes: u64) {
+    ESTIMATED_GPU_MEMORY_BYTES.store(bytes, Ordering::Relaxed);
+}
+
+fn add_estimated_gpu_memory_bytes(bytes: u64) {
+    if bytes != 0 {
+        let _ = ESTIMATED_GPU_MEMORY_BYTES.fetch_update(
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+            |current| Some(current.saturating_add(bytes)),
+        );
+    }
+}
+
+fn subtract_estimated_gpu_memory_bytes(bytes: u64) {
+    if bytes != 0 {
+        let _ = ESTIMATED_GPU_MEMORY_BYTES.fetch_update(
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+            |current| Some(current.saturating_sub(bytes)),
+        );
+    }
+}
+
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct BabylonWgpuConfig {
@@ -57,9 +85,22 @@ pub struct BabylonWgpuInfo {
     pub adapter_name: [c_char; 128],
 }
 
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct BabylonWgpuFeatureInfo {
+    pub shader_f16: u32,
+    pub indirect_first_instance: u32,
+    pub subgroup: u32,
+    pub subgroup_barrier: u32,
+    pub multi_draw_indirect_count: u32,
+    pub min_subgroup_size: u32,
+    pub max_subgroup_size: u32,
+}
+
 struct BackendContext {
     backend: upstream_wgpu_native::InteropBackendContext,
     info: BabylonWgpuInfo,
+    feature_info: BabylonWgpuFeatureInfo,
     screenshot_requested: bool,
     screenshot_rgba: Vec<u8>,
     screenshot_width: u32,
@@ -68,8 +109,7 @@ struct BackendContext {
 
 impl BackendContext {
     fn publish_estimated_gpu_memory_bytes(&self) {
-        ESTIMATED_GPU_MEMORY_BYTES
-            .store(self.backend.estimated_gpu_memory_bytes(), Ordering::Relaxed);
+        set_estimated_gpu_memory_bytes(self.backend.estimated_gpu_memory_bytes());
     }
 
     fn install_debug_texture(
@@ -191,7 +231,12 @@ pub extern "C" fn babylon_wgpu_get_canvas_texture_height() -> u32 {
 
 #[no_mangle]
 pub extern "C" fn babylon_wgpu_get_estimated_gpu_memory_bytes() -> u64 {
-    ESTIMATED_GPU_MEMORY_BYTES.load(Ordering::Relaxed)
+    estimated_gpu_memory_bytes()
+}
+
+#[no_mangle]
+pub extern "C" fn babylon_wgpu_refresh_estimated_gpu_memory_bytes() -> u64 {
+    estimated_gpu_memory_bytes()
 }
 
 #[no_mangle]
@@ -434,10 +479,12 @@ fn create_context(config: BabylonWgpuConfig) -> Result<Box<BackendContext>, Stri
             decorated_adapter_name(adapter_info.adapter_name.as_str()).as_str(),
         ),
     };
+    let feature_info = adapter_info.feature_info;
 
     let context = BackendContext {
         backend,
         info: context_info,
+        feature_info,
         screenshot_requested: false,
         screenshot_rgba: Vec::new(),
         screenshot_width: 0,
@@ -494,7 +541,6 @@ where
         }
         let context_ref = unsafe { &mut *context };
         let value = f(&mut context_ref.backend)?;
-        context_ref.publish_estimated_gpu_memory_bytes();
         Ok(value)
     }));
 
@@ -1039,6 +1085,252 @@ pub extern "C" fn babylon_wgpu_native_render_pass_draw_indexed_indirect(
 }
 
 #[no_mangle]
+pub extern "C" fn babylon_wgpu_native_render_pass_multi_draw_indirect(
+    pass_id: u64,
+    buffer_id: u64,
+    offset: u64,
+    count: u32,
+) -> bool {
+    run_with_active_backend("GPURenderPassEncoder.multiDrawIndirect", false, |backend| {
+        backend.render_pass_multi_draw_indirect(pass_id, buffer_id, offset, count)?;
+        Ok(true)
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn babylon_wgpu_native_render_pass_multi_draw_indexed_indirect(
+    pass_id: u64,
+    buffer_id: u64,
+    offset: u64,
+    count: u32,
+) -> bool {
+    run_with_active_backend(
+        "GPURenderPassEncoder.multiDrawIndexedIndirect",
+        false,
+        |backend| {
+            backend.render_pass_multi_draw_indexed_indirect(pass_id, buffer_id, offset, count)?;
+            Ok(true)
+        },
+    )
+}
+
+#[no_mangle]
+pub extern "C" fn babylon_wgpu_native_render_pass_record_commands(
+    pass_id: u64,
+    commands: *const u32,
+    command_word_count: usize,
+) -> bool {
+    run_with_active_backend("GPURenderPassEncoder._recordCommands", false, |backend| {
+        let words = if command_word_count == 0 {
+            &[]
+        } else {
+            if commands.is_null() {
+                return Err("render pass command stream pointer was null".to_string());
+            }
+            unsafe { std::slice::from_raw_parts(commands, command_word_count) }
+        };
+
+        let mut cursor = 0usize;
+        let read_u32 = |cursor: &mut usize| -> Result<u32, String> {
+            let value = *words.get(*cursor).ok_or_else(|| {
+                format!(
+                    "render pass command stream ended at word {} of {}",
+                    *cursor,
+                    words.len()
+                )
+            })?;
+            *cursor += 1;
+            Ok(value)
+        };
+        let read_u64 = |cursor: &mut usize| -> Result<u64, String> {
+            let low = read_u32(cursor)? as u64;
+            let high = read_u32(cursor)? as u64;
+            Ok(low | (high << 32))
+        };
+        let read_f32 =
+            |cursor: &mut usize| -> Result<f32, String> { Ok(f32::from_bits(read_u32(cursor)?)) };
+
+        while cursor < words.len() {
+            let command_start = cursor;
+            let opcode = read_u32(&mut cursor)?;
+            match opcode {
+                // setPipeline(pipeline)
+                1 => {
+                    let pipeline_id = read_u64(&mut cursor)?;
+                    backend.render_pass_set_pipeline(pass_id, pipeline_id)?;
+                }
+                // setBindGroup(index, bindGroup, dynamicOffsets)
+                2 => {
+                    let index = read_u32(&mut cursor)?;
+                    let bind_group_id = read_u64(&mut cursor)?;
+                    let dynamic_offset_count = read_u32(&mut cursor)? as usize;
+                    if cursor.saturating_add(dynamic_offset_count) > words.len() {
+                        return Err(format!(
+                                "render pass command stream bind group at word {command_start} requested {dynamic_offset_count} dynamic offsets beyond {} words",
+                                words.len()
+                            ));
+                    }
+                    let dynamic_offsets = &words[cursor..cursor + dynamic_offset_count];
+                    cursor += dynamic_offset_count;
+                    backend.render_pass_set_bind_group(
+                        pass_id,
+                        index,
+                        bind_group_id,
+                        dynamic_offsets,
+                    )?;
+                }
+                // setVertexBuffer(slot, buffer, offset, size)
+                3 => {
+                    let slot = read_u32(&mut cursor)?;
+                    let buffer_id = read_u64(&mut cursor)?;
+                    let offset = read_u64(&mut cursor)?;
+                    let size = read_u64(&mut cursor)?;
+                    backend
+                        .render_pass_set_vertex_buffer(pass_id, slot, buffer_id, offset, size)?;
+                }
+                // setIndexBuffer(buffer, formatCode, offset, size)
+                4 => {
+                    let buffer_id = read_u64(&mut cursor)?;
+                    let format_code = read_u32(&mut cursor)?;
+                    let offset = read_u64(&mut cursor)?;
+                    let size = read_u64(&mut cursor)?;
+                    let format = if format_code == 1 { "uint32" } else { "uint16" };
+                    backend
+                        .render_pass_set_index_buffer(pass_id, buffer_id, format, offset, size)?;
+                }
+                // setViewport(x, y, width, height, minDepth, maxDepth)
+                5 => {
+                    let x = read_f32(&mut cursor)?;
+                    let y = read_f32(&mut cursor)?;
+                    let width = read_f32(&mut cursor)?;
+                    let height = read_f32(&mut cursor)?;
+                    let min_depth = read_f32(&mut cursor)?;
+                    let max_depth = read_f32(&mut cursor)?;
+                    backend.render_pass_push_command(
+                        pass_id,
+                        upstream_wgpu_native::RenderPassCommand::SetViewport {
+                            x,
+                            y,
+                            width,
+                            height,
+                            min_depth,
+                            max_depth,
+                        },
+                    )?;
+                }
+                // setScissorRect(x, y, width, height)
+                6 => {
+                    let x = read_u32(&mut cursor)?;
+                    let y = read_u32(&mut cursor)?;
+                    let width = read_u32(&mut cursor)?;
+                    let height = read_u32(&mut cursor)?;
+                    backend.render_pass_push_command(
+                        pass_id,
+                        upstream_wgpu_native::RenderPassCommand::SetScissorRect {
+                            x,
+                            y,
+                            width,
+                            height,
+                        },
+                    )?;
+                }
+                // setStencilReference(reference)
+                7 => {
+                    let reference = read_u32(&mut cursor)?;
+                    backend.render_pass_push_command(
+                        pass_id,
+                        upstream_wgpu_native::RenderPassCommand::SetStencilReference(reference),
+                    )?;
+                }
+                // setBlendConstant(r, g, b, a)
+                8 => {
+                    let r = read_f32(&mut cursor)? as f64;
+                    let g = read_f32(&mut cursor)? as f64;
+                    let b = read_f32(&mut cursor)? as f64;
+                    let a = read_f32(&mut cursor)? as f64;
+                    backend.render_pass_push_command(
+                        pass_id,
+                        upstream_wgpu_native::RenderPassCommand::SetBlendConstant(wgpu::Color {
+                            r,
+                            g,
+                            b,
+                            a,
+                        }),
+                    )?;
+                }
+                // draw(vertexCount, instanceCount, firstVertex, firstInstance)
+                9 => {
+                    let vertex_count = read_u32(&mut cursor)?;
+                    let instance_count = read_u32(&mut cursor)?;
+                    let first_vertex = read_u32(&mut cursor)?;
+                    let first_instance = read_u32(&mut cursor)?;
+                    backend.render_pass_push_command(
+                        pass_id,
+                        upstream_wgpu_native::RenderPassCommand::Draw {
+                            vertices: first_vertex..first_vertex.saturating_add(vertex_count),
+                            instances: first_instance
+                                ..first_instance.saturating_add(instance_count),
+                        },
+                    )?;
+                }
+                // drawIndexed(indexCount, instanceCount, firstIndex, baseVertex, firstInstance)
+                10 => {
+                    let index_count = read_u32(&mut cursor)?;
+                    let instance_count = read_u32(&mut cursor)?;
+                    let first_index = read_u32(&mut cursor)?;
+                    let base_vertex = read_u32(&mut cursor)? as i32;
+                    let first_instance = read_u32(&mut cursor)?;
+                    backend.render_pass_push_command(
+                        pass_id,
+                        upstream_wgpu_native::RenderPassCommand::DrawIndexed {
+                            indices: first_index..first_index.saturating_add(index_count),
+                            base_vertex,
+                            instances: first_instance
+                                ..first_instance.saturating_add(instance_count),
+                        },
+                    )?;
+                }
+                // drawIndirect(buffer, offset)
+                11 => {
+                    let buffer_id = read_u64(&mut cursor)?;
+                    let offset = read_u64(&mut cursor)?;
+                    backend.render_pass_draw_indirect(pass_id, buffer_id, offset)?;
+                }
+                // drawIndexedIndirect(buffer, offset)
+                12 => {
+                    let buffer_id = read_u64(&mut cursor)?;
+                    let offset = read_u64(&mut cursor)?;
+                    backend.render_pass_draw_indexed_indirect(pass_id, buffer_id, offset)?;
+                }
+                // multiDrawIndirect(buffer, offset, count)
+                13 => {
+                    let buffer_id = read_u64(&mut cursor)?;
+                    let offset = read_u64(&mut cursor)?;
+                    let count = read_u32(&mut cursor)?;
+                    backend.render_pass_multi_draw_indirect(pass_id, buffer_id, offset, count)?;
+                }
+                // multiDrawIndexedIndirect(buffer, offset, count)
+                14 => {
+                    let buffer_id = read_u64(&mut cursor)?;
+                    let offset = read_u64(&mut cursor)?;
+                    let count = read_u32(&mut cursor)?;
+                    backend.render_pass_multi_draw_indexed_indirect(
+                        pass_id, buffer_id, offset, count,
+                    )?;
+                }
+                _ => {
+                    return Err(format!(
+                            "unsupported render pass command stream opcode {opcode} at word {command_start}"
+                        ));
+                }
+            }
+        }
+
+        Ok(true)
+    })
+}
+
+#[no_mangle]
 pub extern "C" fn babylon_wgpu_native_render_pass_end(pass_id: u64) -> bool {
     run_with_active_backend("GPURenderPassEncoder.end", false, |backend| {
         backend.render_pass_end(pass_id)?;
@@ -1576,6 +1868,24 @@ pub extern "C" fn babylon_wgpu_get_info(
 }
 
 #[no_mangle]
+pub extern "C" fn babylon_wgpu_get_feature_info(output_info: *mut BabylonWgpuFeatureInfo) -> bool {
+    if output_info.is_null() {
+        return false;
+    }
+
+    let context = ACTIVE_CONTEXT.load(Ordering::Acquire);
+    if context.is_null() {
+        set_last_error("WGPU feature info requested before backend context creation.");
+        return false;
+    }
+
+    let context_ref = unsafe { &*context };
+    let output_info_ref = unsafe { &mut *output_info };
+    *output_info_ref = context_ref.feature_info;
+    true
+}
+
+#[no_mangle]
 pub extern "C" fn babylon_wgpu_get_last_error(output: *mut c_char, output_len: usize) -> bool {
     copy_last_error(output, output_len)
 }
@@ -1634,7 +1944,8 @@ pub extern "C" fn babylon_wgpu_dispatch_compute_global(
 
 mod upstream_wgpu_native {
     use super::{
-        bytes_to_mib, opaque_ptr_as_ref, webgpu_memory_trace_enabled,
+        add_estimated_gpu_memory_bytes, bytes_to_mib, estimated_gpu_memory_bytes,
+        opaque_ptr_as_ref, subtract_estimated_gpu_memory_bytes, webgpu_memory_trace_enabled,
         EXTERNAL_IMAGE_UPLOAD_BORROWED_BYTES, EXTERNAL_IMAGE_UPLOAD_BORROWED_COUNT,
         EXTERNAL_IMAGE_UPLOAD_OWNED_BYTES, EXTERNAL_IMAGE_UPLOAD_OWNED_COUNT,
     };
@@ -1655,12 +1966,31 @@ mod upstream_wgpu_native {
         pub vendor_id: u32,
         pub device_id: u32,
         pub adapter_name: String,
+        pub feature_info: super::BabylonWgpuFeatureInfo,
+    }
+
+    fn make_feature_info(
+        adapter_info: &wgpu::AdapterInfo,
+        features: wgpu::Features,
+    ) -> super::BabylonWgpuFeatureInfo {
+        super::BabylonWgpuFeatureInfo {
+            shader_f16: features.contains(wgpu::Features::SHADER_F16) as u32,
+            indirect_first_instance: features.contains(wgpu::Features::INDIRECT_FIRST_INSTANCE)
+                as u32,
+            subgroup: features.contains(wgpu::Features::SUBGROUP) as u32,
+            subgroup_barrier: features.contains(wgpu::Features::SUBGROUP_BARRIER) as u32,
+            multi_draw_indirect_count: features.contains(wgpu::Features::MULTI_DRAW_INDIRECT_COUNT)
+                as u32,
+            min_subgroup_size: adapter_info.subgroup_min_size,
+            max_subgroup_size: adapter_info.subgroup_max_size,
+        }
     }
 
     pub struct LocalBootstrapRuntime {
         pub adapter: wgpu::Adapter,
         pub adapter_info: wgpu::AdapterInfo,
         pub limits: wgpu::Limits,
+        pub enabled_features: wgpu::Features,
         pub device: wgpu::Device,
         pub queue: wgpu::Queue,
         pub used_fallback_adapter: bool,
@@ -1898,6 +2228,16 @@ mod upstream_wgpu_native {
             buffer: wgpu::Buffer,
             offset: u64,
         },
+        MultiDrawIndirect {
+            buffer: wgpu::Buffer,
+            offset: u64,
+            count: u32,
+        },
+        MultiDrawIndexedIndirect {
+            buffer: wgpu::Buffer,
+            offset: u64,
+            count: u32,
+        },
     }
 
     struct RenderPassResource {
@@ -2037,6 +2377,17 @@ mod upstream_wgpu_native {
             self.next_id = self.next_id.saturating_add(1).max(1);
             self.next_id
         }
+    }
+
+    fn estimated_texture_resource_bytes(texture: &TextureResource) -> u64 {
+        estimated_texture_allocation_bytes(
+            texture.width,
+            texture.height,
+            texture.depth_or_array_layers,
+            texture.format,
+            texture.mip_level_count,
+            texture.sample_count,
+        )
     }
 
     fn json_str<'a>(value: &'a Value, key: &str) -> Option<&'a str> {
@@ -2805,22 +3156,7 @@ mod upstream_wgpu_native {
         }
 
         pub fn estimated_gpu_memory_bytes(&self) -> u64 {
-            let buffer_bytes = self
-                .resources
-                .buffers
-                .values()
-                .fold(0u64, |acc, buffer| acc.saturating_add(buffer.size));
-            let texture_bytes = self.resources.textures.values().fold(0u64, |acc, texture| {
-                acc.saturating_add(estimated_texture_allocation_bytes(
-                    texture.width,
-                    texture.height,
-                    texture.depth_or_array_layers,
-                    texture.format,
-                    texture.mip_level_count,
-                    texture.sample_count,
-                ))
-            });
-            buffer_bytes.saturating_add(texture_bytes)
+            estimated_gpu_memory_bytes()
         }
 
         fn encode_pending_buffer_writes(&mut self, encoder: &mut wgpu::CommandEncoder) -> bool {
@@ -3001,10 +3337,14 @@ mod upstream_wgpu_native {
             self.current_surface_frame = None;
             self.current_surface_frame_submitted = false;
             if let Some(id) = self.current_canvas_texture_id.take() {
-                self.resources.textures.remove(&id);
+                if let Some(texture) = self.resources.textures.remove(&id) {
+                    subtract_estimated_gpu_memory_bytes(estimated_texture_resource_bytes(&texture));
+                }
             }
             for target in self.canvas_targets.drain().map(|(_, target)| target) {
-                self.resources.textures.remove(&target.texture_id);
+                if let Some(texture) = self.resources.textures.remove(&target.texture_id) {
+                    subtract_estimated_gpu_memory_bytes(estimated_texture_resource_bytes(&texture));
+                }
             }
             self.current_canvas_texture = None;
             self.current_canvas_id = None;
@@ -3149,6 +3489,7 @@ mod upstream_wgpu_native {
                     mapped: mapped_at_creation,
                 },
             );
+            add_estimated_gpu_memory_bytes(effective_size);
             if webgpu_memory_trace_enabled() && effective_size >= 8 * 1024 * 1024 {
                 let total = self.estimated_gpu_memory_bytes();
                 eprintln!(
@@ -3252,6 +3593,14 @@ mod upstream_wgpu_native {
                     view_formats: &view_formats,
                 });
             let id = self.resources.next();
+            let estimated = estimated_texture_allocation_bytes(
+                size.width,
+                size.height,
+                size.depth_or_array_layers,
+                format,
+                mip_level_count,
+                sample_count,
+            );
             self.resources.textures.insert(
                 id,
                 TextureResource {
@@ -3264,14 +3613,7 @@ mod upstream_wgpu_native {
                     format,
                 },
             );
-            let estimated = estimated_texture_allocation_bytes(
-                size.width,
-                size.height,
-                size.depth_or_array_layers,
-                format,
-                mip_level_count,
-                sample_count,
-            );
+            add_estimated_gpu_memory_bytes(estimated);
             if webgpu_memory_trace_enabled() && estimated >= 8 * 1024 * 1024 {
                 let total = self.estimated_gpu_memory_bytes();
                 eprintln!(
@@ -3371,6 +3713,14 @@ mod upstream_wgpu_native {
             };
 
             let id = self.resources.next();
+            let estimated = estimated_texture_allocation_bytes(
+                size.width,
+                size.height,
+                size.depth_or_array_layers,
+                format,
+                mip_level_count,
+                sample_count,
+            );
             self.resources.textures.insert(
                 id,
                 TextureResource {
@@ -3383,16 +3733,21 @@ mod upstream_wgpu_native {
                     format,
                 },
             );
+            add_estimated_gpu_memory_bytes(estimated);
             if webgpu_memory_trace_enabled() {
                 eprintln!(
-                    "NativeWebGPU memory importMetalTexture id={} label={} size={}x{}x{} format={:?} usage={:?}",
+                    "NativeWebGPU memory importMetalTexture id={} label={} size={}x{}x{} format={:?} usage={:?} estimated={} ({:.1} MiB) liveEstimated={} ({:.1} MiB)",
                     id,
                     label.as_deref().unwrap_or("(unlabeled)"),
                     size.width,
                     size.height,
                     size.depth_or_array_layers,
                     format,
-                    usage
+                    usage,
+                    estimated,
+                    bytes_to_mib(estimated),
+                    self.estimated_gpu_memory_bytes(),
+                    bytes_to_mib(self.estimated_gpu_memory_bytes())
                 );
             }
             Ok(id)
@@ -4429,6 +4784,54 @@ mod upstream_wgpu_native {
             )
         }
 
+        pub fn render_pass_multi_draw_indirect(
+            &mut self,
+            pass_id: u64,
+            buffer_id: u64,
+            offset: u64,
+            count: u32,
+        ) -> Result<(), String> {
+            let buffer = self
+                .resources
+                .buffers
+                .get(&buffer_id)
+                .ok_or_else(|| format!("GPUBuffer {buffer_id} was not found"))?
+                .buffer
+                .clone();
+            self.render_pass_push_command(
+                pass_id,
+                RenderPassCommand::MultiDrawIndirect {
+                    buffer,
+                    offset,
+                    count,
+                },
+            )
+        }
+
+        pub fn render_pass_multi_draw_indexed_indirect(
+            &mut self,
+            pass_id: u64,
+            buffer_id: u64,
+            offset: u64,
+            count: u32,
+        ) -> Result<(), String> {
+            let buffer = self
+                .resources
+                .buffers
+                .get(&buffer_id)
+                .ok_or_else(|| format!("GPUBuffer {buffer_id} was not found"))?
+                .buffer
+                .clone();
+            self.render_pass_push_command(
+                pass_id,
+                RenderPassCommand::MultiDrawIndexedIndirect {
+                    buffer,
+                    offset,
+                    count,
+                },
+            )
+        }
+
         pub fn render_pass_end(&mut self, pass_id: u64) -> Result<(), String> {
             let pass = self
                 .resources
@@ -4837,6 +5240,12 @@ mod upstream_wgpu_native {
                                 RenderPassCommand::DrawIndexedIndirect { .. } => {
                                     "drawIndexedIndirect".to_string()
                                 }
+                                RenderPassCommand::MultiDrawIndirect { count, .. } => {
+                                    format!("multiDrawIndirect({count})")
+                                }
+                                RenderPassCommand::MultiDrawIndexedIndirect { count, .. } => {
+                                    format!("multiDrawIndexedIndirect({count})")
+                                }
                             })
                             .collect::<Vec<_>>()
                             .join(",");
@@ -4898,7 +5307,7 @@ mod upstream_wgpu_native {
                         timestamp_writes: None,
                         multiview_mask: None,
                     });
-                    let mut current_vertex_buffer_slot_map: Option<Vec<(u32, u32)>> = None;
+                    let mut current_vertex_buffer_slot_map: Option<&[(u32, u32)]> = None;
                     for command in commands {
                         match command {
                             RenderPassCommand::SetPipeline {
@@ -4907,7 +5316,7 @@ mod upstream_wgpu_native {
                                 ..
                             } => {
                                 pass.set_pipeline(pipeline);
-                                current_vertex_buffer_slot_map = vertex_buffer_slot_map.clone();
+                                current_vertex_buffer_slot_map = vertex_buffer_slot_map.as_deref();
                             }
                             RenderPassCommand::SetBindGroup {
                                 index,
@@ -5007,6 +5416,16 @@ mod upstream_wgpu_native {
                             RenderPassCommand::DrawIndexedIndirect { buffer, offset } => {
                                 pass.draw_indexed_indirect(buffer, *offset)
                             }
+                            RenderPassCommand::MultiDrawIndirect {
+                                buffer,
+                                offset,
+                                count,
+                            } => pass.multi_draw_indirect(buffer, *offset, *count),
+                            RenderPassCommand::MultiDrawIndexedIndirect {
+                                buffer,
+                                offset,
+                                count,
+                            } => pass.multi_draw_indexed_indirect(buffer, *offset, *count),
                         }
                     }
                 }
@@ -5612,7 +6031,9 @@ mod upstream_wgpu_native {
                 }
 
                 let old_id = target.texture_id;
-                self.resources.textures.remove(&old_id);
+                if let Some(texture) = self.resources.textures.remove(&old_id) {
+                    subtract_estimated_gpu_memory_bytes(estimated_texture_resource_bytes(&texture));
+                }
                 self.canvas_targets.remove(&canvas_id);
             }
 
@@ -5641,6 +6062,7 @@ mod upstream_wgpu_native {
 
             self.current_canvas_texture = Some(texture.clone());
             let id = self.resources.next();
+            let estimated = estimated_texture_allocation_bytes(width, height, 1, format, 1, 1);
             self.resources.textures.insert(
                 id,
                 TextureResource {
@@ -5653,8 +6075,8 @@ mod upstream_wgpu_native {
                     format,
                 },
             );
+            add_estimated_gpu_memory_bytes(estimated);
             if webgpu_memory_trace_enabled() {
-                let estimated = estimated_texture_allocation_bytes(width, height, 1, format, 1, 1);
                 let total = self.estimated_gpu_memory_bytes();
                 eprintln!(
                     "NativeWebGPU memory canvasTexture id={} canvas={} size={}x{} format={:?} usage=0x{:x} estimated={} ({:.1} MiB) liveEstimated={} ({:.1} MiB)",
@@ -5697,7 +6119,9 @@ mod upstream_wgpu_native {
                 return;
             };
 
-            self.resources.textures.remove(&target.texture_id);
+            if let Some(texture) = self.resources.textures.remove(&target.texture_id) {
+                subtract_estimated_gpu_memory_bytes(estimated_texture_resource_bytes(&texture));
+            }
             if self.current_canvas_id == Some(canvas_id) {
                 self.current_canvas_id = None;
                 self.current_canvas_texture_id = None;
@@ -5763,7 +6187,14 @@ mod upstream_wgpu_native {
         pub fn destroy_resource(&mut self, kind: u32, resource_id: u64) -> bool {
             self.submit_pending_buffer_writes("destroy_resource");
             match kind {
-                1 => self.resources.buffers.remove(&resource_id).is_some(),
+                1 => {
+                    if let Some(buffer) = self.resources.buffers.remove(&resource_id) {
+                        subtract_estimated_gpu_memory_bytes(buffer.size);
+                        true
+                    } else {
+                        false
+                    }
+                }
                 2 => {
                     if self.current_canvas_texture_id == Some(resource_id) {
                         self.current_canvas_texture_id = None;
@@ -5774,7 +6205,14 @@ mod upstream_wgpu_native {
                     }
                     self.canvas_targets
                         .retain(|_, target| target.texture_id != resource_id);
-                    self.resources.textures.remove(&resource_id).is_some()
+                    if let Some(texture) = self.resources.textures.remove(&resource_id) {
+                        subtract_estimated_gpu_memory_bytes(estimated_texture_resource_bytes(
+                            &texture,
+                        ));
+                        true
+                    } else {
+                        false
+                    }
                 }
                 3 => self.resources.texture_views.remove(&resource_id).is_some(),
                 4 => self.resources.samplers.remove(&resource_id).is_some(),
@@ -7151,6 +7589,10 @@ mod upstream_wgpu_native {
                 vendor_id: bootstrap.adapter_info.vendor,
                 device_id: bootstrap.adapter_info.device,
                 adapter_name: bootstrap.adapter_info.name.clone(),
+                feature_info: make_feature_info(
+                    &bootstrap.adapter_info,
+                    bootstrap.enabled_features,
+                ),
             };
 
             Ok(Self {
@@ -7658,6 +8100,18 @@ mod upstream_wgpu_native {
             if supported_features.contains(wgpu::Features::BGRA8UNORM_STORAGE) {
                 required_features |= wgpu::Features::BGRA8UNORM_STORAGE;
             }
+            if supported_features.contains(wgpu::Features::INDIRECT_FIRST_INSTANCE) {
+                required_features |= wgpu::Features::INDIRECT_FIRST_INSTANCE;
+            }
+            if supported_features.contains(wgpu::Features::SHADER_F16) {
+                required_features |= wgpu::Features::SHADER_F16;
+            }
+            if supported_features.contains(wgpu::Features::SUBGROUP) {
+                required_features |= wgpu::Features::SUBGROUP;
+            }
+            if supported_features.contains(wgpu::Features::SUBGROUP_BARRIER) {
+                required_features |= wgpu::Features::SUBGROUP_BARRIER;
+            }
             if supported_features.contains(wgpu::Features::TEXTURE_COMPRESSION_ASTC) {
                 required_features |= wgpu::Features::TEXTURE_COMPRESSION_ASTC;
             }
@@ -7672,6 +8126,7 @@ mod upstream_wgpu_native {
             };
 
             pollster::block_on(selected_adapter.request_device(&descriptor))
+                .map(|(device, queue)| (device, queue, required_features))
         };
         #[allow(unused_mut)]
         let mut device_result = make_device(&adapter, &adapter_limits);
@@ -7695,7 +8150,7 @@ mod upstream_wgpu_native {
             }
         }
 
-        let (device, queue) = device_result.map_err(|error| {
+        let (device, queue, enabled_features) = device_result.map_err(|error| {
             format!(
                 "Failed to create GPU device: {error} (adapter=\"{}\" backend={:?})",
                 adapter_info.name, adapter_info.backend
@@ -7706,6 +8161,7 @@ mod upstream_wgpu_native {
             adapter,
             adapter_info,
             limits: adapter_limits,
+            enabled_features,
             device,
             queue,
             used_fallback_adapter,
