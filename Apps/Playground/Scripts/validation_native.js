@@ -1049,19 +1049,48 @@
         return ValidationBlob;
     }
 
-    function installValidationBlobShim() {
-        let needsBlobShim = typeof globalThis.Blob === "undefined";
-        if (!needsBlobShim) {
-            try {
-                needsBlobShim = typeof (new globalThis.Blob([])).arrayBuffer !== "function";
-            } catch (e) {
-                needsBlobShim = true;
-            }
+    function tryGetSynchronousValidationBlobBytes(blob) {
+        if (!blob || !Array.isArray(blob._validationBlobParts)) {
+            return null;
         }
 
-        if (needsBlobShim) {
-            globalThis.Blob = createValidationBlobConstructor();
+        const buffers = [];
+        let byteLength = 0;
+        for (let i = 0; i < blob._validationBlobParts.length; ++i) {
+            const part = blob._validationBlobParts[i];
+            let bytes;
+            if (part instanceof ArrayBuffer) {
+                bytes = new Uint8Array(part);
+            } else if (ArrayBuffer.isView(part)) {
+                bytes = new Uint8Array(part.buffer, part.byteOffset, part.byteLength);
+            } else if (typeof part === "string") {
+                bytes = encodeUtf8(part);
+            } else {
+                return null;
+            }
+            buffers.push(bytes);
+            byteLength += bytes.byteLength;
         }
+
+        const output = new Uint8Array(byteLength);
+        let offset = 0;
+        for (let i = 0; i < buffers.length; ++i) {
+            output.set(buffers[i], offset);
+            offset += buffers[i].byteLength;
+        }
+        return output;
+    }
+
+    function tryCreateValidationBlobDataUrl(blob) {
+        const bytes = tryGetSynchronousValidationBlobBytes(blob);
+        if (!bytes) {
+            return null;
+        }
+        return "data:" + (blob.type || "application/octet-stream") + ";base64," + bytesToBase64(bytes);
+    }
+
+    function installValidationBlobShim() {
+        globalThis.Blob = createValidationBlobConstructor();
     }
 
     function imageFromDataUrl(dataUrl) {
@@ -1100,6 +1129,11 @@
     function installValidationImageLoadingShim() {
         globalThis.URL = globalThis.URL || {};
         URL.createObjectURL = function (blob) {
+            const dataUrl = tryCreateValidationBlobDataUrl(blob);
+            if (dataUrl) {
+                return dataUrl;
+            }
+
             const url = "blob:native-validation/" + nextValidationObjectUrlId++;
             validationObjectUrls[url] = blob;
             return url;
