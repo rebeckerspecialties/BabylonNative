@@ -44,6 +44,7 @@ function isBackdropMaterialName(name) {
 
 function parseArgs(argv) {
     const args = {
+        check: false,
         input: path.resolve(__dirname, "../Playground/Scripts/native_xr_portal_assets/native_xr_portal_hillvalley.astc.glb"),
         output: null,
     };
@@ -57,8 +58,10 @@ function parseArgs(argv) {
         } else if (arg === "--output" && next) {
             args.output = path.resolve(next);
             index++;
+        } else if (arg === "--check") {
+            args.check = true;
         } else {
-            fail("Usage: tuneHillValleyGltfMaterials.js [--input scene.glb] [--output scene.glb]");
+            fail("Usage: tuneHillValleyGltfMaterials.js [--check] [--input scene.glb] [--output scene.glb]");
         }
     }
 
@@ -236,8 +239,64 @@ function tune(json) {
     ensureHillValleyPunctualLights(json);
 }
 
+function stableStringify(value) {
+    if (value === null || typeof value !== "object") {
+        return JSON.stringify(value);
+    }
+    if (Array.isArray(value)) {
+        return `[${value.map(stableStringify).join(",")}]`;
+    }
+
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableStringify(value[key])}`).join(",")}}`;
+}
+
+function summarizeMaterials(json) {
+    let backdropCount = 0;
+    let unlitBackdropCount = 0;
+    let emissiveBackdropCount = 0;
+    let reflectiveCount = 0;
+    let emissiveCount = 0;
+
+    for (const material of json.materials || []) {
+        const lowerName = String(material.name || "").toLowerCase();
+        const pbr = material.pbrMetallicRoughness || {};
+        if (isBackdropMaterialName(lowerName)) {
+            backdropCount++;
+            if (material.extensions && material.extensions.KHR_materials_unlit) {
+                unlitBackdropCount++;
+            }
+            if (material.emissiveTexture) {
+                emissiveBackdropCount++;
+            }
+        }
+        if (/metal|carrosserie|chrome|wheel|wheels|reactor|cable|cables|plate|vents|grill|grid|delorean|volant|convecteur/.test(lowerName) &&
+            Number(pbr.metallicFactor || 0) > 0.2) {
+            reflectiveCount++;
+        }
+        if (material.emissiveTexture || (material.emissiveFactor && material.emissiveFactor.some((value) => Number(value || 0) > 0))) {
+            emissiveCount++;
+        }
+    }
+
+    const lights = json.extensions && json.extensions.KHR_lights_punctual && Array.isArray(json.extensions.KHR_lights_punctual.lights)
+        ? json.extensions.KHR_lights_punctual.lights.length
+        : 0;
+
+    return `backdrops=${backdropCount}, unlitBackdrops=${unlitBackdropCount}, emissiveBackdrops=${emissiveBackdropCount}, reflective=${reflectiveCount}, emissive=${emissiveCount}, lights=${lights}`;
+}
+
 const args = parseArgs(process.argv);
 const glb = readGlb(args.input);
+const before = stableStringify(glb.json);
 tune(glb.json);
-writeGlb(args.output, glb.json, glb.bin);
-console.log(`Updated realtime PBR material hints in ${args.output}`);
+const after = stableStringify(glb.json);
+
+if (args.check) {
+    if (before !== after) {
+        fail(`Hill Valley material hints are out of date in ${args.input}; run tuneHillValleyGltfMaterials.js to refresh them.`);
+    }
+    console.log(`Hill Valley material hints are aligned in ${args.input} (${summarizeMaterials(glb.json)}).`);
+} else {
+    writeGlb(args.output, glb.json, glb.bin);
+    console.log(`Updated realtime PBR material hints in ${args.output} (${summarizeMaterials(glb.json)}).`);
+}
