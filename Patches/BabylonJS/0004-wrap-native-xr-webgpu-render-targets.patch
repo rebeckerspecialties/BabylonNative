@@ -1,0 +1,140 @@
+diff --git a/packages/dev/core/src/XR/native/nativeXRRenderTarget.ts b/packages/dev/core/src/XR/native/nativeXRRenderTarget.ts
+index 1a1af4f9e3..5848bf52c7 100644
+--- a/packages/dev/core/src/XR/native/nativeXRRenderTarget.ts
++++ b/packages/dev/core/src/XR/native/nativeXRRenderTarget.ts
+@@ -1,5 +1,7 @@
+-import { type RenderTargetTexture } from "../../Materials/Textures/renderTargetTexture";
+-import { type Viewport } from "../../Maths/math.viewport";
++import { Constants } from "../../Engines/constants";
++import { RenderTargetTexture } from "../../Materials/Textures/renderTargetTexture";
++import { Color4 } from "../../Maths/math.color";
++import { type Viewport } from "../../Maths/math.viewport";
+ import { type Nullable } from "../../types";
+ import { WebXRLayerWrapper } from "../webXRLayerWrapper";
+ import { WebXRLayerRenderTargetTextureProvider } from "../webXRRenderTargetTextureProvider";
+@@ -26,22 +28,115 @@ export class NativeXRLayerWrapper extends WebXRLayerWrapper {
+  * Provides render target textures for layers created by Babylon Native.
+  * @internal
+  */
+-export class NativeXRLayerRenderTargetTextureProvider extends WebXRLayerRenderTargetTextureProvider {
+-    private _nativeRTTProvider: WebXRLayerRenderTargetTextureProvider;
+-    private _nativeLayer: XRWebGLLayer;
++export class NativeXRLayerRenderTargetTextureProvider extends WebXRLayerRenderTargetTextureProvider {
++    private _nativeRTTProvider: WebXRLayerRenderTargetTextureProvider;
++    private _nativeLayer: XRWebGLLayer;
++    private _sessionScene: WebXRSessionManager["scene"];
++    private _sessionEngine: ReturnType<WebXRSessionManager["scene"]["getEngine"]>;
+ 
+     constructor(
+         sessionManager: WebXRSessionManager,
+         public override readonly layerWrapper: NativeXRLayerWrapper
+-    ) {
+-        super(sessionManager.scene, layerWrapper);
+-        this._nativeRTTProvider = (navigator as any).xr.getNativeRenderTargetProvider(
+-            sessionManager.session,
+-            this._createRenderTargetTexture.bind(this),
++    ) {
++        super(sessionManager.scene, layerWrapper);
++        this._sessionScene = sessionManager.scene;
++        this._sessionEngine = sessionManager.scene.getEngine();
++        this._nativeRTTProvider = (navigator as any).xr.getNativeRenderTargetProvider(
++            sessionManager.session,
++            this._createRenderTargetTexture.bind(this),
+             this._destroyRenderTargetTexture.bind(this)
+         );
+-        this._nativeLayer = layerWrapper.layer;
+-    }
++        this._nativeLayer = layerWrapper.layer;
++    }
++
++    private _isNativeWebGPUTexture(texture: unknown): texture is GPUTexture {
++        return !!texture && typeof (texture as GPUTexture).createView === "function";
++    }
++
++    private _colorFormatFromWebGPU(format: GPUTextureFormat): number {
++        return format.startsWith("bgra8") ? Constants.TEXTUREFORMAT_BGRA : Constants.TEXTUREFORMAT_RGBA;
++    }
++
++    private _depthFormatFromWebGPU(format: GPUTextureFormat): number {
++        switch (format) {
++            case "depth16unorm":
++                return Constants.TEXTUREFORMAT_DEPTH16;
++            case "depth24plus":
++                return Constants.TEXTUREFORMAT_DEPTH24;
++            case "depth24plus-stencil8":
++                return Constants.TEXTUREFORMAT_DEPTH24_STENCIL8;
++            case "depth32float":
++                return Constants.TEXTUREFORMAT_DEPTH32_FLOAT;
++            case "depth32float-stencil8":
++                return Constants.TEXTUREFORMAT_DEPTH32FLOAT_STENCIL8;
++            default:
++                return Constants.TEXTUREFORMAT_DEPTH32_FLOAT;
++        }
++    }
++
++    private _configureWrappedTexture(texture: any, width: number, height: number, format: GPUTextureFormat, babylonFormat: number): void {
++        texture.width = width;
++        texture.baseWidth = width;
++        texture.height = height;
++        texture.baseHeight = height;
++        texture.depth = 1;
++        texture.isReady = true;
++        texture.samples = 1;
++        texture.generateMipMaps = false;
++        texture.format = babylonFormat;
++        texture._hardwareTexture.format = format;
++        texture._hardwareTexture.originalFormat = format;
++    }
++
++    protected override _createRenderTargetTexture(
++        width: number,
++        height: number,
++        framebuffer: Nullable<WebGLFramebuffer>,
++        colorTexture?: WebGLTexture,
++        depthStencilTexture?: WebGLTexture,
++        multiview?: boolean
++    ): RenderTargetTexture {
++        const nativeColorTexture = colorTexture as unknown as (GPUTexture & { format?: GPUTextureFormat }) | undefined;
++        if (!this._isNativeWebGPUTexture(nativeColorTexture)) {
++            return super._createRenderTargetTexture(width, height, framebuffer, colorTexture, depthStencilTexture, multiview);
++        }
++
++        const engine = this._sessionEngine as any;
++        if (typeof engine.wrapWebGPUTexture !== "function") {
++            throw new Error("NativeXR received WebGPU render targets, but the active engine cannot wrap GPUTexture objects.");
++        }
++
++        const colorFormat = nativeColorTexture.format ?? "bgra8unorm";
++        const colorInternalTexture = engine.wrapWebGPUTexture(nativeColorTexture);
++        this._configureWrappedTexture(colorInternalTexture, width, height, colorFormat, this._colorFormatFromWebGPU(colorFormat));
++
++        const renderTargetTexture = new RenderTargetTexture("XR renderTargetTexture", { width, height }, this._sessionScene, {
++            colorAttachment: colorInternalTexture,
++            generateDepthBuffer: false,
++            generateMipMaps: false,
++            generateStencilBuffer: false,
++            gammaSpace: false,
++        });
++        const transparentClear = new Color4(0, 0, 0, 0);
++        renderTargetTexture.clearColor = transparentClear;
++        renderTargetTexture.skipInitialClear = false;
++        renderTargetTexture.onClearObservable.add((engine) => {
++            engine.clear(transparentClear, true, true, true);
++        });
++
++        const nativeDepthTexture = depthStencilTexture as unknown as (GPUTexture & { format?: GPUTextureFormat }) | undefined;
++        if (this._isNativeWebGPUTexture(nativeDepthTexture)) {
++            const depthFormat = nativeDepthTexture.format ?? "depth32float-stencil8";
++            const depthInternalTexture = engine.wrapWebGPUTexture(nativeDepthTexture);
++            this._configureWrappedTexture(depthInternalTexture, width, height, depthFormat, this._depthFormatFromWebGPU(depthFormat));
++            renderTargetTexture.renderTarget?.setDepthStencilTexture(depthInternalTexture, false);
++        }
++
++        renderTargetTexture.disableRescaling();
++        this._renderTargetTextures.push(renderTargetTexture);
++
++        return renderTargetTexture;
++    }
+ 
+     public trySetViewportForView(viewport: Viewport): boolean {
+         viewport.x = 0;
