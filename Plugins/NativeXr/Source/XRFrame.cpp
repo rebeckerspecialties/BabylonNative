@@ -165,8 +165,13 @@ namespace Babylon
                 return info.Env().Undefined();
             }
 
-            assert(m_sceneObjects.count(objectID) > 0);
-            return m_sceneObjects.at(objectID).Value();
+            const auto sceneObjectIterator = m_sceneObjects.find(objectID);
+            if (sceneObjectIterator == m_sceneObjects.end())
+            {
+                return info.Env().Undefined();
+            }
+
+            return sceneObjectIterator->second.Value();
         }
 
         Napi::Value XRFrame::GetViewerPose(const Napi::CallbackInfo& info)
@@ -411,7 +416,11 @@ namespace Babylon
                 }
 
                 const auto& sceneObject = m_frame->GetSceneObjectByID(sceneObjectID);
-                m_sceneObjects.at(sceneObjectID).Value().Set("type", xr::SceneObjectTypeNames.at(sceneObject.Type));
+                const auto typeNameIterator = xr::SceneObjectTypeNames.find(sceneObject.Type);
+                const auto& typeName = typeNameIterator != xr::SceneObjectTypeNames.end()
+                    ? typeNameIterator->second
+                    : xr::SceneObjectTypeNames.find(xr::SceneObjectType::Unknown)->second;
+                m_sceneObjects.at(sceneObjectID).Value().Set("type", typeName);
             }
 
             for (const auto& removedObjectID : m_frame->RemovedSceneObjects)
