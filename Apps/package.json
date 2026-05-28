@@ -6,12 +6,14 @@
     "UnitTests/JavaScript"
   ],
   "scripts": {
-    "getNightly": "node scripts/getNightly.js"
+    "getNightly": "node scripts/getNightly.js",
+    "patch:babylonjs:check": "node scripts/applyBabylonJsPatchStack.js --check",
+    "patch:babylonjs:apply": "node scripts/applyBabylonJsPatchStack.js --apply"
   },
   "dependencies": {
-    "babylonjs": "^9.3.4",
+    "babylonjs": "^9.9.1",
     "babylonjs-gltf2interface": "^9.3.4",
-    "babylonjs-gui": "^9.3.4",
+    "babylonjs-gui": "^9.9.1",
     "babylonjs-loaders": "^9.3.4",
     "babylonjs-materials": "^9.3.4",
     "babylonjs-serializers": "^9.3.4",

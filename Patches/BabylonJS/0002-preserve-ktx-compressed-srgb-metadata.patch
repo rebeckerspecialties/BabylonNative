@@ -1,0 +1,34 @@
+diff --git a/packages/dev/core/src/Materials/Textures/Loaders/ktxTextureLoader.ts b/packages/dev/core/src/Materials/Textures/Loaders/ktxTextureLoader.ts
+index 2e1c33ef60..183edde1e2 100644
+--- a/packages/dev/core/src/Materials/Textures/Loaders/ktxTextureLoader.ts
++++ b/packages/dev/core/src/Materials/Textures/Loaders/ktxTextureLoader.ts
+@@ -79,13 +79,22 @@ export class _KTXTextureLoader implements IInternalTextureLoader {
+         }
+ 
+         // Need to invert vScale as invertY via UNPACK_FLIP_Y_WEBGL is not supported by compressed texture
+-        texture._invertVScale = !texture.invertY;
+-        const engine = texture.getEngine();
+-        const ktx = new KhronosTextureContainer(data, 6);
+-
+-        const loadMipmap = ktx.numberOfMipmapLevels > 1 && texture.generateMipMaps;
+-
+-        engine._unpackFlipY(true);
++        texture._invertVScale = !texture.invertY;
++        const engine = texture.getEngine();
++        const ktx = new KhronosTextureContainer(data, 6);
++
++        const mappedFormat = MapSRGBToLinear(ktx.glInternalFormat);
++        if (mappedFormat) {
++            texture.format = mappedFormat;
++            texture._useSRGBBuffer = texture.getEngine()._getUseSRGBBuffer(true, texture.generateMipMaps);
++            texture._gammaSpace = true;
++        } else {
++            texture.format = ktx.glInternalFormat;
++        }
++
++        const loadMipmap = ktx.numberOfMipmapLevels > 1 && texture.generateMipMaps;
++
++        engine._unpackFlipY(true);
+ 
+         ktx.uploadLevels(texture, texture.generateMipMaps);
+ 
