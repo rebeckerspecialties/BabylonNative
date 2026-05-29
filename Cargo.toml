@@ -6,7 +6,7 @@ resolver = "2"
 
 [workspace.dependencies]
 bytemuck = { version = "=1.25.0", features = ["derive"] }
-femtovg = { version = "=0.25.0", default-features = false, features = ["wgpu", "textlayout"] }
+femtovg = { version = "=0.25.1", default-features = false, features = ["wgpu", "textlayout"] }
 image = { version = "=0.25.10", default-features = false, features = ["png", "jpeg", "gif", "bmp", "webp"] }
 imgref = "=1.12.1"
 pollster = "=0.4.0"
@@ -16,4 +16,4 @@ serde_json = "=1.0.145"
 wgpu = { version = "=29.0.3", default-features = false }
 
 [patch.crates-io]
-femtovg = { git = "https://github.com/rebeckerspecialties/femtovg.git", branch = "codex/rounded-scissor-clips" }
+femtovg = { git = "https://github.com/rebeckerspecialties/femtovg.git", branch = "show-multiple-guis-stack" }
