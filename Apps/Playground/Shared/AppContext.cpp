@@ -20,6 +20,8 @@
 
 #include <Babylon/Polyfills/Blob.h>
 #include <Babylon/Polyfills/Console.h>
+#include <Babylon/Polyfills/Performance.h>
+#include <Babylon/Polyfills/TextDecoder.h>
 #include <Babylon/Polyfills/URL.h>
 #include <Babylon/Polyfills/Window.h>
 #include <Babylon/Polyfills/XMLHttpRequest.h>
@@ -358,8 +360,6 @@ AppContext::~AppContext()
         m_deviceUpdate->Finish();
         m_device->FinishRenderingCurrentFrame();
     }
-
-    Babylon::Plugins::ShaderCache::Disable();
 
     m_scriptLoader.reset();
     m_input = {};

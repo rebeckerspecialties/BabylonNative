@@ -1,6 +1,7 @@
 #import <Cocoa/Cocoa.h>
 #import <Babylon/DebugTrace.h>
 #import "AppDelegate.h"
+#import <Shared/Diagnostics.h>
 
 int main(int argc, const char * argv[]) {
     Diagnostics::Initialize();
