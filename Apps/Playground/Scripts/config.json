@@ -1153,11 +1153,11 @@
             "title": "GUI Near Menu",
             "playgroundId": "#DZPGOB#0",
             "renderCount": 60,
-            "excludeFromAutomaticTesting": true,
-            "reason": "Test crashes on Win32 V8 D3D11 / hangs on OpenGL",
+            "reason": "OpenGL: BGFX FATAL shader compile error in GUI fragment shader ('=' : cannot convert from 'highp float' to 'bool'). Re-enabled on D3D11 post BabylonJS/BabylonNative#1695; NativeWebGPU keeps stricter comparison limits while remaining included.",
             "includeInNativeWebGPU": true,
             "threshold": 35,
             "errorRatio": 0.25,
+            "excludedGraphicsApis": [ "OpenGL" ],
             "referenceImage": "guiNearMenu.png"
         },
         {
