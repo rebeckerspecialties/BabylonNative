@@ -352,6 +352,62 @@ TEST(NativeWebGPUAsyncBridge, CreateRenderPipelineAsyncRejectsForInvalidDescript
     )JS");
 }
 
+TEST(NativeWebGPUAsyncBridge, RenderPassEncoderExposesDebugMarkerMethods)
+{
+    RunNativeWebGpuAsyncScript(R"JS(
+        (async () => {
+            try {
+                const adapter = await navigator.gpu.requestAdapter();
+                const device = await adapter.requestDevice();
+                const context = navigator.gpu._createCanvasContext();
+                context.configure({
+                    device,
+                    format: navigator.gpu.getPreferredCanvasFormat(),
+                    width: 64,
+                    height: 64
+                });
+
+                const encoder = device.createCommandEncoder({ label: "debug marker unit test" });
+                for (const method of ["pushDebugGroup", "popDebugGroup", "insertDebugMarker"]) {
+                    if (typeof encoder[method] !== "function") {
+                        throw new Error("GPUCommandEncoder missing " + method);
+                    }
+                }
+
+                encoder.pushDebugGroup("encoder group");
+                encoder.insertDebugMarker("encoder marker");
+
+                const pass = encoder.beginRenderPass({
+                    colorAttachments: [{
+                        view: context.getCurrentTexture().createView(),
+                        loadOp: "clear",
+                        storeOp: "store",
+                        clearValue: { r: 0, g: 0, b: 0, a: 1 }
+                    }]
+                });
+                for (const method of ["pushDebugGroup", "popDebugGroup", "insertDebugMarker"]) {
+                    if (typeof pass[method] !== "function") {
+                        throw new Error("GPURenderPassEncoder missing " + method);
+                    }
+                }
+
+                pass.pushDebugGroup("pass group");
+                pass.insertDebugMarker("pass marker");
+                pass.popDebugGroup();
+                pass.end();
+
+                encoder.popDebugGroup();
+                device.queue.submit([encoder.finish()]);
+                await device.queue.onSubmittedWorkDone();
+
+                __nativeWebGpuTestDone(true, "");
+            } catch (error) {
+                __nativeWebGpuTestDone(false, error && error.stack ? error.stack : String(error));
+            }
+        })();
+    )JS");
+}
+
 TEST(NativeWebGPUAsyncBridge, SetPipelineWithoutDrawActivatesNativeDrawPath)
 {
     RunNativeWebGpuAsyncScript(R"JS(
