@@ -1541,6 +1541,7 @@ namespace Babylon::Plugins::NativeWebGPU
         Napi::Object CreateGpuRenderPassEncoder(Napi::Env env, uint64_t nativePassId)
         {
             auto pass = Napi::Object::New(env);
+            auto noOp = GetNoOpFunction(env);
             AttachNativeHandle(pass, NativeResourceKind::RenderPass, nativePassId);
 
             pass.Set("setPipeline", Napi::Function::New(env, [](const Napi::CallbackInfo& info) {
@@ -1761,6 +1762,9 @@ namespace Babylon::Plugins::NativeWebGPU
                     babylon_wgpu_mark_webgpu_draw_requested();
                 }
             }));
+            pass.Set("pushDebugGroup", noOp);
+            pass.Set("popDebugGroup", noOp);
+            pass.Set("insertDebugMarker", noOp);
             pass.Set("end", Napi::Function::New(env, [](const Napi::CallbackInfo& info) {
                 const auto passId = GetNativeHandleId(info.This(), NativeResourceKind::RenderPass);
                 babylon_wgpu_native_render_pass_end(passId);
