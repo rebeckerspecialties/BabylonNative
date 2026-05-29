@@ -268,7 +268,7 @@ dependencies = [
 [[package]]
 name = "femtovg"
 version = "0.25.1"
-source = "git+https://github.com/rebeckerspecialties/femtovg.git?branch=show-multiple-guis-stack#11c3fb441bab7284c32386ce164ac8778a7a36bc"
+source = "git+https://github.com/rebeckerspecialties/femtovg.git?branch=show-multiple-guis-stack#bf273055bcd75b3504f3121e6c6b8dd7f33a5652"
 dependencies = [
  "bitflags",
  "bytemuck",
