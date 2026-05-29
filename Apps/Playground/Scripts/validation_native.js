@@ -282,7 +282,10 @@
             return "null";
         }
         if (value && value.stack) {
-            return value.stack;
+            const name = value.name ? String(value.name) : "";
+            const message = value.message ? String(value.message) : "";
+            const prefix = name && message ? name + ": " + message : (message || name);
+            return prefix ? prefix + "\n" + value.stack : value.stack;
         }
         try {
             return String(value);
