@@ -98,6 +98,13 @@ if(TARGET AppRuntime)
     set_property(TARGET AppRuntime PROPERTY UNITY_BUILD false)
 endif()
 
+# --------------------------------------------------
+# metal-cpp
+# --------------------------------------------------
+if(APPLE OR BABYLON_NATIVE_BUILD_SOURCETREE)
+    FetchContent_MakeAvailable_With_Message(metal-cpp)
+endif()
+
 if(APPLE)
     # Generate a single header.
     find_package(Python3 REQUIRED COMPONENTS Interpreter)

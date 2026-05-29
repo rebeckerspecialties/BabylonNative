@@ -185,7 +185,9 @@ target_link_libraries(Playground
     PRIVATE GraphicsDevice
     PRIVATE NativeInput
     PRIVATE NativeWebGPU
+    PRIVATE Performance
     PRIVATE ScriptLoader
+    PRIVATE TextDecoder
     PRIVATE URL
     PRIVATE Window
     PRIVATE XMLHttpRequest
