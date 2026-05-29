@@ -4,6 +4,15 @@ endif()
 
 option(BABYLON_NATIVE_TESTS_USE_NOOP_METAL_DEVICE "Use a noop Metal device for Apple platforms." OFF)
 
+if(NOT TARGET gtest_main)
+    include(FetchContent)
+    FetchContent_Declare(googletest
+        GIT_REPOSITORY https://github.com/google/googletest.git
+        GIT_TAG v1.14.0
+        EXCLUDE_FROM_ALL)
+    FetchContent_MakeAvailable(googletest)
+endif()
+
 set(BABYLONJS_ASSETS
     "../node_modules/babylonjs/babylon.max.js")
 
