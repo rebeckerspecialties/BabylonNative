@@ -1,69 +1,40 @@
-diff --git a/packages/dev/core/src/PostProcesses/RenderPipeline/Pipelines/ssao2RenderingPipeline.ts b/packages/dev/core/src/PostProcesses/RenderPipeline/Pipelines/ssao2RenderingPipeline.ts
-index aad892b301..c8fbfa2b5d 100644
---- a/packages/dev/core/src/PostProcesses/RenderPipeline/Pipelines/ssao2RenderingPipeline.ts
-+++ b/packages/dev/core/src/PostProcesses/RenderPipeline/Pipelines/ssao2RenderingPipeline.ts
-@@ -357,19 +357,15 @@ export class SSAO2RenderingPipeline extends PostProcessRenderPipeline {
-         const blurRatio = this._ratio.blurRatio || ratio;
- 
-         // Set up assets
--        if (this._forceGeometryBuffer) {
--            if (!this._forcedGeometryBuffer) {
--                scene.enableGeometryBufferRenderer();
--            }
+diff --git a/packages/dev/core/src/PostProcesses/RenderPipeline/Pipelines/ssao2RenderingPipeline.pure.ts b/packages/dev/core/src/PostProcesses/RenderPipeline/Pipelines/ssao2RenderingPipeline.pure.ts
+index b9f52fcfc5..316b1760c8 100644
+--- a/packages/dev/core/src/PostProcesses/RenderPipeline/Pipelines/ssao2RenderingPipeline.pure.ts
++++ b/packages/dev/core/src/PostProcesses/RenderPipeline/Pipelines/ssao2RenderingPipeline.pure.ts
+@@ -365,14 +365,10 @@ export class SSAO2RenderingPipeline extends PostProcessRenderPipeline {
+             if (!this._forcedGeometryBuffer) {
+                 scene.enableGeometryBufferRenderer();
+             }
 -            if (scene.geometryBufferRenderer?.generateNormalsInWorldSpace) {
 -                Logger.Error("SSAO2RenderingPipeline does not support generateNormalsInWorldSpace=true for the geometry buffer renderer!");
 -            }
--        } else {
--            scene.enablePrePassRenderer();
++            this._thinSSAORenderingPipeline._ssaoPostProcess.normalsInWorldSpace = !!this._geometryBufferRenderer?.generateNormalsInWorldSpace;
+         } else {
+             scene.enablePrePassRenderer();
 -            if (scene.prePassRenderer?.generateNormalsInWorldSpace) {
 -                Logger.Error("SSAO2RenderingPipeline does not support generateNormalsInWorldSpace=true for the prepass renderer!");
 -            }
--        }
-+        if (this._forceGeometryBuffer) {
-+            if (!this._forcedGeometryBuffer) {
-+                scene.enableGeometryBufferRenderer();
-+            }
-+            this._thinSSAORenderingPipeline._ssaoPostProcess.normalsInWorldSpace = !!this._geometryBufferRenderer?.generateNormalsInWorldSpace;
-+        } else {
-+            scene.enablePrePassRenderer();
 +            this._thinSSAORenderingPipeline._ssaoPostProcess.normalsInWorldSpace = !!scene.prePassRenderer?.generateNormalsInWorldSpace;
-+        }
+         }
  
          this._originalColorPostProcess = new PassPostProcess("SSAOOriginalSceneColor", 1.0, null, Texture.BILINEAR_SAMPLINGMODE, scene.getEngine(), undefined, this._textureType);
-         this._originalColorPostProcess.onBeforeRenderObservable.add(() => {
 diff --git a/packages/dev/core/src/PostProcesses/thinSSAO2PostProcess.ts b/packages/dev/core/src/PostProcesses/thinSSAO2PostProcess.ts
-index e41f014aba..38713c3de4 100644
+index e41f014aba..3ee178db48 100644
 --- a/packages/dev/core/src/PostProcesses/thinSSAO2PostProcess.ts
 +++ b/packages/dev/core/src/PostProcesses/thinSSAO2PostProcess.ts
-@@ -31,11 +31,12 @@ export class ThinSSAO2PostProcess extends EffectWrapper {
-         "texelSize",
-         "xViewport",
-         "yViewport",
--        "viewport",
--        "maxZ",
--        "minZAspect",
--        "depthProjection",
--    ];
-+        "viewport",
-+        "maxZ",
-+        "minZAspect",
-+        "depthProjection",
+@@ -35,6 +35,7 @@ export class ThinSSAO2PostProcess extends EffectWrapper {
+         "maxZ",
+         "minZAspect",
+         "depthProjection",
 +        "normalWorldToView",
-+    ];
+     ];
  
      public static readonly Samplers = ["randomSampler", "depthSampler", "normalSampler"];
+@@ -99,6 +100,20 @@ export class ThinSSAO2PostProcess extends EffectWrapper {
  
-@@ -95,9 +96,23 @@ export class ThinSSAO2PostProcess extends EffectWrapper {
+     private _epsilon: number = 0.02;
  
-     public minZAspect: number = 0.2;
- 
--    public base: number = 0;
--
--    private _epsilon: number = 0.02;
-+    public base: number = 0;
-+
-+    private _epsilon: number = 0.02;
-+
 +    private _normalsInWorldSpace = false;
 +
 +    public set normalsInWorldSpace(value: boolean) {
@@ -77,49 +48,32 @@ index e41f014aba..38713c3de4 100644
 +    public get normalsInWorldSpace(): boolean {
 +        return this._normalsInWorldSpace;
 +    }
- 
++
      public set epsilon(n: number) {
          this._epsilon = n;
-@@ -178,10 +193,13 @@ export class ThinSSAO2PostProcess extends EffectWrapper {
-             const orthoTop = camera.orthoTop ?? halfHeight;
-             effect.setMatrix3x3("depthProjection", ThinSSAO2PostProcess.ORTHO_DEPTH_PROJECTION);
+         this.updateEffect();
+@@ -180,6 +195,9 @@ export class ThinSSAO2PostProcess extends EffectWrapper {
              effect.setFloat4("viewport", orthoLeft, orthoRight, orthoBottom, orthoTop);
--        }
--        effect.setMatrix("projection", projectionMatrix);
--
--        effect.setTexture("randomSampler", this._randomTexture);
-+        }
-+        effect.setMatrix("projection", projectionMatrix);
+         }
+         effect.setMatrix("projection", projectionMatrix);
 +        if (this._normalsInWorldSpace) {
 +            effect.setMatrix("normalWorldToView", camera.getViewMatrix());
 +        }
-+
-+        effect.setTexture("randomSampler", this._randomTexture);
+ 
+         effect.setTexture("randomSampler", this._randomTexture);
      }
- 
-     public override dispose() {
-@@ -262,10 +280,13 @@ export class ThinSSAO2PostProcess extends EffectWrapper {
- 
-         let defines = `#define SSAO\n#define SAMPLES ${samples}\n#define EPSILON ${epsilon.toFixed(4)}`;
- 
--        if (this.camera?.mode === Camera.ORTHOGRAPHIC_CAMERA) {
--            defines += `\n#define ORTHOGRAPHIC_CAMERA`;
--        }
--
--        return defines;
--    }
-+        if (this.camera?.mode === Camera.ORTHOGRAPHIC_CAMERA) {
-+            defines += `\n#define ORTHOGRAPHIC_CAMERA`;
-+        }
+@@ -265,6 +283,9 @@ export class ThinSSAO2PostProcess extends EffectWrapper {
+         if (this.camera?.mode === Camera.ORTHOGRAPHIC_CAMERA) {
+             defines += `\n#define ORTHOGRAPHIC_CAMERA`;
+         }
 +        if (this._normalsInWorldSpace) {
 +            defines += `\n#define NORMAL_WORLDSPACE`;
 +        }
-+
-+        return defines;
-+    }
- }
+ 
+         return defines;
+     }
 diff --git a/packages/dev/core/src/Shaders/ssao2.fragment.fx b/packages/dev/core/src/Shaders/ssao2.fragment.fx
-index 4486112c4e..26ec49104c 100644
+index 4486112c4e..0c805642cb 100644
 --- a/packages/dev/core/src/Shaders/ssao2.fragment.fx
 +++ b/packages/dev/core/src/Shaders/ssao2.fragment.fx
 @@ -45,18 +45,24 @@ varying vec2 vUV;
@@ -135,29 +89,30 @@ index 4486112c4e..26ec49104c 100644
 +	uniform vec2 texelSize;
 +
 +	uniform mat4 projection;
-+	#ifdef NORMAL_WORLDSPACE
-+		uniform mat4 normalWorldToView;
-+	#endif
++#ifdef NORMAL_WORLDSPACE
++	uniform mat4 normalWorldToView;
++#endif
 +
 +	void main()
 +	{
  		vec3 random = textureLod(randomSampler, vUV * randTextureTiles, 0.0).rgb;
  		float depth = textureLod(depthSampler, vUV, 0.0).r;
- 		float depthSign = sign(depth);
+-		float depthSign = sign(depth);
 -		depth = depth * depthSign;
 -		vec3 normal = textureLod(normalSampler, vUV, 0.0).rgb;
 -		float occlusion = 0.0;
++		float depthSign = sign(depth);
 +		depth = depth * depthSign;
 +		vec3 normal = textureLod(normalSampler, vUV, 0.0).rgb;
-+	#ifdef NORMAL_WORLDSPACE
++#ifdef NORMAL_WORLDSPACE
 +		normal = normalize((normalWorldToView * vec4(normal, 0.0)).xyz);
-+	#endif
++#endif
 +		float occlusion = 0.0;
  		float correctedRadius = min(radius, minZAspect * depth / near);
  
  	#ifdef ORTHOGRAPHIC_CAMERA
 diff --git a/packages/dev/core/src/ShadersWGSL/ssao2.fragment.fx b/packages/dev/core/src/ShadersWGSL/ssao2.fragment.fx
-index 8f0be0ad8d..ff1e647a1e 100644
+index 8f0be0ad8d..0621537e48 100644
 --- a/packages/dev/core/src/ShadersWGSL/ssao2.fragment.fx
 +++ b/packages/dev/core/src/ShadersWGSL/ssao2.fragment.fx
 @@ -48,18 +48,24 @@ var textureSampler: texture_2d<f32>;
@@ -173,23 +128,24 @@ index 8f0be0ad8d..ff1e647a1e 100644
 +	uniform texelSize: vec2f;
 +
 +	uniform projection: mat4x4f;
-+	#ifdef NORMAL_WORLDSPACE
-+		uniform normalWorldToView: mat4x4f;
-+	#endif
++#ifdef NORMAL_WORLDSPACE
++	uniform normalWorldToView: mat4x4f;
++#endif
 +
 +	@fragment
 +	fn main(input: FragmentInputs) -> FragmentOutputs {
  		var random: vec3f = textureSampleLevel(randomSampler, randomSamplerSampler, input.vUV * uniforms.randTextureTiles, 0.0).rgb;
  		var depth: f32 = textureSampleLevel(depthSampler, depthSamplerSampler, input.vUV, 0.0).r;
- 		var depthSign: f32 = sign(depth);
+-		var depthSign: f32 = sign(depth);
 -		depth = depth * depthSign;
 -		var normal: vec3f = textureSampleLevel(normalSampler, normalSamplerSampler, input.vUV, 0.0).rgb;
 -		var occlusion: f32 = 0.0;
++		var depthSign: f32 = sign(depth);
 +		depth = depth * depthSign;
 +		var normal: vec3f = textureSampleLevel(normalSampler, normalSamplerSampler, input.vUV, 0.0).rgb;
-+	#ifdef NORMAL_WORLDSPACE
++#ifdef NORMAL_WORLDSPACE
 +		normal = normalize((uniforms.normalWorldToView * vec4f(normal, 0.0)).xyz);
-+	#endif
++#endif
 +		var occlusion: f32 = 0.0;
  		var correctedRadius: f32 = min(uniforms.radius, uniforms.minZAspect * depth / uniforms.near);
  
