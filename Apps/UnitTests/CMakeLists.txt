@@ -21,6 +21,9 @@ set(BABYLONJS_MATERIALS_ASSETS
 
 set(TEST_ASSETS)
 
+file(GLOB TEST_SCRIPTS "JavaScript/src/*.ts")
+set_source_files_properties(${TEST_SCRIPTS} PROPERTIES HEADER_FILE_ONLY TRUE)
+
 set(SOURCES
     "Source/App.h"
     "Source/App.cpp"
@@ -39,14 +42,20 @@ set(UNITTEST_LIBRARIES
 
 if(TARGET NativeEngine)
     list(APPEND TEST_ASSETS
+        "JavaScript/dist/tests.externalTexture.deviceLoss.js"
+        "JavaScript/dist/tests.externalTexture.msaa.js"
         "JavaScript/dist/tests.javaScript.all.js"
-        "JavaScript/dist/tests.shaderCache.basicScene.js")
+        "JavaScript/dist/tests.shaderCache.basicScene.js"
+        "JavaScript/dist/tests.shaderCompilation.comprehensiveGLSL.js")
     list(APPEND SOURCES
         "Source/Tests.ExternalTexture.cpp"
+        "Source/Tests.ExternalTexture.DeviceLoss.cpp"
+        "Source/Tests.ExternalTexture.Msaa.cpp"
         "Source/Tests.ShaderCache.cpp"
+        "Source/Tests.ShaderCompilation.cpp"
         "Source/Tests.UniformPadding.cpp"
-        "Source/Utils.h"
-        "Source/Utils.${GRAPHICS_API}.${BABYLON_NATIVE_PLATFORM_IMPL_EXT}")
+        "Source/Helpers.h"
+        "Source/Helpers.${GRAPHICS_API}.${BABYLON_NATIVE_PLATFORM_IMPL_EXT}")
     list(APPEND UNITTEST_LIBRARIES
         ExternalTexture
         NativeEngine
@@ -56,6 +65,11 @@ if(TARGET NativeEngine)
     if(TARGET NativeEncoding)
         list(APPEND UNITTEST_LIBRARIES NativeEncoding)
         list(APPEND ADDITIONAL_COMPILE_DEFINITIONS BABYLON_NATIVE_UNITTESTS_WITH_NATIVEENCODING)
+    endif()
+
+    if(GRAPHICS_API STREQUAL "D3D11" OR GRAPHICS_API STREQUAL "D3D12")
+        list(APPEND SOURCES
+            "Source/Tests.Device.cpp")
     endif()
 
     if(GRAPHICS_API STREQUAL "D3D11")
