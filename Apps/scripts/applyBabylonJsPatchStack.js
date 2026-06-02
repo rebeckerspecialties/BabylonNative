@@ -45,6 +45,14 @@ function run(cwd, args, options = {}) {
     return result.stdout || "";
 }
 
+function gitResult(cwd, args) {
+    return spawnSync("git", args, {
+        cwd,
+        encoding: "utf8",
+        stdio: "pipe",
+    });
+}
+
 function parseArgs(argv) {
     const options = {
         mode: "check",
@@ -121,8 +129,32 @@ function ensureClean(dir) {
 
 function applyPatch(dir, patch) {
     const patchPath = path.join(patchesDir, patch);
-    console.log(`Applying ${patch}`);
-    run(dir, ["apply", "--whitespace=nowarn", patchPath]);
+    const applyCheck = gitResult(dir, ["apply", "--check", "--whitespace=nowarn", patchPath]);
+    if (applyCheck.status === 0) {
+        console.log(`Applying ${patch}`);
+        run(dir, ["apply", "--whitespace=nowarn", patchPath]);
+        return;
+    }
+
+    const reverseCheck = gitResult(dir, ["apply", "--reverse", "--check", "--whitespace=nowarn", patchPath]);
+    if (reverseCheck.status === 0) {
+        console.log(`Already present ${patch}`);
+        return;
+    }
+
+    if (applyCheck.stdout) {
+        process.stderr.write(applyCheck.stdout);
+    }
+    if (applyCheck.stderr) {
+        process.stderr.write(applyCheck.stderr);
+    }
+    if (reverseCheck.stdout) {
+        process.stderr.write(reverseCheck.stdout);
+    }
+    if (reverseCheck.stderr) {
+        process.stderr.write(reverseCheck.stderr);
+    }
+    fail(`patch does not apply and is not already present: ${patch}`);
 }
 
 function preflightApplyStack(targetDir, patches) {
