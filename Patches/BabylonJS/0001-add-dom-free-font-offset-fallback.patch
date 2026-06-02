@@ -1,19 +1,29 @@
-From 7f5846606bc1ffdeb15e9eac7d43b1735ad7c133 Mon Sep 17 00:00:00 2001
-From: Matt Hargett <plaztiksyke@gmail.com>
-Date: Sat, 16 May 2026 19:37:43 -0700
-Subject: [PATCH 1/2] Add DOM-free font offset fallback
+commit 4ff061bdf98d2fd622dcee7eaac9e621d562f919
+Author: Matt Hargett <plaztiksyke@gmail.com>
+Date:   Thu May 28 07:58:21 2026 -0700
 
-Make GetFontOffset robust when DOM layout is unavailable or reports zero metrics by falling back to canvas text metrics, then to a CSS font-size estimate.
-
-This lets native runtimes use GUI resizeToFit without carrying validation-only font metric shims.
----
- .../dev/core/src/Engines/engine.common.ts     | 70 ++++++++++++++++++-
- .../test/unit/Engines/engine.common.test.ts   | 64 +++++++++++++++++
- 2 files changed, 133 insertions(+), 1 deletion(-)
- create mode 100644 packages/dev/core/test/unit/Engines/engine.common.test.ts
+    Add DOM-free font offset fallback (#18463)
+    
+    ## What
+    - Falls back from DOM layout font metrics to canvas text metrics when
+    DOM layout is unavailable or returns zero-sized bounds.
+    - Uses a CSS pixel-size estimate as the final fallback.
+    - Adds focused unit coverage for the zero-layout path.
+    
+    ## Why
+    Native runtimes need GUI resize-to-fit code to work without carrying
+    validation-only font metric shims.
+    
+    ## Validation
+    - `npx vitest run --project=unit
+    packages/dev/core/test/unit/Engines/engine.common.test.ts`
+    
+    ---------
+    
+    Co-authored-by: Copilot Autofix powered by AI <175728472+Copilot@users.noreply.github.com>
 
 diff --git a/packages/dev/core/src/Engines/engine.common.ts b/packages/dev/core/src/Engines/engine.common.ts
-index 783778f957aa..ddc5e7d7f83f 100644
+index 783778f957..e3f196a63a 100644
 --- a/packages/dev/core/src/Engines/engine.common.ts
 +++ b/packages/dev/core/src/Engines/engine.common.ts
 @@ -143,6 +143,24 @@ export function _CommonDispose(commonEngine: AbstractEngine, canvas: Nullable<HT
@@ -69,8 +79,8 @@ index 783778f957aa..ddc5e7d7f83f 100644
 +
 +        context.font = font;
 +        const metrics = context.measureText("Hg");
-+        const ascent = Number(metrics.fontBoundingBoxAscent ?? metrics.actualBoundingBoxAscent);
-+        const descent = Number(metrics.fontBoundingBoxDescent ?? metrics.actualBoundingBoxDescent);
++        const ascent = Number(metrics.actualBoundingBoxAscent ?? metrics.fontBoundingBoxAscent);
++        const descent = Number(metrics.actualBoundingBoxDescent ?? metrics.fontBoundingBoxDescent);
 +        const offset = { ascent, height: ascent + descent, descent };
 +        return IsValidFontOffset(offset) ? offset : null;
 +    } catch {
@@ -91,7 +101,7 @@ index 783778f957aa..ddc5e7d7f83f 100644
 +}
 +
 +function GetCssPixelFontSize(font: string): number {
-+    const match = /(?:^|\s)([0-9]+(?:\.[0-9]+)?)px(?:\s|$)/.exec(String(font || ""));
++    const match = /(?:^|\s)([0-9]+(?:\.[0-9]+)?)px(?:\/|\s|$)/.exec(String(font || ""));
 +    return match ? Number(match[1]) : 16;
 +}
 +
@@ -102,10 +112,10 @@ index 783778f957aa..ddc5e7d7f83f 100644
  /** @internal */
 diff --git a/packages/dev/core/test/unit/Engines/engine.common.test.ts b/packages/dev/core/test/unit/Engines/engine.common.test.ts
 new file mode 100644
-index 000000000000..19cf47e08ae0
+index 0000000000..0bc3788958
 --- /dev/null
 +++ b/packages/dev/core/test/unit/Engines/engine.common.test.ts
-@@ -0,0 +1,64 @@
+@@ -0,0 +1,83 @@
 +/**
 + * @vitest-environment jsdom
 + */
@@ -125,7 +135,7 @@ index 000000000000..19cf47e08ae0
 +        });
 +    });
 +
-+    it("falls back to canvas text metrics when DOM layout reports zero font bounds", () => {
++    function mockDomZeroBoundsWithCanvasMetrics(metrics: Partial<TextMetrics>): void {
 +        Object.defineProperty(globalThis, "OffscreenCanvas", {
 +            configurable: true,
 +            writable: true,
@@ -140,10 +150,7 @@ index 000000000000..19cf47e08ae0
 +                    height: 0,
 +                    getContext: () => ({
 +                        font: "",
-+                        measureText: () => ({
-+                            fontBoundingBoxAscent: 17,
-+                            fontBoundingBoxDescent: 5,
-+                        }),
++                        measureText: () => metrics,
 +                    }),
 +                } as unknown as HTMLElement;
 +            }
@@ -162,6 +169,13 @@ index 000000000000..19cf47e08ae0
 +            });
 +            return element;
 +        }) as typeof document.createElement);
++    }
++
++    it("falls back to canvas text metrics when DOM layout reports zero font bounds", () => {
++        mockDomZeroBoundsWithCanvasMetrics({
++            fontBoundingBoxAscent: 17,
++            fontBoundingBoxDescent: 5,
++        });
 +
 +        expect(GetFontOffset("24px droidsans")).toEqual({
 +            ascent: 17,
@@ -169,28 +183,19 @@ index 000000000000..19cf47e08ae0
 +            descent: 5,
 +        });
 +    });
++
++    it("prefers actual canvas text bounds over font bounds", () => {
++        mockDomZeroBoundsWithCanvasMetrics({
++            actualBoundingBoxAscent: 13,
++            actualBoundingBoxDescent: 4,
++            fontBoundingBoxAscent: 17,
++            fontBoundingBoxDescent: 5,
++        });
++
++        expect(GetFontOffset("24px droidsans")).toEqual({
++            ascent: 13,
++            height: 17,
++            descent: 4,
++        });
++    });
 +});
-
-From 0a41fe99e9b3c256cf274f273d5e4828b0109b5c Mon Sep 17 00:00:00 2001
-From: Matt Hargett <plaztiksyke@gmail.com>
-Date: Sun, 17 May 2026 11:57:07 -0700
-Subject: [PATCH 2/2] broaden the match for more valid CSS variations
-
-Co-authored-by: Copilot Autofix powered by AI <175728472+Copilot@users.noreply.github.com>
----
- packages/dev/core/src/Engines/engine.common.ts | 2 +-
- 1 file changed, 1 insertion(+), 1 deletion(-)
-
-diff --git a/packages/dev/core/src/Engines/engine.common.ts b/packages/dev/core/src/Engines/engine.common.ts
-index ddc5e7d7f83f..cc5c64f5c306 100644
---- a/packages/dev/core/src/Engines/engine.common.ts
-+++ b/packages/dev/core/src/Engines/engine.common.ts
-@@ -232,7 +232,7 @@ function GetFallbackFontOffset(font: string): { ascent: number; height: number;
- }
- 
- function GetCssPixelFontSize(font: string): number {
--    const match = /(?:^|\s)([0-9]+(?:\.[0-9]+)?)px(?:\s|$)/.exec(String(font || ""));
-+    const match = /(?:^|\s)([0-9]+(?:\.[0-9]+)?)px(?:\/|\s|$)/.exec(String(font || ""));
-     return match ? Number(match[1]) : 16;
- }
- 

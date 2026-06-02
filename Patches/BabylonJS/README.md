@@ -22,29 +22,31 @@ hard to review, and hide the real upstreamable changes.
 - `0004-wrap-native-xr-webgpu-render-targets.patch`
   - Wraps NativeXR WebGPU color/depth textures as Babylon.js render targets.
 - `0005-batch-native-webgpu-render-pass-command-streams.patch`
-  - Adds the guarded NativeWebGPU render-pass command stream used by the
-    Babylon.js fork PR.
+  - Adds the guarded NativeWebGPU render-pass command stream as an internal
+    WebGPU render-pass lowering module, with fallback replay and focused unit
+    tests for compatibility boundaries.
 
 IBL-shadow experiments and custom animation-frame requester plumbing are
 intentionally not part of this stack.
 
 ## Apply And Verify
 
-From `Apps/`:
+From the BabylonNative checkout root:
 
 ```sh
-npm run patch:babylonjs:check -- --babylon-js-dir /Users/matt/src/Babylon.js
-npm run patch:babylonjs:apply -- --babylon-js-dir /Users/matt/src/Babylon.js
+node Apps/scripts/applyBabylonJsPatchStack.js --check --babylon-js-dir /Users/matt/src/Babylon.js
+node Apps/scripts/applyBabylonJsPatchStack.js --apply --babylon-js-dir /Users/matt/src/Babylon.js
 ```
 
 The default Babylon.js path is the sibling checkout at `../Babylon.js`, so the
 `--babylon-js-dir` argument is usually optional in the canonical local layout.
 
 The check command creates a temporary clean worktree from the target checkout's
-current `HEAD`, applies every patch in `series`, and fails if any patch no
-longer aligns. The apply command performs the same temporary-worktree preflight
-before mutating the target checkout, then applies the patches in order. It
-refuses to apply over unstaged or staged local changes.
+current `HEAD`, then requires every patch in `series` to either apply cleanly
+or be detected as already present by a reverse-apply check. Anything else fails
+hard. The apply command performs the same temporary-worktree preflight before
+mutating the target checkout, then applies or skips already-present patches in
+order. It refuses to apply over unstaged or staged local changes.
 
 After applying, rebuild Babylon.js and copy the generated bundles into
 BabylonNative using the flow documented in `AGENTS.md`.
