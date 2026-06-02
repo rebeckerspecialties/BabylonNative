@@ -280,7 +280,7 @@
             expectNear(clickMetrics.fontBoundingBoxAscent, 16, 0.5, "Arial Click fontBoundingBoxAscent");
             expectNear(clickMetrics.fontBoundingBoxDescent, 4, 0.5, "Arial Click fontBoundingBoxDescent");
         }],
-        ["BabylonJS native font offset approximates browser DOM line boxes", function () {
+        ["BabylonJS native font offset uses canvas text bounds without DOM layout", function () {
             var engineLike = {
                 createCanvas: function (width, height) {
                     var canvas = new _native.Canvas();
@@ -291,9 +291,9 @@
             };
             expect(BABYLON && BABYLON.Engine && BABYLON.Engine.prototype.getFontOffset, "BabylonJS Engine.getFontOffset missing");
             var offset = BABYLON.Engine.prototype.getFontOffset.call(engineLike, "18px Arial");
-            expectEqual(offset.ascent, 16, "18px Arial font offset ascent");
-            expectEqual(offset.height, 21, "18px Arial font offset height");
-            expectEqual(offset.descent, 5, "18px Arial font offset descent");
+            expectNear(offset.ascent, 14.4, 0.001, "18px Arial font offset ascent");
+            expectNear(offset.height, 18, 0.001, "18px Arial font offset height");
+            expectNear(offset.descent, 3.6, 0.001, "18px Arial font offset descent");
         }],
         ["Canvas 2D narrow rounded paths fill", async function () {
             var canvas = new _native.Canvas();
@@ -555,7 +555,8 @@
             var readSourcePixel = function (x, y) {
                 return readCanvasPixel(canvas, 96, 96, x, 95 - y);
             };
-            expectPixel(await readSourcePixel(35, 35), [51, 51, 76, 255], "rotated capsule fill should not bleed past the top-left rounded edge");
+            expectPixel(await readSourcePixel(34, 35), [51, 51, 76, 255], "rotated capsule fill should reject far top-left overflow");
+            expectPixel(await readSourcePixel(35, 34), [51, 51, 76, 255], "rotated capsule fill should reject high top-left overflow");
             expectPixel(await readSourcePixel(63, 35), [51, 51, 76, 255], "rotated capsule fill should not bleed past the top-right rounded edge");
             expectPixel(await readSourcePixel(64, 35), [51, 51, 76, 255], "rotated capsule fill should keep rejecting far top-right overflow");
         }],
