@@ -1,9 +1,27 @@
+From 667696d51f2c8e698625f1d71e35ceb38ff1c001 Mon Sep 17 00:00:00 2001
+From: Matt Hargett <plaztiksyke@gmail.com>
+Date: Tue, 2 Jun 2026 13:21:01 -0700
+Subject: [PATCH] Add WebGPU render command batching
+
+---
+ .../WebGPU/webgpuRenderPassCommandStream.ts   | 324 +++++++++++++
+ packages/dev/core/src/Engines/pure.ts         |   1 +
+ .../src/Engines/renderCommandBatcher.pure.ts  |  35 ++
+ .../dev/core/src/Engines/webgpuEngine.pure.ts | 130 +++--
+ .../webgpuRenderPassCommandStream.test.ts     | 459 ++++++++++++++++++
+ .../unit/Engines/renderCommandBatcher.test.ts |  83 ++++
+ 6 files changed, 990 insertions(+), 42 deletions(-)
+ create mode 100644 packages/dev/core/src/Engines/WebGPU/webgpuRenderPassCommandStream.ts
+ create mode 100644 packages/dev/core/src/Engines/renderCommandBatcher.pure.ts
+ create mode 100644 packages/dev/core/test/unit/Engines/WebGPU/webgpuRenderPassCommandStream.test.ts
+ create mode 100644 packages/dev/core/test/unit/Engines/renderCommandBatcher.test.ts
+
 diff --git a/packages/dev/core/src/Engines/WebGPU/webgpuRenderPassCommandStream.ts b/packages/dev/core/src/Engines/WebGPU/webgpuRenderPassCommandStream.ts
 new file mode 100644
-index 0000000000..88c1824e8b
+index 0000000000..9b7929b337
 --- /dev/null
 +++ b/packages/dev/core/src/Engines/WebGPU/webgpuRenderPassCommandStream.ts
-@@ -0,0 +1,293 @@
+@@ -0,0 +1,324 @@
 +import { type VertexBuffer } from "../../Buffers/buffer.pure";
 +import { type DataBuffer } from "../../Buffers/dataBuffer";
 +import { type Nullable } from "../../types";
@@ -22,19 +40,31 @@ index 0000000000..88c1824e8b
 +} as const;
 +
 +/** @internal */
-+export interface IWebGPUNativeRenderPassCommandStream extends GPURenderPassEncoder {
++export const WebGPURenderPassDrawKind = {
++    INDEXED: 0,
++    NON_INDEXED: 1,
++} as const;
++
++/** @internal */
++export type WebGPURenderPassDrawKind = (typeof WebGPURenderPassDrawKind)[keyof typeof WebGPURenderPassDrawKind];
++
++const DefaultBufferOffset = 0;
++const DefaultBaseVertex = 0;
++const DefaultFirstInstance = 0;
++const NoDynamicOffsets = 0;
++
++/** @internal */
++export interface IWebGPUCommandRecordingRenderPass extends GPURenderPassEncoder {
 +    _recordCommands?: (commands: Uint32Array, drawCount: number, multiDrawCallCount: number, multiDrawDrawCount: number, wordCount: number) => boolean;
 +}
 +
 +/** @internal */
-+export interface IWebGPURenderPassDrawCommand {
++interface IWebGPURenderPassDrawCommandBase {
 +    renderPass: GPURenderPassEncoder | GPURenderBundleEncoder;
-+    drawType: number;
++    drawKind: WebGPURenderPassDrawKind;
 +    pipeline: GPURenderPipeline;
 +    bindGroups: GPUBindGroup[];
 +    vertexBuffers: VertexBuffer[];
-+    indexBuffer: Nullable<DataBuffer>;
-+    indexFormat: Nullable<GPUIndexFormat>;
 +    count: number;
 +    instancesCount: number;
 +    start: number;
@@ -42,20 +72,38 @@ index 0000000000..88c1824e8b
 +}
 +
 +/** @internal */
++export interface IWebGPURenderPassIndexedDrawCommand extends IWebGPURenderPassDrawCommandBase {
++    drawKind: typeof WebGPURenderPassDrawKind.INDEXED;
++    indexBuffer: DataBuffer;
++    indexFormat: GPUIndexFormat;
++}
++
++/** @internal */
++export interface IWebGPURenderPassNonIndexedDrawCommand extends IWebGPURenderPassDrawCommandBase {
++    drawKind: typeof WebGPURenderPassDrawKind.NON_INDEXED;
++    indexBuffer: null;
++    indexFormat: null;
++}
++
++/** @internal */
++export type IWebGPURenderPassDrawCommand = IWebGPURenderPassIndexedDrawCommand | IWebGPURenderPassNonIndexedDrawCommand;
++
++/** @internal */
 +export interface IWebGPURenderPassCommandStreamOptions {
 +    isEnabled: () => boolean;
-+    getNativeResourceId: (resource: Nullable<object>) => number;
++    getResourceId: (resource: Nullable<object>) => number;
 +    getLastError?: () => string | undefined;
 +}
 +
 +/** @internal */
 +export function ApplyWebGPURenderPassDrawCommand(command: IWebGPURenderPassDrawCommand): void {
 +    const renderPass = command.renderPass;
++    const isIndexedDraw = command.drawKind === WebGPURenderPassDrawKind.INDEXED;
 +
 +    renderPass.setPipeline(command.pipeline);
 +
-+    if (command.indexBuffer) {
-+        renderPass.setIndexBuffer(command.indexBuffer.underlyingResource, command.indexFormat!, 0);
++    if (isIndexedDraw) {
++        renderPass.setIndexBuffer(command.indexBuffer.underlyingResource, command.indexFormat, DefaultBufferOffset);
 +    }
 +
 +    for (let index = 0; index < command.vertexBuffers.length; index++) {
@@ -71,15 +119,15 @@ index 0000000000..88c1824e8b
 +    }
 +
 +    if (command.indirectDrawBuffer) {
-+        if (command.drawType === 0) {
-+            renderPass.drawIndexedIndirect(command.indirectDrawBuffer, 0);
++        if (isIndexedDraw) {
++            renderPass.drawIndexedIndirect(command.indirectDrawBuffer, DefaultBufferOffset);
 +        } else {
-+            renderPass.drawIndirect(command.indirectDrawBuffer, 0);
++            renderPass.drawIndirect(command.indirectDrawBuffer, DefaultBufferOffset);
 +        }
-+    } else if (command.drawType === 0) {
-+        renderPass.drawIndexed(command.count, command.instancesCount || 1, command.start, 0, 0);
++    } else if (isIndexedDraw) {
++        renderPass.drawIndexed(command.count, command.instancesCount || 1, command.start, DefaultBaseVertex, DefaultFirstInstance);
 +    } else {
-+        renderPass.draw(command.count, command.instancesCount || 1, command.start, 0);
++        renderPass.draw(command.count, command.instancesCount || 1, command.start, DefaultFirstInstance);
 +    }
 +}
 +
@@ -106,10 +154,10 @@ index 0000000000..88c1824e8b
 +            return false;
 +        }
 +
-+        const recordCommands = (renderPass as IWebGPUNativeRenderPassCommandStream)._recordCommands;
++        const recordCommands = (renderPass as IWebGPUCommandRecordingRenderPass)._recordCommands;
 +        if (typeof recordCommands !== "function") {
 +            this.reset();
-+            throw new Error("NativeWebGPU render pass command stream cannot be flushed because the active render pass does not support command recording.");
++            throw new Error("WebGPU render pass command stream cannot be flushed because the active render pass does not support command recording.");
 +        }
 +
 +        const success = recordCommands.call(renderPass, this._commandWords, this._drawCount, 0, 0, wordCount) === true;
@@ -118,7 +166,7 @@ index 0000000000..88c1824e8b
 +        if (!success) {
 +            const lastError = this._options.getLastError?.();
 +            const detail = lastError && lastError.length > 0 ? `: ${lastError}` : "";
-+            throw new Error(`NativeWebGPU failed to record a render pass command stream${detail}.`);
++            throw new Error(`WebGPU failed to record a render pass command stream${detail}.`);
 +        }
 +
 +        return true;
@@ -141,18 +189,19 @@ index 0000000000..88c1824e8b
 +            return false;
 +        }
 +
-+        const recordCommands = (command.renderPass as IWebGPUNativeRenderPassCommandStream)._recordCommands;
++        const recordCommands = (command.renderPass as IWebGPUCommandRecordingRenderPass)._recordCommands;
 +        if (typeof recordCommands !== "function") {
 +            return false;
 +        }
 +
-+        const pipelineId = this._options.getNativeResourceId(command.pipeline);
++        const pipelineId = this._options.getResourceId(command.pipeline);
 +        if (pipelineId === 0) {
 +            return false;
 +        }
 +
-+        const indexBufferId = command.indexBuffer ? this._options.getNativeResourceId(command.indexBuffer.underlyingResource) : 0;
-+        if (command.indexBuffer && (indexBufferId === 0 || !command.indexFormat)) {
++        const isIndexedDraw = command.drawKind === WebGPURenderPassDrawKind.INDEXED;
++        const indexBufferId = isIndexedDraw ? this._options.getResourceId(command.indexBuffer.underlyingResource) : 0;
++        if (isIndexedDraw && indexBufferId === 0) {
 +            return false;
 +        }
 +
@@ -167,7 +216,7 @@ index 0000000000..88c1824e8b
 +                continue;
 +            }
 +
-+            const bufferId = this._options.getNativeResourceId(buffer.underlyingResource);
++            const bufferId = this._options.getResourceId(buffer.underlyingResource);
 +            if (bufferId === 0) {
 +                return false;
 +            }
@@ -177,14 +226,14 @@ index 0000000000..88c1824e8b
 +
 +        const bindGroupIds: number[] = [];
 +        for (let i = 0; i < command.bindGroups.length; i++) {
-+            const bindGroupId = this._options.getNativeResourceId(command.bindGroups[i]);
++            const bindGroupId = this._options.getResourceId(command.bindGroups[i]);
 +            if (bindGroupId === 0) {
 +                return false;
 +            }
 +            bindGroupIds[i] = bindGroupId;
 +        }
 +
-+        const indirectDrawBufferId = command.indirectDrawBuffer ? this._options.getNativeResourceId(command.indirectDrawBuffer) : 0;
++        const indirectDrawBufferId = command.indirectDrawBuffer ? this._options.getResourceId(command.indirectDrawBuffer) : 0;
 +        if (command.indirectDrawBuffer && indirectDrawBufferId === 0) {
 +            return false;
 +        }
@@ -200,12 +249,12 @@ index 0000000000..88c1824e8b
 +            this._pipelineId = pipelineId;
 +        }
 +
-+        if (command.indexBuffer) {
++        if (isIndexedDraw) {
 +            if (this._indexBufferId !== indexBufferId || this._indexFormat !== command.indexFormat) {
 +                this._pushU32(WebGPURenderPassCommandOpcode.setIndexBuffer);
 +                this._pushU64(indexBufferId);
 +                this._pushU32(command.indexFormat === WebGPUConstants.IndexFormat.Uint32 ? 1 : 0);
-+                this._pushU64(0);
++                this._pushU64(DefaultBufferOffset);
 +                this._pushU64Max();
 +                this._indexBufferId = indexBufferId;
 +                this._indexFormat = command.indexFormat;
@@ -236,28 +285,28 @@ index 0000000000..88c1824e8b
 +                this._pushU32(WebGPURenderPassCommandOpcode.setBindGroup);
 +                this._pushU32(i);
 +                this._pushU64(bindGroupId);
-+                this._pushU32(0);
++                this._pushU32(NoDynamicOffsets);
 +                this._bindGroupIds[i] = bindGroupId;
 +            }
 +        }
 +
 +        if (command.indirectDrawBuffer) {
-+            this._pushU32(command.drawType === 0 ? WebGPURenderPassCommandOpcode.drawIndexedIndirect : WebGPURenderPassCommandOpcode.drawIndirect);
++            this._pushU32(isIndexedDraw ? WebGPURenderPassCommandOpcode.drawIndexedIndirect : WebGPURenderPassCommandOpcode.drawIndirect);
 +            this._pushU64(indirectDrawBufferId);
-+            this._pushU64(0);
-+        } else if (command.drawType === 0) {
++            this._pushU64(DefaultBufferOffset);
++        } else if (isIndexedDraw) {
 +            this._pushU32(WebGPURenderPassCommandOpcode.drawIndexed);
 +            this._pushU32(command.count);
 +            this._pushU32(command.instancesCount || 1);
 +            this._pushU32(command.start);
-+            this._pushU32(0);
-+            this._pushU32(0);
++            this._pushU32(DefaultBaseVertex);
++            this._pushU32(DefaultFirstInstance);
 +        } else {
 +            this._pushU32(WebGPURenderPassCommandOpcode.draw);
 +            this._pushU32(command.count);
 +            this._pushU32(command.instancesCount || 1);
 +            this._pushU32(command.start);
-+            this._pushU32(0);
++            this._pushU32(DefaultFirstInstance);
 +        }
 +
 +        this._drawCount++;
@@ -297,25 +346,85 @@ index 0000000000..88c1824e8b
 +        this._commandWords[this._commandWordCount++] = 0xffffffff;
 +    }
 +}
+diff --git a/packages/dev/core/src/Engines/pure.ts b/packages/dev/core/src/Engines/pure.ts
+index 2cd3aaa19f..88c2fe568b 100644
+--- a/packages/dev/core/src/Engines/pure.ts
++++ b/packages/dev/core/src/Engines/pure.ts
+@@ -42,5 +42,6 @@ export * from "./Processors/iShaderProcessor";
+ export * from "./engine.common";
+ export * from "./engineRegistration.pure";
+ export * from "./nullEngineRegistration.pure";
++export * from "./renderCommandBatcher.pure";
+ export * from "./Processors/pure";
+ export * from "./WebGPU/pure";
+diff --git a/packages/dev/core/src/Engines/renderCommandBatcher.pure.ts b/packages/dev/core/src/Engines/renderCommandBatcher.pure.ts
+new file mode 100644
+index 0000000000..5c630659c7
+--- /dev/null
++++ b/packages/dev/core/src/Engines/renderCommandBatcher.pure.ts
+@@ -0,0 +1,35 @@
++/** This file must only contain pure code and pure imports */
++
++/** @internal */
++export interface IRenderCommandLowering<Command> {
++    tryAppend(command: Command): boolean;
++    flush(): boolean;
++    reset(): void;
++}
++
++/** @internal */
++export class RenderCommandBatcher<Command> {
++    public constructor(
++        private readonly _lowering: IRenderCommandLowering<Command> | null | undefined,
++        private readonly _replay: (command: Command) => void
++    ) {}
++
++    public submit(command: Command): boolean {
++        const lowering = this._lowering;
++        if (lowering?.tryAppend(command)) {
++            return true;
++        }
++
++        lowering?.flush();
++        this._replay(command);
++        return false;
++    }
++
++    public flush(): boolean {
++        return this._lowering?.flush() ?? false;
++    }
++
++    public reset(): void {
++        this._lowering?.reset();
++    }
++}
 diff --git a/packages/dev/core/src/Engines/webgpuEngine.pure.ts b/packages/dev/core/src/Engines/webgpuEngine.pure.ts
-index f89292f182..a9b1151432 100644
+index f89292f182..544efb7dcd 100644
 --- a/packages/dev/core/src/Engines/webgpuEngine.pure.ts
 +++ b/packages/dev/core/src/Engines/webgpuEngine.pure.ts
-@@ -81,6 +81,7 @@ import { RegisterAbstractEngineDom } from "./AbstractEngine/abstractEngine.dom.p
+@@ -79,8 +79,15 @@ import { PerfCounter } from "../Misc/perfCounter";
+ import { resetCachedPipeline } from "../Materials/effect.functions";
+ import { RegisterAbstractEngineDom } from "./AbstractEngine/abstractEngine.dom.pure";
  import { RegisterAbstractEngineRenderPass } from "./AbstractEngine/abstractEngine.renderPass.pure";
++import { RenderCommandBatcher } from "./renderCommandBatcher.pure";
  
  import { WebGPUExternalTexture } from "./WebGPU/webgpuExternalTexture";
-+import { ApplyWebGPURenderPassDrawCommand, WebGPURenderPassCommandStream } from "./WebGPU/webgpuRenderPassCommandStream";
++import {
++    ApplyWebGPURenderPassDrawCommand,
++    type IWebGPURenderPassDrawCommand,
++    WebGPURenderPassCommandStream,
++    WebGPURenderPassDrawKind,
++} from "./WebGPU/webgpuRenderPassCommandStream";
  import { type TextureSampler } from "../Materials/Textures/textureSampler";
  import { type StorageBuffer } from "../Buffers/storageBuffer";
  
-@@ -406,6 +407,18 @@ export class WebGPUEngine extends ThinWebGPUEngine {
+@@ -406,6 +413,19 @@ export class WebGPUEngine extends ThinWebGPUEngine {
      private _currentVertexBuffers: { [key: string]: Nullable<VertexBuffer> } = {};
      private _currentOverrideVertexBuffers: Nullable<{ [key: string]: Nullable<VertexBuffer> }> = null;
      private _currentIndexBuffer: Nullable<DataBuffer> = null;
-+    private _nativeRenderPassCommandStream = new WebGPURenderPassCommandStream({
++    private _renderPassCommandLowering = new WebGPURenderPassCommandStream({
 +        isEnabled: () => (globalThis as typeof globalThis & Record<string, unknown>)["__babylonNativeEnableRenderPassCommandStream"] === true,
-+        getNativeResourceId: (resource) => this._getNativeResourceId(resource),
++        getResourceId: (resource) => this._getRenderCommandResourceId(resource),
 +        getLastError: () => {
 +            try {
 +                const stats = (navigator.gpu as unknown as { _backendStats?: () => { lastError?: unknown } })._backendStats?.();
@@ -325,68 +434,69 @@ index f89292f182..a9b1151432 100644
 +            }
 +        },
 +    });
++    private _renderPassDrawBatcher = new RenderCommandBatcher<IWebGPURenderPassDrawCommand>(this._renderPassCommandLowering, ApplyWebGPURenderPassDrawCommand);
      private _dummyIndexBuffer: WebGPUDataBuffer;
      private _colorWriteLocal = true;
      private _forceEnableEffect = false;
-@@ -1330,6 +1343,12 @@ export class WebGPUEngine extends ThinWebGPUEngine {
+@@ -1330,6 +1350,12 @@ export class WebGPUEngine extends ThinWebGPUEngine {
          return this._currentRenderTarget ? this._rttRenderPassWrapper : this._mainRenderPassWrapper;
      }
  
 +    /** @internal */
 +    public override _endCurrentRenderPass(): number {
-+        this._nativeRenderPassCommandStream.flush();
++        this._renderPassDrawBatcher.flush();
 +        return super._endCurrentRenderPass();
 +    }
 +
      //------------------------------------------------------------------------------
      //                          Static Pipeline WebGPU States
      //------------------------------------------------------------------------------
-@@ -1432,6 +1451,7 @@ export class WebGPUEngine extends ThinWebGPUEngine {
+@@ -1432,6 +1458,7 @@ export class WebGPUEngine extends ThinWebGPUEngine {
          if (bundleList) {
              bundleList.addItem(new WebGPURenderItemViewport(x, y, w, h));
          } else {
-+            this._nativeRenderPassCommandStream.flush();
++            this._renderPassDrawBatcher.flush();
              this._getCurrentRenderPass().setViewport(x, y, w, h, 0, 1);
          }
      }
-@@ -1473,6 +1493,7 @@ export class WebGPUEngine extends ThinWebGPUEngine {
+@@ -1473,6 +1500,7 @@ export class WebGPUEngine extends ThinWebGPUEngine {
          if (bundleList) {
              bundleList.addItem(new WebGPURenderItemScissor(this._scissorCached.x, y, this._scissorCached.z, this._scissorCached.w));
          } else {
-+            this._nativeRenderPassCommandStream.flush();
++            this._renderPassDrawBatcher.flush();
              this._getCurrentRenderPass().setScissorRect(this._scissorCached.x, y, this._scissorCached.z, this._scissorCached.w);
          }
      }
-@@ -1517,6 +1538,7 @@ export class WebGPUEngine extends ThinWebGPUEngine {
+@@ -1517,6 +1545,7 @@ export class WebGPUEngine extends ThinWebGPUEngine {
          if (bundleList) {
              bundleList.addItem(new WebGPURenderItemStencilRef(this._stencilStateComposer.funcRef ?? 0));
          } else {
-+            this._nativeRenderPassCommandStream.flush();
++            this._renderPassDrawBatcher.flush();
              this._getCurrentRenderPass().setStencilReference(this._stencilStateComposer.funcRef ?? 0);
          }
      }
-@@ -1546,6 +1568,7 @@ export class WebGPUEngine extends ThinWebGPUEngine {
+@@ -1546,6 +1575,7 @@ export class WebGPUEngine extends ThinWebGPUEngine {
          if (bundleList) {
              bundleList.addItem(new WebGPURenderItemBlendColor(this._alphaState._blendConstants.slice()));
          } else {
-+            this._nativeRenderPassCommandStream.flush();
++            this._renderPassDrawBatcher.flush();
              this._getCurrentRenderPass().setBlendConstant(this._alphaState._blendConstants as GPUColor);
          }
      }
-@@ -1603,6 +1626,8 @@ export class WebGPUEngine extends ThinWebGPUEngine {
+@@ -1603,6 +1633,8 @@ export class WebGPUEngine extends ThinWebGPUEngine {
      }
  
      private _clearFullQuad(clearColor?: Nullable<IColor4Like>, clearDepth?: boolean, clearStencil?: boolean): void {
-+        this._nativeRenderPassCommandStream.flush();
++        this._renderPassDrawBatcher.flush();
 +
          const renderPass = !this.compatibilityMode ? null : this._getCurrentRenderPass();
  
          this._clearQuad.setColorFormat(this._colorFormat);
-@@ -3704,14 +3729,25 @@ export class WebGPUEngine extends ThinWebGPUEngine {
+@@ -3704,14 +3736,25 @@ export class WebGPUEngine extends ThinWebGPUEngine {
          this._stencilStateComposer.stencilMaterial = stencil;
      }
  
-+    private _getNativeResourceId(resource: Nullable<object>): number {
++    private _getRenderCommandResourceId(resource: Nullable<object>): number {
 +        const id = (resource as Record<string, unknown> | null)?.["__babylonNativeWebGPUHandleId"];
 +        return typeof id === "number" && id > 0 ? id : 0;
 +    }
@@ -399,7 +509,7 @@ index f89292f182..a9b1151432 100644
  
 -        if (this._mustUpdateViewport()) {
 +        if (mustUpdateViewport || mustUpdateScissor || mustUpdateStencilRef || mustUpdateBlendColor) {
-+            this._nativeRenderPassCommandStream.flush();
++            this._renderPassDrawBatcher.flush();
 +        }
 +
 +        if (mustUpdateViewport) {
@@ -410,7 +520,16 @@ index f89292f182..a9b1151432 100644
              this._applyScissor(bundleList);
          }
          if (mustUpdateStencilRef) {
-@@ -3795,6 +3831,8 @@ export class WebGPUEngine extends ThinWebGPUEngine {
+@@ -3722,7 +3765,7 @@ export class WebGPUEngine extends ThinWebGPUEngine {
+         }
+     }
+ 
+-    private _draw(drawType: number, fillMode: number, start: number, count: number, instancesCount: number): void {
++    private _draw(drawKind: WebGPURenderPassDrawKind, fillMode: number, start: number, count: number, instancesCount: number): void {
+         const renderPass = this._getCurrentRenderPass();
+         const bundleList = this._bundleList;
+ 
+@@ -3795,6 +3838,8 @@ export class WebGPUEngine extends ThinWebGPUEngine {
          const pipeline = this._cacheRenderPipeline.getRenderPipeline(fillMode, this._currentEffect!, this.currentSampleCount, textureState);
  
          const bindGroups = this._cacheBindGroups.getBindGroups(webgpuPipelineContext, this._currentDrawContext, this._currentMaterialContext);
@@ -419,18 +538,13 @@ index f89292f182..a9b1151432 100644
  
          if (!this._snapshotRendering.record) {
              this._applyRenderPassChanges(!this.compatibilityMode ? bundleList : null);
-@@ -3808,48 +3846,37 @@ export class WebGPUEngine extends ThinWebGPUEngine {
+@@ -3808,48 +3853,49 @@ export class WebGPUEngine extends ThinWebGPUEngine {
              }
          }
  
 -        // bind pipeline
 -        renderPass2.setPipeline(pipeline);
-+        const nonCompatMode = !this.compatibilityMode && !this._snapshotRendering.record;
-+        const indirectDrawBuffer =
-+            (nonCompatMode || this._currentDrawContext._enableIndirectDrawInCompatMode) && this._currentDrawContext.indirectDrawBuffer
-+                ? this._currentDrawContext.indirectDrawBuffer
-+                : null;
- 
+-
 -        // bind index/vertex buffers
 -        if (this._currentIndexBuffer) {
 -            renderPass2.setIndexBuffer(
@@ -438,37 +552,55 @@ index f89292f182..a9b1151432 100644
 -                this._currentIndexBuffer.is32Bits ? WebGPUConstants.IndexFormat.Uint32 : WebGPUConstants.IndexFormat.Uint16,
 -                0
 -            );
-+        if (indirectDrawBuffer) {
-+            this._currentDrawContext.setIndirectData(count, instancesCount || 1, start);
-         }
- 
+-        }
+-
 -        const vertexBuffers = this._cacheRenderPipeline.vertexBuffers;
 -        for (let index = 0; index < vertexBuffers.length; index++) {
 -            const vertexBuffer = vertexBuffers[index];
--
++        const nonCompatMode = !this.compatibilityMode && !this._snapshotRendering.record;
++        const indirectDrawBuffer =
++            (nonCompatMode || this._currentDrawContext._enableIndirectDrawInCompatMode) && this._currentDrawContext.indirectDrawBuffer
++                ? this._currentDrawContext.indirectDrawBuffer
++                : null;
+ 
 -            const buffer = vertexBuffer.effectiveBuffer;
 -            if (buffer) {
 -                renderPass2.setVertexBuffer(index, buffer.underlyingResource, vertexBuffer._validOffsetRange ? 0 : vertexBuffer.byteOffset);
 -            }
--        }
-+        const drawCommand = {
++        if (indirectDrawBuffer) {
++            this._currentDrawContext.setIndirectData(count, instancesCount || 1, start);
+         }
+ 
+-        // bind bind groups
+-        for (let i = 0; i < bindGroups.length; i++) {
+-            renderPass2.setBindGroup(i, bindGroups[i]);
++        const drawCommandBase = {
 +            renderPass: renderPass2,
-+            drawType,
 +            pipeline,
 +            bindGroups,
 +            vertexBuffers,
-+            indexBuffer: this._currentIndexBuffer,
-+            indexFormat,
 +            count,
 +            instancesCount,
 +            start,
 +            indirectDrawBuffer,
 +        };
- 
--        // bind bind groups
--        for (let i = 0; i < bindGroups.length; i++) {
--            renderPass2.setBindGroup(i, bindGroups[i]);
-+        if (this.compatibilityMode && !this._snapshotRendering.record && this._nativeRenderPassCommandStream.tryAppend(drawCommand)) {
++        const drawCommand: IWebGPURenderPassDrawCommand =
++            drawKind === WebGPURenderPassDrawKind.INDEXED
++                ? {
++                      ...drawCommandBase,
++                      drawKind,
++                      indexBuffer: this._currentIndexBuffer!,
++                      indexFormat: indexFormat!,
++                  }
++                : {
++                      ...drawCommandBase,
++                      drawKind,
++                      indexBuffer: null,
++                      indexFormat: null,
++                  };
++
++        if (this.compatibilityMode && !this._snapshotRendering.record) {
++            this._renderPassDrawBatcher.submit(drawCommand);
 +            this._reportDrawCall();
 +            return;
          }
@@ -488,30 +620,50 @@ index f89292f182..a9b1151432 100644
 -        } else {
 -            renderPass2.draw(count, instancesCount || 1, start, 0);
 -        }
-+        this._nativeRenderPassCommandStream.flush();
++        this._renderPassDrawBatcher.flush();
 +        ApplyWebGPURenderPassDrawCommand(drawCommand);
  
          if (nonCompatMode) {
              this._currentDrawContext.fastBundle = (renderPass2 as GPURenderBundleEncoder).finish();
+@@ -3867,7 +3913,7 @@ export class WebGPUEngine extends ThinWebGPUEngine {
+      * @param instancesCount defines the number of instances to draw (if instantiation is enabled)
+      */
+     public drawElementsType(fillMode: number, indexStart: number, indexCount: number, instancesCount: number = 1): void {
+-        this._draw(0, fillMode, indexStart, indexCount, instancesCount);
++        this._draw(WebGPURenderPassDrawKind.INDEXED, fillMode, indexStart, indexCount, instancesCount);
+     }
+ 
+     /**
+@@ -3879,7 +3925,7 @@ export class WebGPUEngine extends ThinWebGPUEngine {
+      */
+     public drawArraysType(fillMode: number, verticesStart: number, verticesCount: number, instancesCount: number = 1): void {
+         this._currentIndexBuffer = null;
+-        this._draw(1, fillMode, verticesStart, verticesCount, instancesCount);
++        this._draw(WebGPURenderPassDrawKind.NON_INDEXED, fillMode, verticesStart, verticesCount, instancesCount);
+     }
+ 
+     //------------------------------------------------------------------------------
 diff --git a/packages/dev/core/test/unit/Engines/WebGPU/webgpuRenderPassCommandStream.test.ts b/packages/dev/core/test/unit/Engines/WebGPU/webgpuRenderPassCommandStream.test.ts
 new file mode 100644
-index 0000000000..b7673123a1
+index 0000000000..e5b4527fd4
 --- /dev/null
 +++ b/packages/dev/core/test/unit/Engines/WebGPU/webgpuRenderPassCommandStream.test.ts
-@@ -0,0 +1,442 @@
+@@ -0,0 +1,459 @@
 +import { describe, expect, it, vi } from "vitest";
 +import { type VertexBuffer } from "core/Buffers/buffer";
 +import { type DataBuffer } from "core/Buffers/dataBuffer";
 +import { type Nullable } from "core/types";
 +import {
 +    ApplyWebGPURenderPassDrawCommand,
-+    type IWebGPURenderPassDrawCommand,
++    type IWebGPURenderPassIndexedDrawCommand,
++    type IWebGPURenderPassNonIndexedDrawCommand,
 +    WebGPURenderPassCommandOpcode,
 +    WebGPURenderPassCommandStream,
++    WebGPURenderPassDrawKind,
 +} from "core/Engines/WebGPU/webgpuRenderPassCommandStream";
 +import * as WebGPUConstants from "core/Engines/WebGPU/webgpuConstants";
 +
-+const NativeHandleName = "__babylonNativeWebGPUHandleId";
++const BackendResourceIdName = "__babylonNativeWebGPUHandleId";
 +const U64Max = 0xffffffff;
 +
 +type RenderPassCall = [string, ...number[]];
@@ -524,18 +676,18 @@ index 0000000000..b7673123a1
 +    wordCount: number;
 +}
 +
-+function getNativeResourceId(resource: Nullable<object>): number {
-+    const id = (resource as Record<string, unknown> | null)?.[NativeHandleName];
++function getBackendResourceId(resource: Nullable<object>): number {
++    const id = (resource as Record<string, unknown> | null)?.[BackendResourceIdName];
 +    return typeof id === "number" && id > 0 ? id : 0;
 +}
 +
-+function setNativeResourceId<T extends object>(resource: T, id: number): T {
-+    (resource as Record<string, unknown>)[NativeHandleName] = id;
++function setBackendResourceId<T extends object>(resource: T, id: number): T {
++    (resource as Record<string, unknown>)[BackendResourceIdName] = id;
 +    return resource;
 +}
 +
 +function createResource<T extends object>(id: number): T {
-+    return setNativeResourceId({} as T, id);
++    return setBackendResourceId({} as T, id);
 +}
 +
 +function createDataBuffer(id: number, is32Bits = true): DataBuffer {
@@ -558,23 +710,23 @@ index 0000000000..b7673123a1
 +function createReplayRenderPass(): { renderPass: GPURenderPassEncoder; calls: RenderPassCall[] } {
 +    const calls: RenderPassCall[] = [];
 +    const renderPass = {
-+        setPipeline: (pipeline: GPURenderPipeline) => calls.push(["setPipeline", getNativeResourceId(pipeline)]),
++        setPipeline: (pipeline: GPURenderPipeline) => calls.push(["setPipeline", getBackendResourceId(pipeline)]),
 +        setIndexBuffer: (buffer: GPUBuffer, format: string, offset?: number) =>
-+            calls.push(["setIndexBuffer", getNativeResourceId(buffer), format === WebGPUConstants.IndexFormat.Uint32 ? 1 : 0, offset ?? 0]),
-+        setVertexBuffer: (slot: number, buffer: GPUBuffer, offset?: number) => calls.push(["setVertexBuffer", slot, getNativeResourceId(buffer), offset ?? 0]),
-+        setBindGroup: (slot: number, bindGroup: GPUBindGroup) => calls.push(["setBindGroup", slot, getNativeResourceId(bindGroup)]),
++            calls.push(["setIndexBuffer", getBackendResourceId(buffer), format === WebGPUConstants.IndexFormat.Uint32 ? 1 : 0, offset ?? 0]),
++        setVertexBuffer: (slot: number, buffer: GPUBuffer, offset?: number) => calls.push(["setVertexBuffer", slot, getBackendResourceId(buffer), offset ?? 0]),
++        setBindGroup: (slot: number, bindGroup: GPUBindGroup) => calls.push(["setBindGroup", slot, getBackendResourceId(bindGroup)]),
 +        drawIndexed: (indexCount: number, instanceCount?: number, firstIndex?: number, baseVertex?: number, firstInstance?: number) =>
 +            calls.push(["drawIndexed", indexCount, instanceCount ?? 1, firstIndex ?? 0, baseVertex ?? 0, firstInstance ?? 0]),
 +        draw: (vertexCount: number, instanceCount?: number, firstVertex?: number, firstInstance?: number) =>
 +            calls.push(["draw", vertexCount, instanceCount ?? 1, firstVertex ?? 0, firstInstance ?? 0]),
-+        drawIndexedIndirect: (buffer: GPUBuffer, offset: number) => calls.push(["drawIndexedIndirect", getNativeResourceId(buffer), offset]),
-+        drawIndirect: (buffer: GPUBuffer, offset: number) => calls.push(["drawIndirect", getNativeResourceId(buffer), offset]),
++        drawIndexedIndirect: (buffer: GPUBuffer, offset: number) => calls.push(["drawIndexedIndirect", getBackendResourceId(buffer), offset]),
++        drawIndirect: (buffer: GPUBuffer, offset: number) => calls.push(["drawIndirect", getBackendResourceId(buffer), offset]),
 +    } as unknown as GPURenderPassEncoder;
 +
 +    return { renderPass, calls };
 +}
 +
-+function createNativeRenderPass(recordResult = true): { renderPass: GPURenderPassEncoder; records: IRecordedCommandStream[]; calls: RenderPassCall[] } {
++function createRecordingRenderPass(recordResult = true): { renderPass: GPURenderPassEncoder; records: IRecordedCommandStream[]; calls: RenderPassCall[] } {
 +    const { renderPass, calls } = createReplayRenderPass();
 +    const records: IRecordedCommandStream[] = [];
 +
@@ -597,16 +749,16 @@ index 0000000000..b7673123a1
 +function createStream(enabled = true, lastError?: string): WebGPURenderPassCommandStream {
 +    return new WebGPURenderPassCommandStream({
 +        isEnabled: () => enabled,
-+        getNativeResourceId,
++        getResourceId: getBackendResourceId,
 +        getLastError: () => lastError,
 +    });
 +}
 +
-+function createCommand(overrides: Partial<IWebGPURenderPassDrawCommand> = {}): IWebGPURenderPassDrawCommand {
-+    const renderPass = overrides.renderPass ?? createNativeRenderPass().renderPass;
++function createCommand(overrides: Partial<IWebGPURenderPassIndexedDrawCommand> = {}): IWebGPURenderPassIndexedDrawCommand {
++    const renderPass = overrides.renderPass ?? createRecordingRenderPass().renderPass;
 +    return {
 +        renderPass,
-+        drawType: 0,
++        drawKind: WebGPURenderPassDrawKind.INDEXED,
 +        pipeline: createResource<GPURenderPipeline>(100),
 +        bindGroups: [createResource<GPUBindGroup>(201), createResource<GPUBindGroup>(202)],
 +        vertexBuffers: [createVertexBuffer(301), createVertexBuffer(302, 8, false)],
@@ -615,6 +767,24 @@ index 0000000000..b7673123a1
 +        count: 36,
 +        instancesCount: 2,
 +        start: 5,
++        indirectDrawBuffer: null,
++        ...overrides,
++    };
++}
++
++function createNonIndexedCommand(overrides: Partial<IWebGPURenderPassNonIndexedDrawCommand> = {}): IWebGPURenderPassNonIndexedDrawCommand {
++    const renderPass = overrides.renderPass ?? createRecordingRenderPass().renderPass;
++    return {
++        renderPass,
++        drawKind: WebGPURenderPassDrawKind.NON_INDEXED,
++        pipeline: createResource<GPURenderPipeline>(100),
++        bindGroups: [createResource<GPUBindGroup>(201), createResource<GPUBindGroup>(202)],
++        vertexBuffers: [createVertexBuffer(301), createVertexBuffer(302, 8, false)],
++        indexBuffer: null,
++        indexFormat: null,
++        count: 12,
++        instancesCount: 1,
++        start: 4,
 +        indirectDrawBuffer: null,
 +        ...overrides,
 +    };
@@ -658,7 +828,7 @@ index 0000000000..b7673123a1
 +    });
 +
 +    it("records one indexed draw with the required state commands", () => {
-+        const { renderPass, records } = createNativeRenderPass();
++        const { renderPass, records } = createRecordingRenderPass();
 +        const stream = createStream();
 +
 +        expect(stream.tryAppend(createCommand({ renderPass }))).toBe(true);
@@ -716,7 +886,7 @@ index 0000000000..b7673123a1
 +    });
 +
 +    it("records many compatible draws without repeating stable state", () => {
-+        const { renderPass, records } = createNativeRenderPass();
++        const { renderPass, records } = createRecordingRenderPass();
 +        const stream = createStream();
 +
 +        expect(stream.tryAppend(createCommand({ renderPass, start: 0 }))).toBe(true);
@@ -745,8 +915,8 @@ index 0000000000..b7673123a1
 +        expect(calls.map((call) => call[0])).toEqual(["setPipeline", "setIndexBuffer", "setVertexBuffer", "setVertexBuffer", "setBindGroup", "setBindGroup", "drawIndexed"]);
 +    });
 +
-+    it("does not lower when the backend capability is disabled even if native recording exists", () => {
-+        const { renderPass, records } = createNativeRenderPass();
++    it("does not lower when the backend capability is disabled even if backend recording exists", () => {
++        const { renderPass, records } = createRecordingRenderPass();
 +        const stream = createStream(false);
 +
 +        expect(stream.tryAppend(createCommand({ renderPass }))).toBe(false);
@@ -755,7 +925,7 @@ index 0000000000..b7673123a1
 +        expect(records).toHaveLength(0);
 +    });
 +
-+    it("does not lower when the render pass has no native recorder", () => {
++    it("does not lower when the render pass has no backend recorder", () => {
 +        const { renderPass, calls } = createReplayRenderPass();
 +        const stream = createStream();
 +        const command = createCommand({ renderPass });
@@ -766,14 +936,14 @@ index 0000000000..b7673123a1
 +        expect(calls[calls.length - 1]).toEqual(["drawIndexed", 36, 2, 5, 0, 0]);
 +    });
 +
-+    it("does not permanently reject a resource after the native id appears later", () => {
-+        const { renderPass, records } = createNativeRenderPass();
++    it("does not permanently reject a resource after the backend resource id appears later", () => {
++        const { renderPass, records } = createRecordingRenderPass();
 +        const pipeline = {};
 +        const stream = createStream();
 +
 +        expect(stream.tryAppend(createCommand({ renderPass, pipeline: pipeline as GPURenderPipeline }))).toBe(false);
 +
-+        setNativeResourceId(pipeline, 100);
++        setBackendResourceId(pipeline, 100);
 +        expect(stream.tryAppend(createCommand({ renderPass, pipeline: pipeline as GPURenderPipeline }))).toBe(true);
 +        stream.flush();
 +
@@ -781,8 +951,8 @@ index 0000000000..b7673123a1
 +        expect(records[0].drawCount).toBe(1);
 +    });
 +
-+    it("does not lower a draw while any required native id is missing", () => {
-+        const { renderPass, records } = createNativeRenderPass();
++    it("does not lower a draw while any required backend resource id is missing", () => {
++        const { renderPass, records } = createRecordingRenderPass();
 +        const stream = createStream();
 +
 +        expect(stream.tryAppend(createCommand({ renderPass, bindGroups: [createResource<GPUBindGroup>(201), {} as GPUBindGroup] }))).toBe(false);
@@ -796,8 +966,8 @@ index 0000000000..b7673123a1
 +    });
 +
 +    it("flushes an existing stream before appending to another render pass", () => {
-+        const first = createNativeRenderPass();
-+        const second = createNativeRenderPass();
++        const first = createRecordingRenderPass();
++        const second = createRecordingRenderPass();
 +        const stream = createStream();
 +
 +        expect(stream.tryAppend(createCommand({ renderPass: first.renderPass }))).toBe(true);
@@ -811,7 +981,7 @@ index 0000000000..b7673123a1
 +    });
 +
 +    it("re-emits required state after a completed stream is flushed", () => {
-+        const { renderPass, records } = createNativeRenderPass();
++        const { renderPass, records } = createRecordingRenderPass();
 +        const stream = createStream();
 +
 +        expect(stream.tryAppend(createCommand({ renderPass }))).toBe(true);
@@ -830,7 +1000,7 @@ index 0000000000..b7673123a1
 +    });
 +
 +    it("emits a new pipeline command when material-equivalent state changes", () => {
-+        const { renderPass, records } = createNativeRenderPass();
++        const { renderPass, records } = createRecordingRenderPass();
 +        const stream = createStream();
 +
 +        expect(stream.tryAppend(createCommand({ renderPass, pipeline: createResource<GPURenderPipeline>(100) }))).toBe(true);
@@ -843,7 +1013,7 @@ index 0000000000..b7673123a1
 +    });
 +
 +    it("emits only the changed bind-group slot for adjacent compatible draws", () => {
-+        const { renderPass, records } = createNativeRenderPass();
++        const { renderPass, records } = createRecordingRenderPass();
 +        const stream = createStream();
 +
 +        expect(stream.tryAppend(createCommand({ renderPass, bindGroups: [createResource<GPUBindGroup>(201), createResource<GPUBindGroup>(202)] }))).toBe(true);
@@ -855,7 +1025,7 @@ index 0000000000..b7673123a1
 +    });
 +
 +    it("emits a new index-buffer command when the index format changes", () => {
-+        const { renderPass, records } = createNativeRenderPass();
++        const { renderPass, records } = createRecordingRenderPass();
 +        const stream = createStream();
 +        const indexBuffer = createDataBuffer(401);
 +
@@ -868,7 +1038,7 @@ index 0000000000..b7673123a1
 +    });
 +
 +    it("emits a new vertex-buffer command when the vertex offset changes", () => {
-+        const { renderPass, records } = createNativeRenderPass();
++        const { renderPass, records } = createRecordingRenderPass();
 +        const stream = createStream();
 +
 +        expect(stream.tryAppend(createCommand({ renderPass, vertexBuffers: [createVertexBuffer(301), createVertexBuffer(302, 8, false)] }))).toBe(true);
@@ -880,11 +1050,11 @@ index 0000000000..b7673123a1
 +    });
 +
 +    it("keeps indexed and non-indexed draws as distinct commands", () => {
-+        const { renderPass, records } = createNativeRenderPass();
++        const { renderPass, records } = createRecordingRenderPass();
 +        const stream = createStream();
 +
 +        expect(stream.tryAppend(createCommand({ renderPass }))).toBe(true);
-+        expect(stream.tryAppend(createCommand({ renderPass, drawType: 1, indexBuffer: null, indexFormat: null, count: 12, instancesCount: 1, start: 4 }))).toBe(true);
++        expect(stream.tryAppend(createNonIndexedCommand({ renderPass, count: 12, instancesCount: 1, start: 4 }))).toBe(true);
 +        stream.flush();
 +
 +        const opcodes = parseOpcodes(records[0].words);
@@ -893,17 +1063,14 @@ index 0000000000..b7673123a1
 +    });
 +
 +    it("records indirect draw commands without claiming multi-draw count-buffer lowering", () => {
-+        const { renderPass, records } = createNativeRenderPass();
++        const { renderPass, records } = createRecordingRenderPass();
 +        const stream = createStream();
 +
 +        expect(stream.tryAppend(createCommand({ renderPass, indirectDrawBuffer: createResource<GPUBuffer>(501) }))).toBe(true);
 +        expect(
 +            stream.tryAppend(
-+                createCommand({
++                createNonIndexedCommand({
 +                    renderPass,
-+                    drawType: 1,
-+                    indexBuffer: null,
-+                    indexFormat: null,
 +                    indirectDrawBuffer: createResource<GPUBuffer>(502),
 +                })
 +            )
@@ -919,7 +1086,7 @@ index 0000000000..b7673123a1
 +    });
 +
 +    it("grows command storage for long compatible runs without corrupting opcodes", () => {
-+        const { renderPass, records } = createNativeRenderPass();
++        const { renderPass, records } = createRecordingRenderPass();
 +        const stream = createStream();
 +
 +        for (let drawIndex = 0; drawIndex < 80; drawIndex++) {
@@ -933,11 +1100,103 @@ index 0000000000..b7673123a1
 +        expect(opcodes.filter((opcode) => opcode === WebGPURenderPassCommandOpcode.drawIndexed)).toHaveLength(80);
 +    });
 +
-+    it("includes backend diagnostics when native recording fails", () => {
-+        const { renderPass } = createNativeRenderPass(false);
++    it("includes backend diagnostics when backend recording fails", () => {
++        const { renderPass } = createRecordingRenderPass(false);
 +        const stream = createStream(true, "validation failed");
 +
 +        expect(stream.tryAppend(createCommand({ renderPass }))).toBe(true);
-+        expect(() => stream.flush()).toThrow("NativeWebGPU failed to record a render pass command stream: validation failed");
++        expect(() => stream.flush()).toThrow("WebGPU failed to record a render pass command stream: validation failed");
 +    });
 +});
+diff --git a/packages/dev/core/test/unit/Engines/renderCommandBatcher.test.ts b/packages/dev/core/test/unit/Engines/renderCommandBatcher.test.ts
+new file mode 100644
+index 0000000000..b113027f1b
+--- /dev/null
++++ b/packages/dev/core/test/unit/Engines/renderCommandBatcher.test.ts
+@@ -0,0 +1,83 @@
++import { describe, expect, it, vi } from "vitest";
++import { type IRenderCommandLowering, RenderCommandBatcher } from "core/Engines/renderCommandBatcher.pure";
++
++interface ITestCommand {
++    id: number;
++}
++
++function createLowering(appendResults: boolean[]): { lowering: IRenderCommandLowering<ITestCommand>; events: string[] } {
++    const events: string[] = [];
++    const lowering: IRenderCommandLowering<ITestCommand> = {
++        tryAppend: (command) => {
++            events.push(`try:${command.id}`);
++            return appendResults.shift() ?? false;
++        },
++        flush: () => {
++            events.push("flush");
++            return true;
++        },
++        reset: () => {
++            events.push("reset");
++        },
++    };
++
++    return { lowering, events };
++}
++
++describe("RenderCommandBatcher", () => {
++    it("replays when no lowering is installed", () => {
++        const replay = vi.fn();
++        const batcher = new RenderCommandBatcher<ITestCommand>(null, replay);
++
++        expect(batcher.submit({ id: 1 })).toBe(false);
++        expect(replay).toHaveBeenCalledOnce();
++        expect(replay).toHaveBeenCalledWith({ id: 1 });
++        expect(batcher.flush()).toBe(false);
++
++        expect(() => batcher.reset()).not.toThrow();
++    });
++
++    it("does not replay commands that lower successfully", () => {
++        const { lowering, events } = createLowering([true]);
++        const replay = vi.fn();
++        const batcher = new RenderCommandBatcher(lowering, replay);
++
++        expect(batcher.submit({ id: 1 })).toBe(true);
++
++        expect(replay).not.toHaveBeenCalled();
++        expect(events).toEqual(["try:1"]);
++    });
++
++    it("flushes lowered commands before replaying a command that cannot lower", () => {
++        const { lowering, events } = createLowering([true, false]);
++        const replay = vi.fn((command: ITestCommand) => events.push(`replay:${command.id}`));
++        const batcher = new RenderCommandBatcher(lowering, replay);
++
++        expect(batcher.submit({ id: 1 })).toBe(true);
++        expect(batcher.submit({ id: 2 })).toBe(false);
++
++        expect(events).toEqual(["try:1", "try:2", "flush", "replay:2"]);
++    });
++
++    it("handles zero, one, and many explicit flushes through the lowerer", () => {
++        const { lowering, events } = createLowering([true, true]);
++        const batcher = new RenderCommandBatcher(lowering, vi.fn());
++
++        expect(batcher.flush()).toBe(true);
++        expect(batcher.submit({ id: 1 })).toBe(true);
++        expect(batcher.flush()).toBe(true);
++        expect(batcher.submit({ id: 2 })).toBe(true);
++        expect(batcher.flush()).toBe(true);
++
++        expect(events).toEqual(["flush", "try:1", "flush", "try:2", "flush"]);
++    });
++
++    it("delegates reset only when a lowerer exists", () => {
++        const { lowering, events } = createLowering([]);
++        const batcher = new RenderCommandBatcher(lowering, vi.fn());
++
++        batcher.reset();
++
++        expect(events).toEqual(["reset"]);
++    });
++});
+-- 
+2.54.0
+
