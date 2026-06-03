@@ -2,6 +2,9 @@
 
 This directory contains the local Babylon.js source patches needed for
 NativeWebGPU and NativeXR portal validation in this BabylonNative branch.
+The stack is maintained against the sibling Babylon.js checkout used for this
+branch, currently the `codex/webgpu-wgsl-gui3d-particles` branch carrying
+`BabylonJS/Babylon.js#18460`.
 
 The patches are source-oriented on purpose. Avoid patching generated UMD files
 such as `Apps/node_modules/babylonjs/babylon.max.js`; those diffs are large,
@@ -9,25 +12,23 @@ hard to review, and hide the real upstreamable changes.
 
 ## Included Patches
 
-- `0001-add-dom-free-font-offset-fallback.patch`
-  - Adds the DOM-free font offset fallback from
-    `BabylonJS/Babylon.js#18463` so GUI text sizing does not collapse when
-    DOM layout metrics are unavailable or return zero.
-- `0002-preserve-ktx-compressed-srgb-metadata.patch`
+- `0001-preserve-ktx-compressed-srgb-metadata.patch`
   - Preserves compressed KTX sRGB/gamma metadata so native compressed texture
     uploads keep the intended color space.
-- `0003-support-ssao2-world-space-normals.patch`
+- `0002-support-ssao2-world-space-normals.patch`
   - Lets SSAO2 consume world-space normals by transforming them into view space
     in the shader.
-- `0004-wrap-native-xr-webgpu-render-targets.patch`
+- `0003-wrap-native-xr-webgpu-render-targets.patch`
   - Wraps NativeXR WebGPU color/depth textures as Babylon.js render targets.
-- `0005-batch-native-webgpu-render-pass-command-streams.patch`
-  - Adds the guarded NativeWebGPU render-pass command stream as an internal
-    WebGPU render-pass lowering module, with fallback replay and focused unit
-    tests for compatibility boundaries.
+- `0004-add-webgpu-render-command-batching.patch`
+  - Adds a backend-neutral render command batcher and WebGPU render-pass
+    lowering path, with fallback replay and focused unit tests for
+    compatibility boundaries.
 
-IBL-shadow experiments and custom animation-frame requester plumbing are
-intentionally not part of this stack.
+The DOM-free font offset fallback from `BabylonJS/Babylon.js#18463` is not
+included because it is already part of Babylon.js 9.10.1. IBL-shadow
+experiments and custom animation-frame requester plumbing are intentionally not
+part of this stack.
 
 ## Apply And Verify
 
