@@ -1666,6 +1666,7 @@
             "title": "Particles",
             "playgroundId": "#G3ZYFU#7",
             "renderCount": 100,
+            "renderReadinessPump": false,
             "referenceImage": "particles.png",
             "excludeFromAutomaticTesting": true,
             "reason": "Pixel diff after #1691 instance-data stride fix; not stride-related, needs follow-up."
@@ -2873,6 +2874,7 @@
             "title": "halo-particle-system",
             "playgroundId": "#2441BU#1",
             "renderCount": 20,
+            "renderReadinessPump": false,
             "excludeFromAutomaticTesting": true,
             "reason": "Pixel diff after #1691 instance-data stride fix; not stride-related, needs follow-up.",
             "referenceImage": "halo-particle-system.png"
@@ -2889,6 +2891,7 @@
             "title": "particle-system-with-custom-nme-shader",
             "playgroundId": "#DMLLV2",
             "renderCount": 5,
+            "renderReadinessPump": false,
             "excludeFromAutomaticTesting": true,
             "reason": "Pixel diff after #1691 instance-data stride fix; not stride-related, needs follow-up.",
             "referenceImage": "particle-system-with-custom-nme-shader.png"
@@ -4344,6 +4347,7 @@
             "title": "Particles - Basic Properties - Color",
             "playgroundId": "#0K3AQ2#3786",
             "renderCount": 120,
+            "renderReadinessPump": false,
             "referenceImage": "particles-basic-color.png",
             "excludeFromAutomaticTesting": true,
             "reason": "Pixel diff after #1691 instance-data stride fix; not stride-related, needs follow-up."
@@ -4376,6 +4380,7 @@
             "title": "Particles - Basic Properties - Direction",
             "playgroundId": "#0K3AQ2#3814",
             "renderCount": 120,
+            "renderReadinessPump": false,
             "referenceImage": "particles-basic-direction.png",
             "excludeFromAutomaticTesting": true,
             "reason": "Pixel diff after #1691 instance-data stride fix; not stride-related, needs follow-up."
@@ -4396,6 +4401,7 @@
             "title": "Particles - Basic Properties - Emit Rate - Fast",
             "playgroundId": "#0K3AQ2#3823",
             "renderCount": 120,
+            "renderReadinessPump": false,
             "referenceImage": "particles-basic-emit-rate-fast.png",
             "excludeFromAutomaticTesting": true,
             "reason": "Pixel diff after #1691 instance-data stride fix; not stride-related, needs follow-up."
@@ -4422,6 +4428,7 @@
             "title": "Particles - Change - Size",
             "playgroundId": "#0K3AQ2#3841",
             "renderCount": 120,
+            "renderReadinessPump": false,
             "referenceImage": "particles-basic-change-size.png",
             "excludeFromAutomaticTesting": true,
             "reason": "Pixel diff after #1691 instance-data stride fix; not stride-related, needs follow-up."
@@ -4436,6 +4443,7 @@
             "title": "Particles - Change - Color",
             "playgroundId": "#0K3AQ2#3847",
             "renderCount": 120,
+            "renderReadinessPump": false,
             "referenceImage": "particles-basic-change-color.png",
             "excludeFromAutomaticTesting": true,
             "reason": "Pixel diff after #1691 instance-data stride fix; not stride-related, needs follow-up."
@@ -4444,6 +4452,7 @@
             "title": "Particles - Change - Color 2",
             "playgroundId": "#0K3AQ2#3851",
             "renderCount": 120,
+            "renderReadinessPump": false,
             "referenceImage": "particles-basic-change-color-2.png",
             "excludeFromAutomaticTesting": true,
             "reason": "Pixel diff after #1691 instance-data stride fix; not stride-related, needs follow-up."
@@ -4506,6 +4515,7 @@
             "title": "Particles - Change - Lifetime",
             "playgroundId": "#0K3AQ2#3885",
             "renderCount": 120,
+            "renderReadinessPump": false,
             "referenceImage": "particles-basic-change-lifetime.png",
             "excludeFromAutomaticTesting": true,
             "reason": "Pixel diff after #1691 instance-data stride fix; not stride-related, needs follow-up."
@@ -4526,6 +4536,7 @@
             "title": "Particles - Emitters - Point",
             "playgroundId": "#WLX2I2#7",
             "renderCount": 120,
+            "renderReadinessPump": false,
             "referenceImage": "particles-emitters-point.png",
             "excludeFromAutomaticTesting": true,
             "reason": "Pixel diff after #1691 instance-data stride fix; not stride-related, needs follow-up."
@@ -4534,6 +4545,7 @@
             "title": "Particles - Emitters - Box",
             "playgroundId": "#WLX2I2#8",
             "renderCount": 120,
+            "renderReadinessPump": false,
             "referenceImage": "particles-emitters-box.png",
             "excludeFromAutomaticTesting": true,
             "reason": "Pixel diff after #1691 instance-data stride fix; not stride-related, needs follow-up."
@@ -4542,6 +4554,7 @@
             "title": "Particles - Emitters - Sphere",
             "playgroundId": "#WLX2I2#9",
             "renderCount": 120,
+            "renderReadinessPump": false,
             "referenceImage": "particles-emitters-sphere.png",
             "excludeFromAutomaticTesting": true,
             "reason": "Pixel diff after #1691 instance-data stride fix; not stride-related, needs follow-up."
@@ -4562,6 +4575,7 @@
             "title": "Particles - Emitters - Cylinder",
             "playgroundId": "#WLX2I2#12",
             "renderCount": 120,
+            "renderReadinessPump": false,
             "referenceImage": "particles-emitters-cylinder.png",
             "excludeFromAutomaticTesting": true,
             "reason": "Pixel diff after #1691 instance-data stride fix; not stride-related, needs follow-up."
@@ -4584,6 +4598,7 @@
             "title": "Particles - Emitters - Directed Cone",
             "playgroundId": "#WLX2I2#17",
             "renderCount": 120,
+            "renderReadinessPump": false,
             "referenceImage": "particles-emitters-directed-cone.png",
             "excludeFromAutomaticTesting": true,
             "reason": "Pixel diff after #1691 instance-data stride fix; not stride-related, needs follow-up."
@@ -4698,6 +4713,7 @@
             "title": "Particles - Attractors",
             "playgroundId": "#DEZ79M#73",
             "renderCount": 240,
+            "renderReadinessPump": false,
             "excludeFromAutomaticTesting": true,
             "reason": "Pixel diff after #1691 instance-data stride fix; not stride-related, needs follow-up.",
             "referenceImage": "particles-attractors.png"
