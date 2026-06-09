@@ -1,5 +1,6 @@
 (async function () {
     let currentScene;
+    let currentValidationTest;
     let config;
     const opts = (typeof _playgroundOptions === "object" && _playgroundOptions) ? _playgroundOptions : {};
     const justOnce = !!opts.runOnce;
@@ -2014,8 +2015,23 @@ fragmentOutputs.color=color;
         engine.__nativeValidationGui3DShaderLanguageInstalled = true;
     }
 
+    function shouldUseRenderReadinessPump(test) {
+        if (test && test.renderReadinessPump === false) {
+            return false;
+        }
+        if (globalThis.__nativeValidationRenderReadinessPump === false) {
+            return false;
+        }
+        return true;
+    }
+
     function installSceneReadinessShims() {
         if (!BABYLON.Scene || BABYLON.Scene.prototype.__nativeValidationReadinessPumpInstalled) {
+            return;
+        }
+
+        if (globalThis.__nativeValidationRenderReadinessPump === false) {
+            BABYLON.Scene.prototype.__nativeValidationReadinessPumpInstalled = true;
             return;
         }
 
@@ -2023,17 +2039,38 @@ fragmentOutputs.color=color;
         if (typeof originalWhenReadyAsync === "function") {
             BABYLON.Scene.prototype.whenReadyAsync = function () {
                 const scene = this;
-                const readinessPump = startSceneReadinessRenderPump(scene, "scene.whenReadyAsync");
+                const pumpLabel = currentValidationTest && currentValidationTest.title
+                    ? "scene.whenReadyAsync for " + currentValidationTest.title
+                    : "scene.whenReadyAsync";
+                let rejectReadinessPump;
+                const readinessPumpFailed = new Promise(function (_, reject) {
+                    rejectReadinessPump = reject;
+                });
+                const readinessPump = shouldUseRenderReadinessPump(currentValidationTest)
+                    ? startSceneReadinessRenderPump(scene, pumpLabel, function (error) {
+                        rejectReadinessPump(error);
+                    })
+                    : null;
                 try {
-                    return originalWhenReadyAsync.apply(scene, arguments).then(function (result) {
-                        readinessPump.stop();
+                    const readiness = originalWhenReadyAsync.apply(scene, arguments);
+                    if (readinessPump === null) {
+                        return readiness;
+                    }
+                    return Promise.race([readiness, readinessPumpFailed]).then(function (result) {
+                        if (readinessPump !== null) {
+                            readinessPump.stop();
+                        }
                         return result;
                     }, function (error) {
-                        readinessPump.stop();
+                        if (readinessPump !== null) {
+                            readinessPump.stop();
+                        }
                         throw error;
                     });
                 } catch (e) {
-                    readinessPump.stop();
+                    if (readinessPump !== null) {
+                        readinessPump.stop();
+                    }
                     throw e;
                 }
             };
@@ -2475,29 +2512,31 @@ fragmentOutputs.color=color;
         }, sceneReadyTimeoutMs);
 
         primeDynamicTexturesForReadiness(currentScene);
-        readinessPump = startSceneReadinessRenderPump(currentScene, "executeWhenReady for " + (test.title || "(unnamed)"), function (error) {
-            if (evaluated) {
-                return;
-            }
-            evaluated = true;
-            stopped = true;
-            if (readinessTimer !== null) {
-                clearTimeout(readinessTimer);
-                readinessTimer = null;
-            }
-            if (readinessPump !== null) {
-                readinessPump.stop();
-                readinessPump = null;
-            }
-            const errorText = formatLogArgument(error);
-            const failurePrefix = errorText.indexOf("NATIVE_WEBGPU_UNSUPPORTED_EFFECT") !== -1
-                ? "NATIVE_WEBGPU_UNSUPPORTED_EFFECT_READY_FAILED"
-                : "SCENE_READY_FAILED";
-            console.error(errorText);
-            console.error(failurePrefix + ": Test '" + (test.title || "(unnamed)") + "' failed during readiness. " + getSceneFamilyReadinessDiagnostics(currentScene));
-            disposeCurrentSceneForFailure();
-            failTest(done);
-        });
+        if (shouldUseRenderReadinessPump(test)) {
+            readinessPump = startSceneReadinessRenderPump(currentScene, "executeWhenReady for " + (test.title || "(unnamed)"), function (error) {
+                if (evaluated) {
+                    return;
+                }
+                evaluated = true;
+                stopped = true;
+                if (readinessTimer !== null) {
+                    clearTimeout(readinessTimer);
+                    readinessTimer = null;
+                }
+                if (readinessPump !== null) {
+                    readinessPump.stop();
+                    readinessPump = null;
+                }
+                const errorText = formatLogArgument(error);
+                const failurePrefix = errorText.indexOf("NATIVE_WEBGPU_UNSUPPORTED_EFFECT") !== -1
+                    ? "NATIVE_WEBGPU_UNSUPPORTED_EFFECT_READY_FAILED"
+                    : "SCENE_READY_FAILED";
+                console.error(errorText);
+                console.error(failurePrefix + ": Test '" + (test.title || "(unnamed)") + "' failed during readiness. " + getSceneFamilyReadinessDiagnostics(currentScene));
+                disposeCurrentSceneForFailure();
+                failTest(done);
+            });
+        }
 
         currentScene.executeWhenReady(function () {
             if (evaluated) {
@@ -2811,6 +2850,13 @@ fragmentOutputs.color=color;
         }
 
         const test = config.tests[index];
+        currentValidationTest = test;
+        const finishTest = function (status) {
+            if (currentValidationTest === test) {
+                currentValidationTest = null;
+            }
+            done(status);
+        };
         const testInfo = "Running " + test.title;
         console.log(testInfo);
         TestUtils.setTitle(testInfo);
@@ -2818,7 +2864,7 @@ fragmentOutputs.color=color;
         seed = 1;
 
         if (generateReferences) {
-            loadPlayground(test, done, undefined, saveRenderedResult);
+            loadPlayground(test, finishTest, undefined, saveRenderedResult);
         } else {
             // Config validation: missing 'referenceImage' field is a permanent
             // catalog error (not a runtime asset-missing case), so short-circuit
@@ -2828,7 +2874,7 @@ fragmentOutputs.color=color;
                 console.error("MISSING_REFERENCE_IMAGE: Test '" + (test.title || "(unnamed)") +
                               "' has no 'referenceImage' field in config.json - cannot run pixel comparison.");
                 missingRefCount++;
-                failTest(done);
+                failTest(finishTest);
                 return;
             }
 
@@ -2844,7 +2890,7 @@ fragmentOutputs.color=color;
                               "' failed to load reference at " + url + ". " +
                               (exception ? exception : "(no exception details)"));
                 missingRefCount++;
-                failTest(done);
+                failTest(finishTest);
             };
 
             const onload = function (data, responseURL) {
@@ -2853,7 +2899,7 @@ fragmentOutputs.color=color;
                 }
 
                 const referenceImage = TestUtils.decodeImage(data);
-                loadPlayground(test, done, referenceImage, compare);
+                loadPlayground(test, finishTest, referenceImage, compare);
             };
 
             BABYLON.Tools.LoadFile(url, onload, undefined, undefined, /*useArrayBuffer*/true, onLoadFileError);
