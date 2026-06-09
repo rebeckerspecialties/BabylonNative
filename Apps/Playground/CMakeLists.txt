@@ -193,6 +193,7 @@ target_include_directories(Playground PRIVATE ".")
 target_link_libraries(Playground
     PRIVATE Embedding
     PRIVATE bx
+    PRIVATE CubeTexture
     PRIVATE TestUtils
     ${ADDITIONAL_LIBRARIES}
     ${BABYLON_NATIVE_PLAYGROUND_EXTENSION_LIBRARIES})

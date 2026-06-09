@@ -34,4 +34,5 @@ target_include_directories(BabylonNativeEmbedding
 
 target_link_libraries(BabylonNativeEmbedding
     PRIVATE bx
+    PRIVATE CubeTexture
     PRIVATE Foundation)     # for <Babylon/PerfTrace.h> in PlaygroundScripts.cpp

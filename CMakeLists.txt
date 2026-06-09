@@ -190,6 +190,7 @@ option(BABYLON_NATIVE_POLYFILL_SCHEDULING "Include Babylon Native Polyfill Sched
 option(BABYLON_NATIVE_POLYFILL_URL "Include Babylon Native Polyfill URL." ON)
 option(BABYLON_NATIVE_POLYFILL_WEBSOCKET "Include Babylon Native Polyfill WebSocket." ON)
 option(BABYLON_NATIVE_POLYFILL_WINDOW "Include Babylon Native Polyfill Window." ON)
+option(BABYLON_NATIVE_POLYFILL_CUBETEXTURE "Include Babylon Native Polyfill CubeTexture (.dds/.ktx/.ktx2 -> .env fallback for NativeEngine.createCubeTexture)." ON)
 
 # Embedding
 option(BABYLON_NATIVE_EMBEDDING "Build the cross-platform Babylon::Embedding facade (Runtime + View)." ON)
