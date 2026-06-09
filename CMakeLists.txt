@@ -160,6 +160,7 @@ option(BABYLON_NATIVE_LTO_BITCODE_STATIC_LIBS "Compile native static libraries a
 
 # Polyfills
 option(BABYLON_NATIVE_POLYFILL_WINDOW "Include Babylon Native Polyfill Window." ON)
+option(BABYLON_NATIVE_POLYFILL_CUBETEXTURE "Include Babylon Native Polyfill CubeTexture (.dds/.ktx/.ktx2 -> .env fallback for NativeEngine.createCubeTexture)." ON)
 
 # Sanitizers
 option(ENABLE_SANITIZERS "Enable AddressSanitizer and UBSan" OFF)
