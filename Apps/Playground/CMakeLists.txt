@@ -182,6 +182,7 @@ target_link_libraries(Playground
     PRIVATE AppRuntime
     PRIVATE Blob
     PRIVATE Console
+    PRIVATE CubeTexture
     PRIVATE GraphicsDevice
     PRIVATE NativeInput
     PRIVATE NativeWebGPU
