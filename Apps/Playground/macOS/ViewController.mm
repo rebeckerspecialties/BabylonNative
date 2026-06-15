@@ -1,15 +1,19 @@
 #import "ViewController.h"
 
 #import <Babylon/Embedding/Apple/BabylonNativeEmbedding.h>
+#import <Babylon/Embedding/Apple/BNRuntime.h>
 #import "AppleShared/PlaygroundBootstrap.h"
 
 #import <CoreGraphics/CoreGraphics.h>
 #import <MetalKit/MTKView.h>
 #import <QuartzCore/QuartzCore.h>
 
+#include <Babylon/Embedding/Runtime.h>
 #include <Shared/CommandLine.h>
+#include <napi/napi.h>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <sstream>
@@ -17,9 +21,16 @@
 #include <string_view>
 #include <vector>
 
+// Re-declare the internal class extension that exposes the C++ Runtime*
+// from BNRuntime (implementation lives in Embedding/Apple/Source/BNRuntime.mm).
+@interface BNRuntime ()
+- (Babylon::Embedding::Runtime*)nativeRuntime;
+@end
+
 namespace
 {
     using Clock = std::chrono::steady_clock;
+    std::atomic_bool validationFrameTimerEnabled{false};
 
     double ElapsedMs(Clock::time_point start, Clock::time_point end)
     {
@@ -273,6 +284,7 @@ namespace
     BNView* _bnView;
     PlaygroundProfilingViewDelegate* _profilingDelegate;
     MTKView* _mtkView;
+    NSTimer* _validationFrameTimer;
 }
 
 - (void)viewDidLoad {
@@ -292,6 +304,10 @@ namespace
 - (void)uninitialize {
     // Tear down View first (closes in-flight frame, unbinds the surface),
     // then Runtime (joins the JS thread).
+    validationFrameTimerEnabled.store(false);
+    [_validationFrameTimer invalidate];
+    _validationFrameTimer = nil;
+
     if (_mtkView.delegate == _profilingDelegate)
     {
         _mtkView.delegate = nil;
@@ -329,6 +345,17 @@ namespace
 
     [PlaygroundBootstrap loadScripts:_runtime];
     [_runtime eval:MakePlaygroundOptionsScript(playgroundOptions) sourceURL:@"app:///Scripts/playground_options.js"];
+    if (HasValidationIntent(playgroundOptions))
+    {
+        auto& nativeRuntime = *[_runtime nativeRuntime];
+        nativeRuntime.RunOnJsThread([](Napi::Env env) {
+            auto setValidationFrameTimerEnabled = Napi::Function::New(env, [](const Napi::CallbackInfo& info) {
+                const bool enabled = info.Length() > 0 && info[0].ToBoolean().Value();
+                validationFrameTimerEnabled.store(enabled);
+            });
+            env.Global().Set("__nativeValidationSetFrameTimerEnabled", setValidationFrameTimerEnabled);
+        }, true);
+    }
 
     if (playgroundOptions.Scripts.empty() && !HasValidationIntent(playgroundOptions))
     {
@@ -374,6 +401,11 @@ namespace
     _mtkView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     ConfigureFrameRate(_mtkView, playgroundOptions);
     ConfigureDrawable(_mtkView, playgroundOptions);
+    if (HasValidationIntent(playgroundOptions))
+    {
+        _mtkView.paused = YES;
+        _mtkView.enableSetNeedsDisplay = NO;
+    }
     [[self view] addSubview:_mtkView];
 
     if (playgroundOptions.Hdr10)
@@ -389,6 +421,26 @@ namespace
     {
         _profilingDelegate = [[PlaygroundProfilingViewDelegate alloc] initWithView:_bnView];
         _mtkView.delegate = _profilingDelegate;
+    }
+
+    if (HasValidationIntent(playgroundOptions))
+    {
+        __weak ViewController* weakSelf = self;
+        _validationFrameTimer = [NSTimer timerWithTimeInterval:(1.0 / 60.0) repeats:YES block:^(NSTimer* timer) {
+            ViewController* strongSelf = weakSelf;
+            if (strongSelf == nil || strongSelf->_mtkView == nil || strongSelf->_bnView == nil)
+            {
+                [timer invalidate];
+                return;
+            }
+
+            if (validationFrameTimerEnabled.load())
+            {
+                id<MTKViewDelegate> delegate = strongSelf->_mtkView.delegate;
+                [delegate drawInMTKView:strongSelf->_mtkView];
+            }
+        }];
+        [[NSRunLoop mainRunLoop] addTimer:_validationFrameTimer forMode:NSRunLoopCommonModes];
     }
 }
 

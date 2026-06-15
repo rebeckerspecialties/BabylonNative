@@ -45,6 +45,12 @@
     // Frames after the trigger to let RenderDoc finalize the .rdc.
     const POST_CAPTURE_FRAMES = 5;
 
+    function setNativeValidationFrameTimerEnabled(enabled) {
+        if (typeof globalThis.__nativeValidationSetFrameTimerEnabled === "function") {
+            globalThis.__nativeValidationSetFrameTimerEnabled(!!enabled);
+        }
+    }
+
     function shouldRunTest(test, index) {
         if (testIndices.length > 0 && testIndices.indexOf(index) === -1) {
             return false;
@@ -1853,7 +1859,9 @@
 
             try {
                 if (scene.activeCamera && typeof scene.render === "function") {
-                    scene.render();
+                    // Readiness renders are only for material/effect compilation.
+                    // Preserve the screenshot test's animation frame count.
+                    scene.render(true, true);
                     frameCount++;
                     if (frameCount <= 3) {
                         logNativeWebGPUStats("after readiness pump frame " + frameCount + " for " + pumpLabel);
@@ -2471,6 +2479,12 @@ fragmentOutputs.color=color;
 
     function processCurrentScene(test, renderImage, done, compareFunction) {
         currentScene.useConstantAnimationDeltaTime = true;
+        // Some playgrounds start their own render loop before returning the
+        // scene. Validation owns frame counting, so clear any stale loop state
+        // before readiness and screenshot frames are driven by the harness.
+        if (engine && typeof engine.stopRenderLoop === "function") {
+            engine.stopRenderLoop();
+        }
         // Frame at which to read back the framebuffer & validate. This is the
         // test's renderCount (default 1) and determines pass/fail. NOT shifted
         // by --capture.
@@ -2508,6 +2522,7 @@ fragmentOutputs.color=color;
             if (evaluated) {
                 return;
             }
+            setNativeValidationFrameTimerEnabled(false);
             if (readinessTimer !== null) {
                 clearTimeout(readinessTimer);
                 readinessTimer = null;
@@ -2550,6 +2565,7 @@ fragmentOutputs.color=color;
                     }
                     evaluated = true;
                     stopped = true;
+                    setNativeValidationFrameTimerEnabled(false);
                     engine.stopRenderLoop();
                     console.error("WEBGPU_QUEUE_WAIT_FAILED: " + formatLogArgument(error));
                     disposeCurrentSceneForFailure();
@@ -2572,6 +2588,7 @@ fragmentOutputs.color=color;
 
             evaluated = true;
             stopped = true;
+            setNativeValidationFrameTimerEnabled(false);
             if (readinessPump !== null) {
                 readinessPump.stop();
                 readinessPump = null;
@@ -2592,6 +2609,7 @@ fragmentOutputs.color=color;
                 }
                 evaluated = true;
                 stopped = true;
+                setNativeValidationFrameTimerEnabled(false);
                 if (readinessTimer !== null) {
                     clearTimeout(readinessTimer);
                     readinessTimer = null;
@@ -2641,6 +2659,7 @@ fragmentOutputs.color=color;
                 profileParticleCollector = installParticleFrameProfileCollector();
                 console.log("Frame profile start for " + (test.title || "(unnamed)") + ": compareFrame=" + String(compareFrame) + " stopFrame=" + String(stopFrame));
             }
+            setNativeValidationFrameTimerEnabled(true);
             engine.runRenderLoop(function () {
                 try {
                     frameIndex++;
@@ -2721,7 +2740,11 @@ fragmentOutputs.color=color;
                     }
 
                     if (frameIndex >= compareFrame && !readbackRequested) {
-                        if (stopFrame <= compareFrame && !stopped) {
+                        // WebGPU readback waits for submitted work before
+                        // queueing the native screenshot request. Keep the
+                        // render loop alive until that request is consumed by
+                        // a subsequent native frame.
+                        if (stopFrame <= compareFrame && !stopped && !engine.isWebGPU) {
                             stopped = true;
                             engine.stopRenderLoop();
                         }
@@ -2751,6 +2774,7 @@ fragmentOutputs.color=color;
                     }
                     evaluated = true;
                     stopped = true;
+                    setNativeValidationFrameTimerEnabled(false);
                     console.error(e);
                     disposeCurrentSceneForFailure();
                     failTest(done);

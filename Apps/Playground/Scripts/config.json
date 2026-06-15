@@ -1371,13 +1371,11 @@
         {
             "title": "GLTF Serializer Skinning and Animation",
             "playgroundId": "#DMZBX1#1",
-            "renderReadinessPump": false,
             "referenceImage": "gltfSerializerSkinningAndAnimation.png"
         },
         {
             "title": "GLTF Serializer Skinning and Animation (Right Handed)",
             "playgroundId": "#DMZBX1#2",
-            "renderReadinessPump": false,
             "referenceImage": "gltfSerializerSkinningAndAnimation.png"
         },
         {
