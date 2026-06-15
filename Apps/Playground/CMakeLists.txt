@@ -2,6 +2,7 @@ FILE(GLOB REFERENCE_IMAGES CONFIGURE_DEPENDS RELATIVE "${CMAKE_CURRENT_SOURCE_DI
 FILE(GLOB_RECURSE NATIVE_XR_PORTAL_ASSETS CONFIGURE_DEPENDS RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}" "Scripts/native_xr_portal_assets/*")
 
 set(BABYLON_SCRIPTS
+    "../node_modules/babylonjs-addons/babylonjs.addons.js"
     "../node_modules/babylonjs-loaders/babylonjs.loaders.js"
     "../node_modules/babylonjs/babylon.max.js"
     "../node_modules/babylonjs-materials/babylonjs.materials.js"
@@ -179,16 +180,20 @@ if(APPLE AND NOT IOS AND NOT VISIONOS)
 endif()
 
 target_link_libraries(Playground
+    PRIVATE AbortController
     PRIVATE AppRuntime
     PRIVATE Blob
     PRIVATE Console
     PRIVATE CubeTexture
+    PRIVATE Fetch
+    PRIVATE File
     PRIVATE GraphicsDevice
     PRIVATE NativeInput
     PRIVATE NativeWebGPU
     PRIVATE Performance
     PRIVATE ScriptLoader
     PRIVATE TextDecoder
+    PRIVATE TextEncoder
     PRIVATE URL
     PRIVATE Window
     PRIVATE XMLHttpRequest

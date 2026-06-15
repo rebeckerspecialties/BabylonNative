@@ -50,6 +50,7 @@ public:
     AppContext& operator=(AppContext&&) noexcept = delete;
 
     Babylon::Graphics::Device& Device() { return *m_device; }
+    Babylon::Graphics::DeviceUpdate& DeviceUpdate() { return *m_deviceUpdate; }
     Babylon::AppRuntime& Runtime() { return *m_runtime; }
     Babylon::Plugins::NativeInput* Input() { return m_input; }
     Babylon::ScriptLoader& ScriptLoader() { return *m_scriptLoader; }
@@ -64,6 +65,7 @@ public:
 
 private:
     std::optional<Babylon::Graphics::Device> m_device;
+    std::optional<Babylon::Graphics::DeviceUpdate> m_deviceUpdate;
     std::optional<Babylon::AppRuntime> m_runtime;
     std::shared_ptr<std::atomic_bool> m_animationFrameDispatchPending{std::make_shared<std::atomic_bool>(false)};
     Babylon::Plugins::NativeInput* m_input{};

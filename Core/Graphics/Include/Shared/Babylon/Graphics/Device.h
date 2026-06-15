@@ -61,29 +61,44 @@ namespace Babylon::Graphics
         DepthStencilFormat BackBufferDepthStencilFormat{DepthStencilFormat::Depth24Stencil8};
     };
 
-    class DeviceImpl;
+    class Device;
 
-    // Deprecated: DeviceUpdate is a no-op compatibility shim. Frame synchronization
-    // is now handled by FrameCompletionScope inside StartRenderingCurrentFrame/
-    // FinishRenderingCurrentFrame. This class will be removed in a future PR.
     class DeviceUpdate
     {
     public:
-        [[deprecated("DeviceUpdate is a no-op; frame synchronization is handled by "
-                     "StartRenderingCurrentFrame/FinishRenderingCurrentFrame.")]]
-        void Start() {}
+        void Start()
+        {
+            m_start();
+        }
 
-        [[deprecated("DeviceUpdate is a no-op; frame synchronization is handled by "
-                     "StartRenderingCurrentFrame/FinishRenderingCurrentFrame.")]]
-        void Finish() {}
-
-        [[deprecated("DeviceUpdate is a no-op; frame synchronization is handled by "
-                     "StartRenderingCurrentFrame/FinishRenderingCurrentFrame.")]]
         void RequestFinish(std::function<void()> onFinishCallback)
         {
-            onFinishCallback();
+            m_requestFinish(std::move(onFinishCallback));
         }
+
+        void Finish()
+        {
+            std::promise<void> promise{};
+            auto future = promise.get_future();
+            RequestFinish([&promise] { promise.set_value(); });
+            future.wait();
+        }
+
+    private:
+        friend class Device;
+
+        template<typename StartCallableT, typename RequestEndCallableT>
+        DeviceUpdate(StartCallableT&& start, RequestEndCallableT&& requestEnd)
+            : m_start{std::forward<StartCallableT>(start)}
+            , m_requestFinish{std::forward<RequestEndCallableT>(requestEnd)}
+        {
+        }
+
+        std::function<void()> m_start{};
+        std::function<void(std::function<void()>)> m_requestFinish{};
     };
+
+    class DeviceImpl;
 
     class Device
     {
@@ -124,8 +139,7 @@ namespace Babylon::Graphics
         void EnableRendering();
         void DisableRendering();
 
-        [[deprecated("DeviceUpdate is a no-op; remove GetUpdate/Start/Finish calls.")]]
-        DeviceUpdate GetUpdate(const char* /*updateName*/) { return {}; }
+        DeviceUpdate GetUpdate(const char* updateName);
 
         void StartRenderingCurrentFrame();
         void FinishRenderingCurrentFrame();

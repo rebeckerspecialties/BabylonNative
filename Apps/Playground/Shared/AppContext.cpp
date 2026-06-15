@@ -18,11 +18,15 @@
 #include <Babylon/Plugins/TestUtils.h>
 #endif
 
+#include <Babylon/Polyfills/AbortController.h>
 #include <Babylon/Polyfills/Blob.h>
 #include <Babylon/Polyfills/Console.h>
 #include <Babylon/Polyfills/CubeTexture.h>
+#include <Babylon/Polyfills/Fetch.h>
+#include <Babylon/Polyfills/File.h>
 #include <Babylon/Polyfills/Performance.h>
 #include <Babylon/Polyfills/TextDecoder.h>
+#include <Babylon/Polyfills/TextEncoder.h>
 #include <Babylon/Polyfills/URL.h>
 #include <Babylon/Polyfills/Window.h>
 #include <Babylon/Polyfills/XMLHttpRequest.h>
@@ -260,6 +264,7 @@ AppContext::AppContext(
         }
 
         Babylon::Polyfills::Blob::Initialize(env);
+        Babylon::Polyfills::File::Initialize(env);
 #if defined(BABYLON_NATIVE_PLAYGROUND_HAS_CANVAS)
         m_canvas.emplace(Babylon::Polyfills::Canvas::Initialize(env));
 #endif
@@ -293,9 +298,12 @@ AppContext::AppContext(
         {
             InstallNativeFrameRequestAnimationFrame(env);
         }
+        Babylon::Polyfills::AbortController::Initialize(env);
         Babylon::Polyfills::TextDecoder::Initialize(env);
+        Babylon::Polyfills::TextEncoder::Initialize(env);
         Babylon::Polyfills::URL::Initialize(env);
         Babylon::Polyfills::XMLHttpRequest::Initialize(env);
+        Babylon::Polyfills::Fetch::Initialize(env);
 
         m_input = &Babylon::Plugins::NativeInput::CreateForJavaScript(env);
 #if defined(BABYLON_NATIVE_PLAYGROUND_HAS_NATIVEOPTIMIZATIONS)
@@ -319,6 +327,7 @@ AppContext::AppContext(
     m_scriptLoader.emplace(*m_runtime);
     m_scriptLoader->LoadScript("app:///Scripts/ammo.js");
     m_scriptLoader->LoadScript("app:///Scripts/babylon.max.js");
+    m_scriptLoader->LoadScript("app:///Scripts/babylonjs.addons.js");
     // CubeTexture polyfill must run AFTER babylon.max.js is evaluated because
     // it patches BABYLON.NativeEngine.prototype.createCubeTexture. The
     // ScriptLoader's Dispatch is ordered against LoadScript on the same task
