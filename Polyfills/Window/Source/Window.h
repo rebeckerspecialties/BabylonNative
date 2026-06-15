@@ -20,6 +20,7 @@ namespace Babylon::Polyfills::Internal
         JsRuntime& m_runtime;
 
         static Napi::Value DecodeBase64(const Napi::CallbackInfo& info);
+        static Napi::Value CreateEvent(const Napi::CallbackInfo& info);
         static void AddEventListener(const Napi::CallbackInfo& info);
         static void RemoveEventListener(const Napi::CallbackInfo& info);
         static Napi::Value GetDevicePixelRatio(const Napi::CallbackInfo& info);

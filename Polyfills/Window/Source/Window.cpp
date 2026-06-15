@@ -14,6 +14,14 @@ namespace Babylon::Polyfills::Internal
         constexpr auto JS_ADD_EVENT_LISTENER_NAME = "addEventListener";
         constexpr auto JS_REMOVE_EVENT_LISTENER_NAME = "removeEventListener";
         constexpr auto JS_DEVICE_PIXEL_RATIO_NAME = "devicePixelRatio";
+        constexpr auto JS_DOCUMENT_NAME = "document";
+        constexpr auto JS_CREATE_EVENT_NAME = "createEvent";
+        constexpr auto JS_LOCATION_NAME = "location";
+        constexpr auto JS_HREF_NAME = "href";
+        constexpr auto JS_INIT_EVENT_NAME = "initEvent";
+        constexpr auto JS_TYPE_NAME = "type";
+        constexpr auto JS_BUBBLES_NAME = "bubbles";
+        constexpr auto JS_CANCELABLE_NAME = "cancelable";
     }
 
     void Window::Initialize(Napi::Env env)
@@ -30,6 +38,38 @@ namespace Babylon::Polyfills::Internal
         auto jsWindow = constructor.New({});
 
         jsNative.Set(JS_WINDOW_NAME, jsWindow);
+
+        Napi::Object jsLocation{};
+        auto existingLocation = global.Get(JS_LOCATION_NAME);
+        if (existingLocation.IsObject())
+        {
+            jsLocation = existingLocation.As<Napi::Object>();
+        }
+        else
+        {
+            jsLocation = Napi::Object::New(env);
+        }
+
+        if (jsLocation.Get(JS_HREF_NAME).IsUndefined())
+        {
+            jsLocation.Set(JS_HREF_NAME, Napi::String::New(env, "app:///"));
+        }
+
+        global.Set(JS_LOCATION_NAME, jsLocation);
+        jsWindow.Set(JS_LOCATION_NAME, jsLocation);
+
+        auto existingDocument = global.Get(JS_DOCUMENT_NAME);
+        if (existingDocument.IsObject())
+        {
+            auto jsDocument = existingDocument.As<Napi::Object>();
+
+            if (jsDocument.Get(JS_CREATE_EVENT_NAME).IsUndefined())
+            {
+                jsDocument.Set(JS_CREATE_EVENT_NAME, Napi::Function::New(env, &Window::CreateEvent, JS_CREATE_EVENT_NAME));
+            }
+
+            jsWindow.Set(JS_DOCUMENT_NAME, jsDocument);
+        }
 
         Scheduling::Initialize(env);
 
@@ -77,6 +117,24 @@ namespace Babylon::Polyfills::Internal
         std::u16string decodedData;
         bn::decode_b64(encodedData.begin(), encodedData.end(), std::back_inserter(decodedData));
         return Napi::Value::From(info.Env(), decodedData);
+    }
+
+    Napi::Value Window::CreateEvent(const Napi::CallbackInfo& info)
+    {
+        auto env = info.Env();
+        auto event = Napi::Object::New(env);
+
+        event.Set(JS_TYPE_NAME, Napi::String::New(env, ""));
+        event.Set(JS_BUBBLES_NAME, Napi::Boolean::New(env, false));
+        event.Set(JS_CANCELABLE_NAME, Napi::Boolean::New(env, false));
+        event.Set(JS_INIT_EVENT_NAME, Napi::Function::New(env, [](const Napi::CallbackInfo& info) {
+            auto event = info.This().As<Napi::Object>();
+            event.Set(JS_TYPE_NAME, info[0].IsUndefined() ? Napi::String::New(info.Env(), "") : info[0].ToString());
+            event.Set(JS_BUBBLES_NAME, Napi::Boolean::New(info.Env(), info[1].ToBoolean()));
+            event.Set(JS_CANCELABLE_NAME, Napi::Boolean::New(info.Env(), info[2].ToBoolean()));
+        }, JS_INIT_EVENT_NAME));
+
+        return event;
     }
 
     void Window::AddEventListener(const Napi::CallbackInfo& /*info*/)
