@@ -1531,6 +1531,57 @@
         details.push("particleSystems=" + particleSystems.length + " notReady=[" + notReadyParticles.join(",") + "]");
     }
 
+    function appendPostProcessReadinessDiagnostics(scene, details) {
+        const cameras = [];
+        if (scene.activeCameras && scene.activeCameras.length > 0) {
+            for (let i = 0; i < scene.activeCameras.length; ++i) {
+                cameras.push(scene.activeCameras[i]);
+            }
+        } else if (scene.activeCamera) {
+            cameras.push(scene.activeCamera);
+        }
+
+        const notReadyPostProcesses = [];
+        let postProcessCount = 0;
+        for (let cameraIndex = 0; cameraIndex < cameras.length && notReadyPostProcesses.length < 8; ++cameraIndex) {
+            const camera = cameras[cameraIndex];
+            const postProcesses = camera && camera._postProcesses ? camera._postProcesses : [];
+            for (let postProcessIndex = 0; postProcessIndex < postProcesses.length && notReadyPostProcesses.length < 8; ++postProcessIndex) {
+                const postProcess = postProcesses[postProcessIndex];
+                if (!postProcess) {
+                    continue;
+                }
+                postProcessCount++;
+
+                let ready = true;
+                try {
+                    ready = typeof postProcess.isReady === "function" ? postProcess.isReady() : true;
+                } catch (e) {
+                    ready = false;
+                }
+                if (ready) {
+                    continue;
+                }
+
+                const className = typeof postProcess.getClassName === "function" ? postProcess.getClassName() : (postProcess.constructor && postProcess.constructor.name ? postProcess.constructor.name : "PostProcess");
+                const name = postProcess.name || className || "(unnamed postProcess)";
+                const label = ["camera=" + (camera.name || camera.id || cameraIndex), "postProcess=" + name + ":" + className];
+                try {
+                    const effect = postProcess._effectWrapper && postProcess._effectWrapper.effect;
+                    const effectDetails = getEffectReadinessDetails(effect, "postProcess=" + name + ",class=" + className);
+                    if (effectDetails) {
+                        label.push(effectDetails);
+                    }
+                } catch (e) {
+                    label.push("effectError=" + formatLogArgument(e));
+                }
+                notReadyPostProcesses.push(label.join(","));
+            }
+        }
+
+        details.push("postProcesses=" + postProcessCount + " notReady=[" + notReadyPostProcesses.join(";") + "]");
+    }
+
     function findUnsupportedNativeWebGPUEffectInScene(scene) {
         if (!scene) {
             return "";
@@ -1687,6 +1738,12 @@
             appendParticleReadinessDiagnostics(scene, details);
         } catch (e) {
             details.push("particleError=" + formatLogArgument(e));
+        }
+
+        try {
+            appendPostProcessReadinessDiagnostics(scene, details);
+        } catch (e) {
+            details.push("postProcessError=" + formatLogArgument(e));
         }
 
         if (lastConsoleError) {
