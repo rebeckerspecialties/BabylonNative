@@ -140,6 +140,38 @@ TEST(JavaScript, All)
     device.FinishRenderingCurrentFrame();
 }
 
+TEST(JavaScript, WindowDocumentCreateEvent)
+{
+    Babylon::AppRuntime runtime{};
+
+    runtime.Dispatch([](Napi::Env env) {
+        env.Global().Set("document", Napi::Object::New(env));
+        Babylon::Polyfills::Window::Initialize(env);
+    });
+
+    Babylon::ScriptLoader loader{runtime};
+    EXPECT_NO_THROW(loader.Eval(R"JS(
+        if (!globalThis.location || globalThis.location.href !== "app:///") {
+            throw new Error("Window polyfill did not provide location.href.");
+        }
+        if (!globalThis.window || globalThis.window.location !== globalThis.location) {
+            throw new Error("Window polyfill did not mirror location on window.");
+        }
+        if (!globalThis.document || typeof globalThis.document.createEvent !== "function") {
+            throw new Error("Window polyfill did not provide document.createEvent.");
+        }
+
+        const event = document.createEvent("MouseEvents");
+        if (event.type !== "" || event.bubbles !== false || event.cancelable !== false) {
+            throw new Error("document.createEvent should return an uninitialized event.");
+        }
+        event.initEvent("click", true, false);
+        if (event.type !== "click" || event.bubbles !== true || event.cancelable !== false) {
+            throw new Error("event.initEvent did not preserve click event metadata.");
+        }
+    )JS", "window.document-create-event.test.js"));
+}
+
 #if defined(BABYLON_NATIVE_UNITTESTS_WITH_WEBGPU)
 TEST(JavaScript, CanvasWgpuLiveContextCanSurviveRuntimeTeardown)
 {

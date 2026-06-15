@@ -296,7 +296,8 @@
     }
 
     function getExclusionReason(t) {
-        const isNativeWebGPU = !!globalThis.__babylonNativeValidationUseWebGPU;
+        const isNativeWebGPU = !!globalThis.__babylonNativeValidationUseWebGPU ||
+            !!(globalThis.navigator && globalThis.navigator.gpu && typeof globalThis.navigator.gpu._backendStats === "function");
         const includeInNativeWebGPU = isNativeWebGPU && !!t.includeInNativeWebGPU;
         if (t.requiresHdr10 && !hdr10) {
             return "requiresHdr10";
@@ -603,6 +604,20 @@
         return augmentValidationElement({}, type, 0, 0);
     }
 
+    function createValidationEvent() {
+        const event = {
+            type: "",
+            bubbles: false,
+            cancelable: false,
+            initEvent: function (type, bubbles, cancelable) {
+                event.type = String(type || "");
+                event.bubbles = !!bubbles;
+                event.cancelable = !!cancelable;
+            }
+        };
+        return event;
+    }
+
     function canvasFromNativeImage(image) {
         const width = image.naturalWidth || image.width || 1;
         const height = image.naturalHeight || image.height || 1;
@@ -808,6 +823,7 @@
                     parentNode: null
                 };
             },
+            createEvent: createValidationEvent,
             getElementsByTagName: function (tagName) {
                 switch (String(tagName).toLowerCase()) {
                     case "head":
@@ -2543,9 +2559,9 @@ fragmentOutputs.color=color;
                 return;
             }
             if (readinessPump !== null && typeof readinessPump.getFrameCount === "function") {
-                frameIndex = readinessPump.getFrameCount();
-                if (frameIndex > 0) {
-                    console.log("Counting " + frameIndex + " readiness render pump frame(s) toward renderCount for " + (test.title || "(unnamed)") + ".");
+                const readinessFrameCount = readinessPump.getFrameCount();
+                if (readinessFrameCount > 0) {
+                    console.log("Readiness render pump rendered " + readinessFrameCount + " frame(s) before validation frame counting for " + (test.title || "(unnamed)") + ".");
                 }
             }
             if (readinessPump !== null) {
