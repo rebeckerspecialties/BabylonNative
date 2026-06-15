@@ -3,6 +3,7 @@
 #include <Shared/AppContext.h>
 #include <Shared/CommandLine.h>
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <optional>
@@ -16,6 +17,8 @@
 
 std::optional<AppContext> appContext{};
 bool profileNativeFrames{false};
+NSTimer* validationFrameTimer{nil};
+std::atomic_bool validationFrameTimerEnabled{false};
 
 namespace
 {
@@ -146,26 +149,13 @@ namespace
 
 @interface EngineView : MTKView <MTKViewDelegate>
 
+- (void)renderFrame;
+
 @end
 
 @implementation EngineView
 
-- (void)mtkView:(MTKView *)__unused view drawableSizeWillChange:(CGSize) size
-{
-    @autoreleasepool {
-        if (appContext) {
-            appContext->DeviceUpdate().Finish();
-            appContext->Device().FinishRenderingCurrentFrame();
-
-            appContext->Device().UpdateSize(static_cast<size_t>(size.width), static_cast<size_t>(size.height));
-
-            appContext->Device().StartRenderingCurrentFrame();
-            appContext->DeviceUpdate().Start();
-        }
-    }
-}
-
-- (void)drawInMTKView:(MTKView *)__unused view
+- (void)renderFrame
 {
     @autoreleasepool {
         if (appContext) {
@@ -222,6 +212,26 @@ namespace
     }
 }
 
+- (void)mtkView:(MTKView *)__unused view drawableSizeWillChange:(CGSize) size
+{
+    @autoreleasepool {
+        if (appContext) {
+            appContext->DeviceUpdate().Finish();
+            appContext->Device().FinishRenderingCurrentFrame();
+
+            appContext->Device().UpdateSize(static_cast<size_t>(size.width), static_cast<size_t>(size.height));
+
+            appContext->Device().StartRenderingCurrentFrame();
+            appContext->DeviceUpdate().Start();
+        }
+    }
+}
+
+- (void)drawInMTKView:(MTKView *)__unused view
+{
+    [self renderFrame];
+}
+
 @end
 
 @implementation ViewController
@@ -240,6 +250,9 @@ namespace
 }
 
 - (void)uninitialize {
+    validationFrameTimerEnabled.store(false);
+    [validationFrameTimer invalidate];
+    validationFrameTimer = nil;
     appContext.reset();
 }
 
@@ -265,6 +278,8 @@ namespace
 
     EngineView* engineView = [[EngineView alloc] initWithFrame:[self view].frame device:nil];
     engineView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+    engineView.paused = HasValidationIntent(playgroundOptions) ? YES : NO;
+    engineView.enableSetNeedsDisplay = NO;
     [[self view] addSubview:engineView];
     engineView.delegate = engineView;
     ConfigureFrameRate(engineView, playgroundOptions);
@@ -284,6 +299,12 @@ namespace
         },
         [hdr10](Napi::Env env)
         {
+            auto setValidationFrameTimerEnabled = Napi::Function::New(env, [](const Napi::CallbackInfo& info) {
+                const bool enabled = info.Length() > 0 && info[0].ToBoolean().Value();
+                validationFrameTimerEnabled.store(enabled);
+            });
+            env.Global().Set("__nativeValidationSetFrameTimerEnabled", setValidationFrameTimerEnabled);
+
             auto statusCallback = Napi::Function::New(env, [](const Napi::CallbackInfo& info) {
                 if (info.Length() > 0)
                 {
@@ -343,6 +364,23 @@ namespace
         if (!validationScriptLoaded) {
             appContext->ScriptLoader().LoadScript("app:///Scripts/playground_runner.js");
         }
+    }
+
+    if (HasValidationIntent(playgroundOptions))
+    {
+        validationFrameTimer = [NSTimer timerWithTimeInterval:(1.0 / 60.0) repeats:YES block:^(NSTimer* timer) {
+            if (!appContext)
+            {
+                [timer invalidate];
+                return;
+            }
+
+            if (validationFrameTimerEnabled.load())
+            {
+                [engineView renderFrame];
+            }
+        }];
+        [[NSRunLoop mainRunLoop] addTimer:validationFrameTimer forMode:NSRunLoopCommonModes];
     }
 }
 
