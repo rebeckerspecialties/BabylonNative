@@ -236,7 +236,7 @@
             "playgroundId": "#WCDZS#531",
             "renderCount": 150,
             "referenceImage": "sps.png",
-            "errorRatio": 6.0
+            "errorRatio": 6
         },
         {
             "title": "LightFalloff",
@@ -259,7 +259,7 @@
             "renderCount": 10,
             "playgroundId": "#FFMFW5#0",
             "referenceImage": "lod.png",
-            "errorRatio": 7.0
+            "errorRatio": 7
         },
         {
             "title": "Capsule",
@@ -307,7 +307,10 @@
             "title": "Scissor test",
             "playgroundId": "#W7E7CF#34",
             "referenceImage": "scissor-test.png",
-            "excludedGraphicsApis": [ "D3D12", "OpenGL" ],
+            "excludedGraphicsApis": [
+                "D3D12",
+                "OpenGL"
+            ],
             "comment": "TODO: reenable D3D12 when automatic mip-map generation issue is fixed. Incorrect rendering with OpenGL."
         },
         {
@@ -315,7 +318,10 @@
             "playgroundId": "#W7E7CF#34",
             "replace": "//options//, hardwareScalingLevel = 0.9;",
             "referenceImage": "scissor-test-2.png",
-            "excludedGraphicsApis": [ "D3D12", "OpenGL" ],
+            "excludedGraphicsApis": [
+                "D3D12",
+                "OpenGL"
+            ],
             "errorRatio": 50,
             "comment": "TODO: reenable D3D12 when automatic mip-map generation issue is fixed. Incorrect rendering with OpenGL"
         },
@@ -324,7 +330,10 @@
             "playgroundId": "#W7E7CF#34",
             "replace": "//options//, hardwareScalingLevel = 1.5;",
             "referenceImage": "scissor-test-3.png",
-            "excludedGraphicsApis": [ "D3D12", "OpenGL" ],
+            "excludedGraphicsApis": [
+                "D3D12",
+                "OpenGL"
+            ],
             "comment": "TODO: reenable D3D12 when automatic mip-map generation issue is fixed. Incorrect rendering with OpenGL"
         },
         {
@@ -451,21 +460,21 @@
             "playgroundId": "#DS8AA7#27",
             "replace": "__folder__, Material_SpecularGlossiness, __page__, 1, __disableSRGBBuffers__, 0",
             "referenceImage": "gltfMaterialSpecularGlossiness1.png",
-            "errorRatio": 5.0
+            "errorRatio": 5
         },
         {
             "title": "GLTF Mesh Primitive Mode (0)",
             "playgroundId": "#DS8AA7#27",
             "replace": "__folder__, Mesh_PrimitiveMode, __page__, 0, __disableSRGBBuffers__, 0",
             "referenceImage": "gltfMeshPrimitiveMode0.png",
-            "errorRatio": 8.0
+            "errorRatio": 8
         },
         {
             "title": "GLTF Mesh Primitive Mode (1)",
             "playgroundId": "#DS8AA7#27",
             "replace": "__folder__, Mesh_PrimitiveMode, __page__, 1, __disableSRGBBuffers__, 0",
             "referenceImage": "gltfMeshPrimitiveMode1.png",
-            "errorRatio": 8.0
+            "errorRatio": 8
         },
         {
             "title": "GLTF Mesh Primitives",
@@ -495,40 +504,30 @@
             "title": "GLTF Node NegativeScale (0)",
             "playgroundId": "#DS8AA7#27",
             "replace": "__folder__, Node_NegativeScale, __page__, 0, __disableSRGBBuffers__, 0",
-            "referenceImage": "gltfNodeNegativeScale0.png",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Disabled to land sync PR; V8 cascade victim that crashes Win32 V8 D3D11 with ACCESS_VIOLATION (-1073741819). Will be re-enabled in follow-up fix PR."
+            "referenceImage": "gltfNodeNegativeScale0.png"
         },
         {
             "title": "GLTF Node NegativeScale (1)",
             "playgroundId": "#DS8AA7#27",
             "replace": "__folder__, Node_NegativeScale, __page__, 1, __disableSRGBBuffers__, 0",
-            "referenceImage": "gltfNodeNegativeScale1.png",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Disabled to land sync PR; V8 cascade victim that crashes Win32 V8 D3D11 with ACCESS_VIOLATION (-1073741819). Will be re-enabled in follow-up fix PR."
+            "referenceImage": "gltfNodeNegativeScale1.png"
         },
         {
             "title": "GLTF Texture Sampler (0)",
             "playgroundId": "#DS8AA7#27",
             "replace": "__folder__, Texture_Sampler, __page__, 0, __disableSRGBBuffers__, 0",
-            "referenceImage": "gltfTextureSampler0.png",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Disabled to land sync PR; V8 cascade victim that crashes Win32 V8 D3D11 with ACCESS_VIOLATION (-1073741819). Will be re-enabled in follow-up fix PR."
+            "referenceImage": "gltfTextureSampler0.png"
         },
         {
             "title": "GLTF Texture Sampler (1)",
             "playgroundId": "#DS8AA7#27",
             "replace": "__folder__, Texture_Sampler, __page__, 1, __disableSRGBBuffers__, 0",
-            "referenceImage": "gltfTextureSampler1.png",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Disabled to land sync PR; V8 cascade victim that crashes Win32 V8 D3D11 with ACCESS_VIOLATION (-1073741819). Will be re-enabled in follow-up fix PR."
+            "referenceImage": "gltfTextureSampler1.png"
         },
         {
             "title": "GLTF Alien",
             "playgroundId": "#XN37SR#5",
-            "referenceImage": "gltfAlien.png",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Disabled to land sync PR; V8 cascade victim that crashes Win32 V8 D3D11 with ACCESS_VIOLATION (-1073741819). Will be re-enabled in follow-up fix PR."
+            "referenceImage": "gltfAlien.png"
         },
         {
             "title": "Interleaved buffers test",
@@ -631,8 +630,6 @@
         {
             "title": "NPE - Angle align",
             "playgroundId": "#H5RP91",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Test crashes or hangs on Babylon Native",
             "referenceImage": "npe-angle-align.png"
         },
         {
@@ -666,9 +663,7 @@
         {
             "title": "RH billboard2",
             "playgroundId": "#QDVYS4#4",
-            "referenceImage": "rh-billboard2.png",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Disabled to land sync PR; V8 cascade victim that crashes Win32 V8 D3D11 with ACCESS_VIOLATION (-1073741819). Will be re-enabled in follow-up fix PR."
+            "referenceImage": "rh-billboard2.png"
         },
         {
             "title": "MSDF",
@@ -798,9 +793,7 @@
         {
             "title": "Lattice",
             "playgroundId": "#MDVD75#19",
-            "referenceImage": "lattice.png",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Disabled to land sync PR; V8 cascade victim that crashes Win32 V8 D3D11 with ACCESS_VIOLATION (-1073741819). Will be re-enabled in follow-up fix PR."
+            "referenceImage": "lattice.png"
         },
         {
             "title": "HAL Lattice",
@@ -812,39 +805,29 @@
         {
             "title": "NME Loop Block",
             "playgroundId": "#D8AK3Z#115",
-            "referenceImage": "nme-loop.png",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Test crashes on Win32 V8 D3D11 (access violation)"
+            "referenceImage": "nme-loop.png"
         },
         {
             "title": "Gaussian Splatting Loading",
             "playgroundId": "#CID4NN#204",
             "renderCount": 15,
-            "referenceImage": "gsplat-loading.png",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Test crashes on Win32 D3D11 / Sanitizers / V8 D3D11"
+            "referenceImage": "gsplat-loading.png"
         },
         {
             "title": "Simple refraction",
             "playgroundId": "#22KZUW#652",
             "referenceImage": "simple-refraction.png",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Test crashes on Win32 V8 D3D11 (access violation)",
             "includeInNativeWebGPU": true
         },
         {
             "title": "Detail map",
             "playgroundId": "#F8FDYT#2",
-            "referenceImage": "detail-map.png",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Test crashes on Win32 D3D11 / Sanitizers (STATUS_BREAKPOINT)"
+            "referenceImage": "detail-map.png"
         },
         {
             "title": "needDepthPrePass",
             "playgroundId": "#7A66KI#1",
-            "referenceImage": "needDepthPrePass.png",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Test crashes on Win32 V8 D3D11 (access violation)"
+            "referenceImage": "needDepthPrePass.png"
         },
         {
             "title": "Decal map PP",
@@ -857,16 +840,12 @@
         {
             "title": "Convolution Post Process",
             "playgroundId": "#FBH4J7#281",
-            "referenceImage": "convolution.png",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Test crashes on Win32 D3D11 / Sanitizers (STATUS_BREAKPOINT)"
+            "referenceImage": "convolution.png"
         },
         {
             "title": "Volumetric Light Scattering Post Process with Skeleton",
             "playgroundId": "#5E318S#6",
-            "referenceImage": "volumetricLightScatteringSkeleton.png",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Triggers ACCESS_VIOLATION cascade on Win32 V8 D3D11 -- the next test always crashes regardless of which one it is. Likely heap corruption."
+            "referenceImage": "volumetricLightScatteringSkeleton.png"
         },
         {
             "title": "Volumetric Light Scattering Post Process with Morph Targets",
@@ -910,9 +889,7 @@
         {
             "title": "Trailmesh tapered and untapered",
             "playgroundId": "#XGGSWJ#4",
-            "referenceImage": "trailMesh.png",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Test crashes on Win32 V8 D3D11 (access violation cascade)"
+            "referenceImage": "trailMesh.png"
         },
         {
             "title": "GUI Input Text Area with Placeholder",
@@ -924,16 +901,12 @@
         {
             "title": "Ground Projection",
             "playgroundId": "#XG08YC#0",
-            "referenceImage": "groundProjection.png",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Test crashes on Win32 V8 D3D11 (access violation cascade)"
+            "referenceImage": "groundProjection.png"
         },
         {
             "title": "Node geometry",
             "playgroundId": "#WGZLGJ#9152",
-            "referenceImage": "nodeGeometry.png",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Test crashes on Win32 V8 D3D11 (access violation cascade)"
+            "referenceImage": "nodeGeometry.png"
         },
         {
             "title": "Node Geometry - Building generator",
@@ -973,30 +946,22 @@
         {
             "title": "Negative scaling with instances",
             "playgroundId": "#Z3YS9T#0",
-            "referenceImage": "negative-scaling-with-instances.png",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Test crashes on Win32 V8 D3D11 (access violation cascade)"
+            "referenceImage": "negative-scaling-with-instances.png"
         },
         {
             "title": "Iridescence",
             "playgroundId": "#2FDQT5#1505",
-            "referenceImage": "iridescence.png",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Test crashes on Win32 V8 D3D11 (access violation cascade)"
+            "referenceImage": "iridescence.png"
         },
         {
             "title": "Merge Meshes",
             "playgroundId": "#484RHA#0",
-            "referenceImage": "mergemeshes.png",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Test crashes on Win32 V8 D3D11 (access violation cascade)"
+            "referenceImage": "mergemeshes.png"
         },
         {
             "title": "Sprites",
             "playgroundId": "#ZX8DJ3#1",
-            "referenceImage": "Sprites.png",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Disabled to land sync PR; V8 cascade victim that crashes Win32 V8 D3D11 with ACCESS_VIOLATION (-1073741819). Will be re-enabled in follow-up fix PR."
+            "referenceImage": "Sprites.png"
         },
         {
             "title": "Procedural texture with NME",
@@ -1042,9 +1007,7 @@
         {
             "title": "Node material 3",
             "playgroundId": "#LWGVT0#2",
-            "referenceImage": "node-material3.png",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Newly added test crashes Win32 V8 D3D11 with ACCESS_VIOLATION (-1073741819)."
+            "referenceImage": "node-material3.png"
         },
         {
             "title": "Node material 4",
@@ -1056,9 +1019,7 @@
         {
             "title": "Node material 5",
             "playgroundId": "#V8VH7B#0",
-            "referenceImage": "node-material5.png",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Newly added test crashes Win32 V8 D3D11 with ACCESS_VIOLATION (-1073741819)."
+            "referenceImage": "node-material5.png"
         },
         {
             "title": "Node material 6",
@@ -1151,7 +1112,9 @@
             "includeInNativeWebGPU": true,
             "threshold": 35,
             "errorRatio": 0.25,
-            "excludedGraphicsApis": [ "OpenGL" ],
+            "excludedGraphicsApis": [
+                "OpenGL"
+            ],
             "referenceImage": "guiNearMenu.png"
         },
         {
@@ -1179,9 +1142,7 @@
         {
             "title": "Color Grading",
             "playgroundId": "#8EDB5N#2",
-            "referenceImage": "colorGrading.png",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Newly added test crashes Win32 V8 D3D11 with ACCESS_VIOLATION (-1073741819)."
+            "referenceImage": "colorGrading.png"
         },
         {
             "title": "Clip planes",
@@ -1202,8 +1163,6 @@
             "title": "Gizmos",
             "playgroundId": "#8GY6J8#196",
             "renderCount": 50,
-            "excludeFromAutomaticTesting": true,
-            "reason": "Test crashes on Win32 D3D11 (incl. Sanitizers and V8) during mesh load",
             "referenceImage": "Gizmos.png"
         },
         {
@@ -1255,9 +1214,11 @@
         {
             "title": "Area Lights - Standard Material",
             "playgroundId": "#T7FXR8#67",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Test crashes or hangs on Babylon Native",
-            "referenceImage": "areaLightsStandardMaterial.png"
+            "reason": "Renders black on Linux desktop OpenGL (area-light LTC path unsupported); passes on Win32 D3D11.",
+            "referenceImage": "areaLightsStandardMaterial.png",
+            "excludedGraphicsApis": [
+                "OpenGL"
+            ]
         },
         {
             "title": "Textured - Area Lights - Standard Material",
@@ -1276,16 +1237,16 @@
         {
             "title": "Area Lights - PBR",
             "playgroundId": "#T7FXR8#12",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Test crashes or hangs on Babylon Native",
-            "referenceImage": "areaLightsPBRMaterial.png"
+            "reason": "Renders black on Linux desktop OpenGL (area-light LTC path unsupported); passes on Win32 D3D11.",
+            "referenceImage": "areaLightsPBRMaterial.png",
+            "excludedGraphicsApis": [
+                "OpenGL"
+            ]
         },
         {
             "title": "Bones",
             "playgroundId": "#7EC27T#3",
-            "referenceImage": "bones.png",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Test crashes on Win32 D3D11 (incl. Sanitizers and V8)"
+            "referenceImage": "bones.png"
         },
         {
             "title": "Advanced shadows",
@@ -1380,69 +1341,51 @@
             "title": "GLTF Serializer with Negative World Matrix (left handed, once)",
             "playgroundId": "#KX53VK#88",
             "replace": "//options//, useRightHandedSystem = false; iterations = 1;",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Pixel comparison fails (more than 20% pixels differ)",
             "referenceImage": "glTFSerializerNegativeWorldMatrix.png"
         },
         {
             "title": "GLTF Serializer with Negative World Matrix (left handed, twice)",
             "playgroundId": "#KX53VK#88",
             "replace": "//options//, useRightHandedSystem = false; iterations = 2;",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Pixel comparison fails (more than 20% pixels differ)",
             "referenceImage": "glTFSerializerNegativeWorldMatrix.png"
         },
         {
             "title": "GLTF Serializer with Negative World Matrix (right handed, once)",
             "playgroundId": "#KX53VK#88",
             "replace": "//options//, useRightHandedSystem = true; iterations = 1;",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Pixel comparison fails (more than 20% pixels differ)",
             "referenceImage": "glTFSerializerNegativeWorldMatrix.png"
         },
         {
             "title": "GLTF Serializer with Negative World Matrix (right handed, twice)",
             "playgroundId": "#KX53VK#88",
             "replace": "//options//, useRightHandedSystem = true; iterations = 2;",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Pixel comparison fails (more than 20% pixels differ)",
             "referenceImage": "glTFSerializerNegativeWorldMatrix.png"
         },
         {
             "title": "GLTF Serializer Shared Buffer Conversions",
             "playgroundId": "#KX53VK#85",
             "replace": "//options//, meshCount = 2;",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Pixel comparison fails (more than 20% pixels differ)",
             "referenceImage": "glTFSerializerSharedBufferConversions.png"
         },
         {
             "title": "GLTF Serializer Skinning and Animation",
             "playgroundId": "#DMZBX1#1",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Pixel comparison fails (more than 20% pixels differ)",
             "referenceImage": "gltfSerializerSkinningAndAnimation.png"
         },
         {
             "title": "GLTF Serializer Skinning and Animation (Right Handed)",
             "playgroundId": "#DMZBX1#2",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Pixel comparison fails (more than 20% pixels differ)",
             "referenceImage": "gltfSerializerSkinningAndAnimation.png"
         },
         {
             "title": "GLTF Serializer Morph Target Animation",
             "playgroundId": "#84M2SR#107",
             "renderCount": 2,
-            "excludeFromAutomaticTesting": true,
-            "reason": "Pixel comparison fails (more than 20% pixels differ)",
             "referenceImage": "gltfSerializerMorphTargetAnimation.png"
         },
         {
             "title": "GLTF Serializer Morph Target Animation Group",
             "playgroundId": "#T087A8#29",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Pixel comparison fails (more than 20% pixels differ)",
             "referenceImage": "gltfSerializerMorphTargetAnimationGroup.png"
         },
         {
@@ -1462,63 +1405,67 @@
         {
             "title": "GLTF Serializer KHR gpu instancing",
             "playgroundId": "#1Q2BWN#10",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Pixel comparison fails (more than 20% pixels differ)",
-            "referenceImage": "glTFSerializerKhrGpuInstancing.png"
+            "reason": "Pixel diff 3.4% on OpenGL backend (Linux JSC); passes on D3D11.",
+            "referenceImage": "glTFSerializerKhrGpuInstancing.png",
+            "excludedGraphicsApis": [
+                "OpenGL"
+            ]
         },
         {
             "title": "GLTF Serializer KHR punctual light, left-handed",
             "playgroundId": "#FLXW8B#27",
             "replace": "//options//, roundtrip = true; useRightHandedSystem = false;",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Pixel comparison fails (more than 20% pixels differ)",
             "referenceImage": "glTFSerializerKHRPunctualLightLH.png"
         },
         {
             "title": "GLTF Serializer KHR punctual light, right-handed",
             "playgroundId": "#FLXW8B#27",
             "replace": "//options//, roundtrip = true; useRightHandedSystem = true;",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Pixel comparison fails (more than 20% pixels differ)",
             "referenceImage": "glTFSerializerKHRPunctualLightRH.png"
         },
         {
             "title": "GLTF Serializer Camera, left-handed",
             "playgroundId": "#O0M0J9#25",
             "replace": "//options//, roundtripCount = 1; useRightHandedSystem = false;",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Pixel comparison fails (more than 20% pixels differ)",
-            "referenceImage": "glTFSerializerCameraLeftHand.png"
+            "reason": "Camera roundtrip diverges on OpenGL backend (Linux JSC), 21% pixel diff; passes on D3D11.",
+            "referenceImage": "glTFSerializerCameraLeftHand.png",
+            "excludedGraphicsApis": [
+                "OpenGL"
+            ]
         },
         {
             "title": "GLTF Serializer Camera, right-handed",
             "playgroundId": "#O0M0J9#25",
             "replace": "//options//, roundtripCount = 1; useRightHandedSystem = true;",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Pixel comparison fails (more than 20% pixels differ)",
-            "referenceImage": "glTFSerializerCameraRightHand.png"
+            "reason": "Camera roundtrip diverges on OpenGL backend; passes on D3D11.",
+            "referenceImage": "glTFSerializerCameraRightHand.png",
+            "excludedGraphicsApis": [
+                "OpenGL"
+            ]
         },
         {
             "title": "GLTF Serializer Camera, left-handed, round trip twice",
             "playgroundId": "#O0M0J9#25",
             "replace": "//options//, roundtripCount = 2; useRightHandedSystem = false;",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Pixel comparison fails (more than 20% pixels differ)",
-            "referenceImage": "glTFSerializerCameraLeftHand.png"
+            "reason": "Camera roundtrip diverges on OpenGL backend; passes on D3D11.",
+            "referenceImage": "glTFSerializerCameraLeftHand.png",
+            "excludedGraphicsApis": [
+                "OpenGL"
+            ]
         },
         {
             "title": "GLTF Serializer Camera, right-handed, round trip twice",
             "playgroundId": "#O0M0J9#25",
             "replace": "//options//, roundtripCount = 2; useRightHandedSystem = true;",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Pixel comparison fails (more than 20% pixels differ)",
-            "referenceImage": "glTFSerializerCameraRightHand.png"
+            "reason": "Camera roundtrip diverges on OpenGL backend; passes on D3D11.",
+            "referenceImage": "glTFSerializerCameraRightHand.png",
+            "excludedGraphicsApis": [
+                "OpenGL"
+            ]
         },
         {
             "title": "GLTF Serializer Rotation conversion, left-handed",
             "playgroundId": "#UK7FLI#1",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Pixel comparison fails (more than 20% pixels differ)",
             "referenceImage": "glTFSerializerRotationConversionLH.png"
         },
         {
@@ -1602,24 +1549,18 @@
         {
             "title": "GLTF Node visibility test",
             "playgroundId": "#80DN99#6",
-            "referenceImage": "gltfNodeVisibility.png",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Test crashes on Win32 D3D11 Sanitizers"
+            "referenceImage": "gltfNodeVisibility.png"
         },
         {
             "title": "Asset Containers",
             "playgroundId": "#P3U079#19",
-            "referenceImage": "assetContainer.png",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Test crashes on Win32 D3D11 (incl. Sanitizers)"
+            "referenceImage": "assetContainer.png"
         },
         {
             "title": "Enable disable post process",
             "playgroundId": "#1VI6WV#19",
             "renderCount": 50,
-            "referenceImage": "enableDisablePostProcess.png",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Disabled to land sync PR; newly-added test in cascade path of Win32 V8 D3D11 ACCESS_VIOLATION (-1073741819). Will be re-enabled in follow-up fix PR."
+            "referenceImage": "enableDisablePostProcess.png"
         },
         {
             "title": "Depth of field",
@@ -1661,9 +1602,7 @@
             "playgroundId": "#G3ZYFU#7",
             "renderCount": 100,
             "renderReadinessPump": false,
-            "referenceImage": "particles.png",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Pixel diff after #1691 instance-data stride fix; not stride-related, needs follow-up."
+            "referenceImage": "particles.png"
         },
         {
             "title": "PBRMetallicRoughnessMaterial",
@@ -1755,9 +1694,7 @@
             "title": "TGA",
             "playgroundId": "#ZI77S7#4",
             "renderCount": 5,
-            "referenceImage": "tga.png",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Disabled to land sync PR; newly-added test in cascade path of Win32 V8 D3D11 ACCESS_VIOLATION (-1073741819). Will be re-enabled in follow-up fix PR."
+            "referenceImage": "tga.png"
         },
         {
             "title": "DDS",
@@ -1769,23 +1706,17 @@
         {
             "title": "DDS2D",
             "playgroundId": "#I2MSBE#0",
-            "referenceImage": "dds2d.png",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Disabled to land sync PR; newly-added test in cascade path of Win32 V8 D3D11 ACCESS_VIOLATION (-1073741819). Will be re-enabled in follow-up fix PR."
+            "referenceImage": "dds2d.png"
         },
         {
             "title": "LightFalloff spots",
             "playgroundId": "#20OAV9#6653",
-            "referenceImage": "lightFalloffSpots.png",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Disabled to land sync PR; newly-added test in cascade path of Win32 V8 D3D11 ACCESS_VIOLATION (-1073741819). Will be re-enabled in follow-up fix PR."
+            "referenceImage": "lightFalloffSpots.png"
         },
         {
             "title": "LightFalloff point lights",
             "playgroundId": "#20OAV9#6654",
-            "referenceImage": "lightFalloffPointLights.png",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Disabled to land sync PR; newly-added test in cascade path of Win32 V8 D3D11 ACCESS_VIOLATION (-1073741819). Will be re-enabled in follow-up fix PR."
+            "referenceImage": "lightFalloffPointLights.png"
         },
         {
             "title": "MeshSimplification",
@@ -1798,9 +1729,7 @@
             "title": "DepthRenderer",
             "playgroundId": "#3HPMAA#0",
             "renderCount": 50,
-            "referenceImage": "depthRenderer.png",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Disabled to land sync PR; newly-added test in cascade path of Win32 V8 D3D11 ACCESS_VIOLATION (-1073741819). Will be re-enabled in follow-up fix PR."
+            "referenceImage": "depthRenderer.png"
         },
         {
             "title": "Realtime Filtering",
@@ -1845,46 +1774,34 @@
         {
             "title": "OBJ loader test (legacy)",
             "playgroundId": "#SYQW69#1213",
-            "referenceImage": "objTestLoaderLegacy.png",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Disabled to land sync PR; newly-added test in cascade path of Win32 V8 D3D11 ACCESS_VIOLATION (-1073741819). Will be re-enabled in follow-up fix PR."
+            "referenceImage": "objTestLoaderLegacy.png"
         },
         {
             "title": "OBJ loader test",
             "playgroundId": "#SYQW69#1209",
-            "referenceImage": "objTestLoader.png",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Disabled to land sync PR; newly-added test in cascade path of Win32 V8 D3D11 ACCESS_VIOLATION (-1073741819). Will be re-enabled in follow-up fix PR."
+            "referenceImage": "objTestLoader.png"
         },
         {
             "title": "OBJ Stanford Bunny normals (LH)",
             "playgroundId": "#26R8NS#6",
-            "referenceImage": "objStanfordBunnyNormalsLH.png",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Disabled to land sync PR; newly-added test in cascade path of Win32 V8 D3D11 ACCESS_VIOLATION (-1073741819). Will be re-enabled in follow-up fix PR."
+            "referenceImage": "objStanfordBunnyNormalsLH.png"
         },
         {
             "title": "OBJ Stanford Bunny normals (RH)",
             "playgroundId": "#26R8NS#6",
             "replace": "//options//, useRightHandedSystem = true;",
-            "referenceImage": "objStanfordBunnyNormalsRH.png",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Disabled to land sync PR; newly-added test in cascade path of Win32 V8 D3D11 ACCESS_VIOLATION (-1073741819). Will be re-enabled in follow-up fix PR."
+            "referenceImage": "objStanfordBunnyNormalsRH.png"
         },
         {
             "title": "OBJ Stanford Bunny normals (round trip, LH)",
             "playgroundId": "#26R8NS#6",
             "replace": "//options//, roundTrip = true;",
-            "excludeFromAutomaticTesting": true,
-            "reason": "File API not available in Babylon Native JS runtime (ReferenceError)",
             "referenceImage": "objStanfordBunnyNormalsRoundTripLH.png"
         },
         {
             "title": "OBJ Stanford Bunny normals (round trip, RH)",
             "playgroundId": "#26R8NS#6",
             "replace": "//options//, roundTrip = true; useRightHandedSystem = true;",
-            "excludeFromAutomaticTesting": true,
-            "reason": "File API not available in Babylon Native JS runtime (ReferenceError)",
             "referenceImage": "objStanfordBunnyNormalsRoundTripRH.png"
         },
         {
@@ -1905,9 +1822,7 @@
         {
             "title": "GLB load from ArrayBuffer",
             "playgroundId": "#31UBR0#4",
-            "referenceImage": "glbArrayBufferViewLoad.png",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Disabled to land sync PR; newly-added test in cascade path of Win32 V8 D3D11 ACCESS_VIOLATION (-1073741819). Will be re-enabled in follow-up fix PR."
+            "referenceImage": "glbArrayBufferViewLoad.png"
         },
         {
             "title": "Motion Blur",
@@ -1920,9 +1835,7 @@
         {
             "title": "Shadows and LODs",
             "playgroundId": "#F7KZ7C#9",
-            "referenceImage": "shadowsandlod.png",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Disabled to land sync PR; newly-added test in cascade path of Win32 V8 D3D11 ACCESS_VIOLATION (-1073741819). Will be re-enabled in follow-up fix PR."
+            "referenceImage": "shadowsandlod.png"
         },
         {
             "title": "Shadows CSM and LODs",
@@ -1956,8 +1869,6 @@
         {
             "title": "Instances with color buffer",
             "playgroundId": "#YPABS1#91",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Pixel comparison fails (more than 20% pixels differ)",
             "referenceImage": "instancecolors.png"
         },
         {
@@ -2008,7 +1919,9 @@
         {
             "title": "Prepass SSAO + sprites",
             "playgroundId": "#9RI8CG#187",
-            "excludedGraphicsApis": ["OpenGL"],
+            "excludedGraphicsApis": [
+                "OpenGL"
+            ],
             "reason": "OpenGL: BGFX FATAL shader compile error (mediump float vs int conversion in PrePassRenderer fragment shader). Fixable separately; tracked for OpenGL backend follow-up.",
             "renderCount": 10,
             "referenceImage": "prepass-ssao-sprites.png"
@@ -2032,7 +1945,9 @@
         {
             "title": "Prepass SSAO + line edges renderer",
             "playgroundId": "#T90MQ4#3",
-            "excludedGraphicsApis": ["OpenGL"],
+            "excludedGraphicsApis": [
+                "OpenGL"
+            ],
             "reason": "OpenGL: BGFX FATAL shader compile error (mediump float vs int conversion in PrePassRenderer fragment shader). Fixable separately; tracked for OpenGL backend follow-up.",
             "renderCount": 10,
             "referenceImage": "prepass-ssao-line-edges.png"
@@ -2157,8 +2072,10 @@
             "playgroundId": "#W7E7CF#38",
             "replace": "//options//, hardwareScalingLevel = 0.9;",
             "referenceImage": "scissor-test-2.png",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Suspected to cause later Win32 D3D11 cascade crash; also pixel diff fail on Linux (56223 px diff)"
+            "reason": "State-leak cascade fixed in validation_native.js (stencil/scissor reset between tests); pixel diff fail on Linux OpenGL (56223 px) under 0.9 hardware scaling; passes on Win32 D3D11.",
+            "excludedGraphicsApis": [
+                "OpenGL"
+            ]
         },
         {
             "title": "Scissor test with 1.5 hardware scaling",
@@ -2292,9 +2209,9 @@
             "title": "Custom material with depth renderer",
             "playgroundId": "#6GFJNR#152",
             "renderCount": 5,
-            "referenceImage": "customMatDepthRenderer.png",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Disabled to land sync PR; newly-added test in cascade path of Win32 V8 D3D11 ACCESS_VIOLATION (-1073741819). Will be re-enabled in follow-up fix PR."
+            "excludeFromNativeWebGPU": true,
+            "reason": "NativeWebGPU does not ship a GLSL fallback; this sample uses GLSL ShaderMaterial code for both regular and depth-renderer passes.",
+            "referenceImage": "customMatDepthRenderer.png"
         },
         {
             "title": "Baked Vertex Animation",
@@ -2349,9 +2266,7 @@
         {
             "title": "Serialize and Load Instanced Hierarchy",
             "playgroundId": "#3ZQ1SL#7",
-            "referenceImage": "serializeAndLoadInstancedHierarchy.png",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Disabled to land sync PR; newly-added test in cascade path of Win32 V8 D3D11 ACCESS_VIOLATION (-1073741819). Will be re-enabled in follow-up fix PR."
+            "referenceImage": "serializeAndLoadInstancedHierarchy.png"
         },
         {
             "title": "Picking Visual Test",
@@ -2372,29 +2287,21 @@
         {
             "title": "Serialize and Load Hierarchy",
             "playgroundId": "#3ZQ1SL#8",
-            "referenceImage": "serializeAndLoadHierarchy.png",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Disabled to land sync PR; newly-added test in cascade path of Win32 V8 D3D11 ACCESS_VIOLATION (-1073741819). Will be re-enabled in follow-up fix PR."
+            "referenceImage": "serializeAndLoadHierarchy.png"
         },
         {
             "title": "Serialize scene without materials",
             "playgroundId": "#PH4DEZ#1",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Pixel comparison fails (more than 20% pixels differ)",
             "referenceImage": "serializeWithoutMaterials.png"
         },
         {
             "title": "UI unaffected by post-process",
             "playgroundId": "#XJVHWQ",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Test crashes or hangs on Babylon Native",
             "referenceImage": "uiUnaffected.png"
         },
         {
             "title": "Billboard with scaled parent",
             "playgroundId": "#1ZMALK",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Test crashes or hangs on Babylon Native",
             "referenceImage": "billboardParentScale.png"
         },
         {
@@ -2455,8 +2362,6 @@
         {
             "title": "Export GLTF Extension KHR_texture_transform",
             "playgroundId": "#20OAV9#15148",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Test crashes or hangs on Babylon Native",
             "referenceImage": "exportGltfKHRTextureTransform.png"
         },
         {
@@ -2485,7 +2390,7 @@
             "playgroundId": "#XCPP9Y#17227",
             "excludeFromAutomaticTesting": true,
             "reason": "Pixel comparison fails (more than 20% pixels differ)",
-            "errorRatio": 1.0,
+            "errorRatio": 1,
             "referenceImage": "GUI-Gradient-Linear.png"
         },
         {
@@ -2493,7 +2398,7 @@
             "playgroundId": "#4Z7EK3",
             "excludeFromAutomaticTesting": true,
             "reason": "Test crashes or hangs on Babylon Native",
-            "errorRatio": 1.0,
+            "errorRatio": 1,
             "referenceImage": "GUI-Gradient-Radial.png"
         },
         {
@@ -2501,7 +2406,7 @@
             "playgroundId": "#PFK1Z5",
             "excludeFromAutomaticTesting": true,
             "reason": "Test crashes or hangs on Babylon Native",
-            "errorRatio": 1.0,
+            "errorRatio": 1,
             "referenceImage": "GUI-Gradient-Linear-with-transparency.png"
         },
         {
@@ -2514,16 +2419,12 @@
         {
             "title": "Roundtrip babylon file with node, skeletal, and morph animations; uniqueId",
             "playgroundId": "#KSGDML#10",
-            "referenceImage": "babylonFileAnimationsUsingUniqueId.png",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Newly added test crashes Win32 D3D11 (exit code 2170) and fails on Linux Clang/GCC JSC."
+            "referenceImage": "babylonFileAnimationsUsingUniqueId.png"
         },
         {
             "title": "Roundtrip babylon file with node, skeletal, and morph animations; id only",
             "playgroundId": "#KSGDML#7",
-            "referenceImage": "babylonFileAnimationsUsingId.png",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Newly added test crashes Win32 D3D11 with STATUS_BREAKPOINT (-2147483645) and Sanitizers; passes locally but fails on CI runner."
+            "referenceImage": "babylonFileAnimationsUsingId.png"
         },
         {
             "title": "Asset Container Instantiate to Scene",
@@ -2538,8 +2439,6 @@
         {
             "title": "Instantiate Hierarchy",
             "playgroundId": "#BET11L",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Test crashes or hangs on Babylon Native",
             "referenceImage": "Instantiate-Hierarchy.png"
         },
         {
@@ -2621,31 +2520,23 @@
         {
             "title": "convertToFlatShadedMesh",
             "playgroundId": "#UFDL9T#4",
-            "referenceImage": "convertToFlatShadedMesh.png",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Newly added test crashes Win32 D3D11 with STATUS_BREAKPOINT (-2147483645) and Sanitizers; passes locally but fails on CI runner."
+            "referenceImage": "convertToFlatShadedMesh.png"
         },
         {
             "title": "SerializeMesh with hierarchy",
             "playgroundId": "#TX92RN#5",
-            "referenceImage": "SerializeMesh-with-hierarchy.png",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Disabled to land sync PR; newly-added test in cascade path of Win32 V8 D3D11 ACCESS_VIOLATION (-1073741819). Will be re-enabled in follow-up fix PR."
+            "referenceImage": "SerializeMesh-with-hierarchy.png"
         },
         {
             "title": "MeshDebugPluginMaterial",
             "playgroundId": "#TFDNZI#2",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Test crashes or hangs on Babylon Native",
             "includeInNativeWebGPU": true,
             "referenceImage": "MeshDebugPluginMaterial.png"
         },
         {
             "title": "SerializeScene and ImportMesh with string skeletonIds",
             "playgroundId": "#D4ZZ8#430",
-            "referenceImage": "SerializeScene-and-ImportMesh-with-string-skeletonIds.png",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Newly added test crashes Win32 D3D11 with STATUS_BREAKPOINT (-2147483645) and Sanitizers; passes locally but fails on CI runner."
+            "referenceImage": "SerializeScene-and-ImportMesh-with-string-skeletonIds.png"
         },
         {
             "title": "SerializeScene and ImportMesh with MorphTargetManager",
@@ -2685,9 +2576,7 @@
         {
             "title": "Add mesh without vertex normals to SPS",
             "playgroundId": "#H1SEDF#1",
-            "referenceImage": "AddmeshwithoutvertexnormalstoSPS.png",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Newly added test crashes Win32 D3D11 with STATUS_BREAKPOINT (-2147483645)."
+            "referenceImage": "AddmeshwithoutvertexnormalstoSPS.png"
         },
         {
             "title": "Command encoder order in WebGPU 1",
@@ -2707,16 +2596,12 @@
             "title": "edge-renderer-and-zOffset",
             "playgroundId": "#3DBA8X#1",
             "renderCount": 5,
-            "referenceImage": "edge-renderer-and-zOffset.png",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Disabled to land sync PR; newly-added test in cascade path of Win32 V8 D3D11 ACCESS_VIOLATION (-1073741819). Will be re-enabled in follow-up fix PR."
+            "referenceImage": "edge-renderer-and-zOffset.png"
         },
         {
             "title": "cube-with-holes-using-stencil-buffer",
             "playgroundId": "#CW5PRI#11",
-            "referenceImage": "cube-with-holes-using-stencil-buffer.png",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Disabled to land sync PR; newly-added test in cascade path of Win32 V8 D3D11 ACCESS_VIOLATION (-1073741819). Will be re-enabled in follow-up fix PR."
+            "referenceImage": "cube-with-holes-using-stencil-buffer.png"
         },
         {
             "title": "water-material",
@@ -2744,7 +2629,9 @@
         {
             "title": "sphere-with-custom-shader-to-display-wireframe-using-glow-layer",
             "playgroundId": "#Y05E2C#6",
-            "excludedGraphicsApis": ["OpenGL"],
+            "excludedGraphicsApis": [
+                "OpenGL"
+            ],
             "reason": "OpenGL: pixel diff out of tolerance (90900 px) -- likely glow-layer + custom-shader interaction differs from D3D11. Tracked for OpenGL backend follow-up.",
             "renderCount": 5,
             "referenceImage": "sphere-with-custom-shader-to-display-wireframe-using-glow-layer.png"
@@ -2760,15 +2647,11 @@
         {
             "title": "simple-render-target-with-blue-spheres",
             "playgroundId": "#NRR7F4#0",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Pixel comparison fails on Win32 D3D11 / Sanitizers (44605 px diff)",
             "referenceImage": "simple-render-target-with-blue-spheres.png"
         },
         {
             "title": "pillars-sphere-and-torus-with-PCSS-shadows",
             "playgroundId": "#WL4Q8J#0",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Pixel difference (~185,225 pixels) on Win32 D3D11 after newly synced from Babylon.js.",
             "referenceImage": "pillars-sphere-and-torus-with-PCSS-shadows.png"
         },
         {
@@ -2781,23 +2664,17 @@
         {
             "title": "torus-knot-mirror",
             "playgroundId": "#M5GFLR#0",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Pixel difference (~182,593 pixels) on Win32 D3D11 after newly synced from Babylon.js.",
             "referenceImage": "torus-knot-mirror.png"
         },
         {
             "title": "simple-sphere-in-4-mirrors",
             "playgroundId": "#58CFTW#4",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Pixel difference (~183,312 pixels) on Linux OpenGL and Win32 D3D11 after newly synced from Babylon.js.",
             "referenceImage": "simple-sphere-in-4-mirrors.png"
         },
         {
             "title": "procedural-texture-with-node-material",
             "playgroundId": "#IA4X0H#1",
             "renderCount": 10,
-            "excludeFromAutomaticTesting": true,
-            "reason": "Pixel difference (~102,584 pixels) on Linux OpenGL and Win32 D3D11 after newly synced from Babylon.js.",
             "referenceImage": "procedural-texture-with-node-material.png"
         },
         {
@@ -2812,9 +2689,9 @@
             "title": "simple-custom-shader",
             "playgroundId": "#6GFJNR#2",
             "renderCount": 5,
-            "referenceImage": "simple-custom-shader.png",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Pixel comparison fails on Linux and Win32 D3D11 after newly synced from Babylon.js."
+            "excludeFromNativeWebGPU": true,
+            "reason": "NativeWebGPU does not ship a GLSL fallback; this sample uses GLSL ShaderMaterial code without a WGSL path.",
+            "referenceImage": "simple-custom-shader.png"
         },
         {
             "title": "show-multiple-guis",
@@ -2861,8 +2738,6 @@
             "playgroundId": "#2441BU#1",
             "renderCount": 20,
             "renderReadinessPump": false,
-            "excludeFromAutomaticTesting": true,
-            "reason": "Pixel diff after #1691 instance-data stride fix; not stride-related, needs follow-up.",
             "referenceImage": "halo-particle-system.png"
         },
         {
@@ -2878,8 +2753,6 @@
             "playgroundId": "#DMLLV2",
             "renderCount": 5,
             "renderReadinessPump": false,
-            "excludeFromAutomaticTesting": true,
-            "reason": "Pixel diff after #1691 instance-data stride fix; not stride-related, needs follow-up.",
             "referenceImage": "particle-system-with-custom-nme-shader.png"
         },
         {
@@ -2893,9 +2766,7 @@
             "title": "change-texture-of-material",
             "playgroundId": "#7PN9PH#2",
             "renderCount": 10,
-            "referenceImage": "change-texture-of-material.png",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Newly added test fails: 35k pixel difference on Linux Clang/GCC JSC and Win32 D3D11."
+            "referenceImage": "change-texture-of-material.png"
         },
         {
             "title": "screen-space-curvature",
@@ -2916,15 +2787,11 @@
         {
             "title": "Shadows in RHS mode",
             "playgroundId": "#RO51RT#14",
-            "referenceImage": "shadows-rhs.png",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Test fails locally on Win32 D3D11 sweep; disabled until BabylonNative fixes are made."
+            "referenceImage": "shadows-rhs.png"
         },
         {
             "title": "Load environment from data buffer",
             "playgroundId": "#YLI4J1",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Test crashes or hangs on Babylon Native",
             "referenceImage": "environment-from-data-buffer.png"
         },
         {
@@ -2966,9 +2833,7 @@
         {
             "title": "glTF Loader Capabilities",
             "playgroundId": "#EBO3J1#10",
-            "referenceImage": "glTFLoaderCapabilities.png",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Test fails locally on Win32 D3D11 sweep; disabled until BabylonNative fixes are made."
+            "referenceImage": "glTFLoaderCapabilities.png"
         },
         {
             "title": "glTF Loader Cameras RH",
@@ -3364,9 +3229,9 @@
         {
             "title": "Synchronous Effect",
             "playgroundId": "#D9XXL3#1",
-            "referenceImage": "Synchronous-Effect.png",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Test fails locally on Win32 D3D11 sweep; disabled until BabylonNative fixes are made."
+            "excludeFromNativeWebGPU": true,
+            "reason": "NativeWebGPU cannot synchronously compile GLSL createEffect shaders; this test targets the legacy NativeEngine/bgfx GLSL path.",
+            "referenceImage": "Synchronous-Effect.png"
         },
         {
             "title": "Show Loading Screen",
@@ -3386,9 +3251,7 @@
             "title": "Flow Graph multiple contexts",
             "playgroundId": "#FQWPBI#11",
             "renderCount": 30,
-            "referenceImage": "Flow-Graph-multiple-contexts.png",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Test fails locally on Win32 D3D11 sweep; disabled until BabylonNative fixes are made."
+            "referenceImage": "Flow-Graph-multiple-contexts.png"
         },
         {
             "title": "KHR diffuse transmission",
@@ -3457,9 +3320,7 @@
         {
             "title": "Specular reflectance models for analytic lights",
             "playgroundId": "#GRQHVV#23",
-            "referenceImage": "Specular-reflectance-models-for-analytic-lights.png",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Test fails locally on Win32 D3D11 sweep; disabled until BabylonNative fixes are made."
+            "referenceImage": "Specular-reflectance-models-for-analytic-lights.png"
         },
         {
             "title": "F82 Specular Roughness vs Weight",
@@ -3492,9 +3353,9 @@
         {
             "title": "Test code inlining",
             "playgroundId": "#YG3BBF#51",
-            "referenceImage": "Test-code-inlining.png",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Test fails locally on Win32 D3D11 sweep; disabled until BabylonNative fixes are made."
+            "excludeFromNativeWebGPU": true,
+            "reason": "NativeWebGPU does not ship a GLSL fallback; this sample explicitly forces GLSL material generation.",
+            "referenceImage": "Test-code-inlining.png"
         },
         {
             "title": "Sponza Clustered Lighting (node material std)",
@@ -3688,30 +3549,22 @@
         {
             "title": "OpenPBR Analytic Lights Specular Roughness vs Coat Roughness",
             "playgroundId": "#GRQHVV#42",
-            "referenceImage": "OpenPBR-Analytic-Lights-Specular-Roughness-vs-Coat-Roughness.png",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Test fails locally on Win32 D3D11 sweep; disabled until BabylonNative fixes are made."
+            "referenceImage": "OpenPBR-Analytic-Lights-Specular-Roughness-vs-Coat-Roughness.png"
         },
         {
             "title": "OpenPBR Analytic Lights Specular Weight vs Metalness",
             "playgroundId": "#GRQHVV#34",
-            "referenceImage": "OpenPBR-Analytic-Lights-Specular-Weight-vs-Metalness.png",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Test fails locally on Win32 D3D11 sweep; disabled until BabylonNative fixes are made."
+            "referenceImage": "OpenPBR-Analytic-Lights-Specular-Weight-vs-Metalness.png"
         },
         {
             "title": "OpenPBR Analytic Lights Specular IOR vs Coat Weight",
             "playgroundId": "#GRQHVV#35",
-            "referenceImage": "OpenPBR-Analytic-Lights-Specular-IOR-vs-Coat-Weight.png",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Test fails locally on Win32 D3D11 sweep; disabled until BabylonNative fixes are made."
+            "referenceImage": "OpenPBR-Analytic-Lights-Specular-IOR-vs-Coat-Weight.png"
         },
         {
             "title": "OpenPBR Analytic Lights Specular IOR vs Coat IOR",
             "playgroundId": "#GRQHVV#36",
-            "referenceImage": "OpenPBR-Analytic-Lights-Specular-IOR-vs-Coat-IOR.png",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Test fails locally on Win32 D3D11 sweep; disabled until BabylonNative fixes are made."
+            "referenceImage": "OpenPBR-Analytic-Lights-Specular-IOR-vs-Coat-IOR.png"
         },
         {
             "title": "OpenPBR IBL Normal and Coat Normal Mapping",
@@ -3737,16 +3590,12 @@
         {
             "title": "OpenPBR Analytic Lights Coat Darkening",
             "playgroundId": "#GRQHVV#47",
-            "referenceImage": "OpenPBR-Analytic-Lights-Coat-Darkening.png",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Test fails locally on Win32 D3D11 sweep; disabled until BabylonNative fixes are made."
+            "referenceImage": "OpenPBR-Analytic-Lights-Coat-Darkening.png"
         },
         {
             "title": "OpenPBR Analytic Lights Coat Darkening vs Coat IOR",
             "playgroundId": "#GRQHVV#49",
-            "referenceImage": "OpenPBR-Analytic-Lights-Coat-Darkening-vs-Coat-IOR.png",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Test fails locally on Win32 D3D11 sweep; disabled until BabylonNative fixes are made."
+            "referenceImage": "OpenPBR-Analytic-Lights-Coat-Darkening-vs-Coat-IOR.png"
         },
         {
             "title": "OpenPBR IBL Coat Color vs Coat Darkening",
@@ -3784,9 +3633,7 @@
         {
             "title": "OpenPBR Analytic Lights Anisotropy Texture",
             "playgroundId": "#GRQHVV#60",
-            "referenceImage": "OpenPBR-Analytic-Lights-Anisotropy-Texture.png",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Test fails locally on Win32 D3D11 sweep; disabled until BabylonNative fixes are made."
+            "referenceImage": "OpenPBR-Analytic-Lights-Anisotropy-Texture.png"
         },
         {
             "title": "OpenPBR IBL Anisotropy Metal",
@@ -3833,9 +3680,7 @@
         {
             "title": "OpenPBR Coat Anisotropy - Analytic Lights",
             "playgroundId": "#GRQHVV#78",
-            "referenceImage": "OpenPBR-Coat-Anisotropy---Analytic-Lights.png",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Test fails locally on Win32 D3D11 sweep; disabled until BabylonNative fixes are made."
+            "referenceImage": "OpenPBR-Coat-Anisotropy---Analytic-Lights.png"
         },
         {
             "title": "Specular Reflectance with IOR V2 Manifest",
@@ -3847,9 +3692,7 @@
         {
             "title": "OpenPBR Coat Roughness vs Coat Ior - Analytic Lights",
             "playgroundId": "#GRQHVV#80",
-            "referenceImage": "OpenPBR-Coat-Roughness-vs-Coat-Ior---Analytic-Lights.png",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Test fails locally on Win32 D3D11 sweep; disabled until BabylonNative fixes are made."
+            "referenceImage": "OpenPBR-Coat-Roughness-vs-Coat-Ior---Analytic-Lights.png"
         },
         {
             "title": "OpenPBR Coat Roughness vs Coat Ior - IBL",
@@ -3868,16 +3711,20 @@
         {
             "title": "OpenPBR Thin Film Weight VS IOR - Analytic Lights",
             "playgroundId": "#GRQHVV#87",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Test crashes or hangs on Babylon Native",
-            "referenceImage": "OpenPBR-Thin-Film-Weight-VS-IOR---Analytic-Lights.png"
+            "reason": "Thin-film renders as background on Linux desktop OpenGL (28798 px diff); passes on Win32 D3D11.",
+            "referenceImage": "OpenPBR-Thin-Film-Weight-VS-IOR---Analytic-Lights.png",
+            "excludedGraphicsApis": [
+                "OpenGL"
+            ]
         },
         {
             "title": "OpenPBR Thin Film Thickness VS IOR - Analytic Lights",
             "playgroundId": "#GRQHVV#88",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Test crashes or hangs on Babylon Native",
-            "referenceImage": "OpenPBR-Thin-Film-Thickness-VS-IOR---Analytic-Lights.png"
+            "reason": "Thin-film renders as background on Linux desktop OpenGL; passes on Win32 D3D11.",
+            "referenceImage": "OpenPBR-Thin-Film-Thickness-VS-IOR---Analytic-Lights.png",
+            "excludedGraphicsApis": [
+                "OpenGL"
+            ]
         },
         {
             "title": "OpenPBR Thin Film Thickness VS IOR - IBL",
@@ -3910,16 +3757,20 @@
         {
             "title": "OpenPBR Thin Film and Specular Weight - Analytic Lights",
             "playgroundId": "#GRQHVV#95",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Test crashes or hangs on Babylon Native",
-            "referenceImage": "OpenPBR-Thin-Film-and-Specular-Weight---Analytic-Lights.png"
+            "reason": "Thin-film renders as background on Linux desktop OpenGL; passes on Win32 D3D11.",
+            "referenceImage": "OpenPBR-Thin-Film-and-Specular-Weight---Analytic-Lights.png",
+            "excludedGraphicsApis": [
+                "OpenGL"
+            ]
         },
         {
             "title": "OpenPBR Thin Film and Specular Weight Metals - Analytic Lights",
             "playgroundId": "#GRQHVV#96",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Test crashes or hangs on Babylon Native",
-            "referenceImage": "OpenPBR-Thin-Film-and-Specular-Weight-Metals---Analytic-Lights.png"
+            "reason": "Thin-film renders as background on Linux desktop OpenGL; passes on Win32 D3D11.",
+            "referenceImage": "OpenPBR-Thin-Film-and-Specular-Weight-Metals---Analytic-Lights.png",
+            "excludedGraphicsApis": [
+                "OpenGL"
+            ]
         },
         {
             "title": "OpenPBR Thin Film and Specular Weight Metals - IBL",
@@ -4012,9 +3863,7 @@
         {
             "title": "OpenPBR Transmission Roughness vs IOR - Analytic Lights",
             "playgroundId": "#GRQHVV#134",
-            "referenceImage": "OpenPBR-Transmission-Roughness-vs-IOR---Analytic-Lights.png",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Test fails locally on Win32 D3D11 sweep; disabled until BabylonNative fixes are made."
+            "referenceImage": "OpenPBR-Transmission-Roughness-vs-IOR---Analytic-Lights.png"
         },
         {
             "title": "OpenPBR Transmission Anisotropy Roughness vs IOR - IBL",
@@ -4033,16 +3882,12 @@
         {
             "title": "OpenPBR Transmission Anisotropy Roughness vs IOR - Analytic Lights",
             "playgroundId": "#GRQHVV#135",
-            "referenceImage": "OpenPBR-Transmission-Anisotropy-Roughness-vs-IOR---Analytic-Lights.png",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Test fails locally on Win32 D3D11 sweep; disabled until BabylonNative fixes are made."
+            "referenceImage": "OpenPBR-Transmission-Anisotropy-Roughness-vs-IOR---Analytic-Lights.png"
         },
         {
             "title": "OpenPBR Transmission Anisotropy vs Roughness - Analytic Lights",
             "playgroundId": "#GRQHVV#136",
-            "referenceImage": "OpenPBR-Transmission-Anisotropy-vs-Roughness---Analytic-Lights.png",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Test fails locally on Win32 D3D11 sweep; disabled until BabylonNative fixes are made."
+            "referenceImage": "OpenPBR-Transmission-Anisotropy-vs-Roughness---Analytic-Lights.png"
         },
         {
             "title": "OpenPBR Transmission Anisotropy vs Roughness - IBL",
@@ -4095,9 +3940,7 @@
         {
             "title": "OpenPBR Transmission Scatter Anisotropy Refract - Analytic Lights",
             "playgroundId": "#GRQHVV#266",
-            "referenceImage": "OpenPBR-Transmission-Scatter-Anisotropy-Refract---Analytic-Lights.png",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Test fails locally on Win32 D3D11 sweep; disabled until BabylonNative fixes are made."
+            "referenceImage": "OpenPBR-Transmission-Scatter-Anisotropy-Refract---Analytic-Lights.png"
         },
         {
             "title": "OpenPBR Transmission Scatter Anisotropy Reflect - Analytic Lights",
@@ -4109,9 +3952,7 @@
         {
             "title": "OpenPBR Transmission Scatter Roughness - Analytic Lights",
             "playgroundId": "#GRQHVV#269",
-            "referenceImage": "OpenPBR-Transmission-Scatter-Roughness---Analytic-Lights.png",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Test fails locally on Win32 D3D11 sweep; disabled until BabylonNative fixes are made."
+            "referenceImage": "OpenPBR-Transmission-Scatter-Roughness---Analytic-Lights.png"
         },
         {
             "title": "OpenPBR Subsurface Radius vs Roughness - IBL",
@@ -4288,17 +4129,27 @@
             "playgroundId": "#ESP440#0",
             "renderCount": 1,
             "referenceImage": "texture-repetition-standard-material.png",
-            "excludedEngines": ["webgl1"],
-            "dependsOn": ["Materials", "Textures"]
+            "excludedEngines": [
+                "webgl1"
+            ],
+            "dependsOn": [
+                "Materials",
+                "Textures"
+            ]
         },
         {
             "title": "Texture Repetition - PBR Material",
             "playgroundId": "#6EPUUH#0",
             "renderCount": 1,
-            "errorRatio": 1.0,
+            "errorRatio": 1,
             "referenceImage": "texture-repetition-pbr-material.png",
-            "excludedEngines": ["webgl1"],
-            "dependsOn": ["PBR", "Textures"]
+            "excludedEngines": [
+                "webgl1"
+            ],
+            "dependsOn": [
+                "PBR",
+                "Textures"
+            ]
         },
         {
             "title": "Havok FloatingOrigin Multi-Region",
@@ -4334,9 +4185,7 @@
             "playgroundId": "#0K3AQ2#3786",
             "renderCount": 120,
             "renderReadinessPump": false,
-            "referenceImage": "particles-basic-color.png",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Pixel diff after #1691 instance-data stride fix; not stride-related, needs follow-up."
+            "referenceImage": "particles-basic-color.png"
         },
         {
             "title": "Particles - Basic Properties - Speed",
@@ -4367,9 +4216,7 @@
             "playgroundId": "#0K3AQ2#3814",
             "renderCount": 120,
             "renderReadinessPump": false,
-            "referenceImage": "particles-basic-direction.png",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Pixel diff after #1691 instance-data stride fix; not stride-related, needs follow-up."
+            "referenceImage": "particles-basic-direction.png"
         },
         {
             "title": "Particles - Basic Properties - Direction - Gravity",
@@ -4388,9 +4235,7 @@
             "playgroundId": "#0K3AQ2#3823",
             "renderCount": 120,
             "renderReadinessPump": false,
-            "referenceImage": "particles-basic-emit-rate-fast.png",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Pixel diff after #1691 instance-data stride fix; not stride-related, needs follow-up."
+            "referenceImage": "particles-basic-emit-rate-fast.png"
         },
         {
             "title": "Particles - Basic Properties - Emission Limits",
@@ -4415,9 +4260,7 @@
             "playgroundId": "#0K3AQ2#3841",
             "renderCount": 120,
             "renderReadinessPump": false,
-            "referenceImage": "particles-basic-change-size.png",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Pixel diff after #1691 instance-data stride fix; not stride-related, needs follow-up."
+            "referenceImage": "particles-basic-change-size.png"
         },
         {
             "title": "Particles - Change - Size 2",
@@ -4430,18 +4273,14 @@
             "playgroundId": "#0K3AQ2#3847",
             "renderCount": 120,
             "renderReadinessPump": false,
-            "referenceImage": "particles-basic-change-color.png",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Pixel diff after #1691 instance-data stride fix; not stride-related, needs follow-up."
+            "referenceImage": "particles-basic-change-color.png"
         },
         {
             "title": "Particles - Change - Color 2",
             "playgroundId": "#0K3AQ2#3851",
             "renderCount": 120,
             "renderReadinessPump": false,
-            "referenceImage": "particles-basic-change-color-2.png",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Pixel diff after #1691 instance-data stride fix; not stride-related, needs follow-up."
+            "referenceImage": "particles-basic-change-color-2.png"
         },
         {
             "title": "Particles - Change - Speed",
@@ -4502,9 +4341,7 @@
             "playgroundId": "#0K3AQ2#3885",
             "renderCount": 120,
             "renderReadinessPump": false,
-            "referenceImage": "particles-basic-change-lifetime.png",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Pixel diff after #1691 instance-data stride fix; not stride-related, needs follow-up."
+            "referenceImage": "particles-basic-change-lifetime.png"
         },
         {
             "title": "Particles - Change - Lifetime 2",
@@ -4523,27 +4360,21 @@
             "playgroundId": "#WLX2I2#7",
             "renderCount": 120,
             "renderReadinessPump": false,
-            "referenceImage": "particles-emitters-point.png",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Pixel diff after #1691 instance-data stride fix; not stride-related, needs follow-up."
+            "referenceImage": "particles-emitters-point.png"
         },
         {
             "title": "Particles - Emitters - Box",
             "playgroundId": "#WLX2I2#8",
             "renderCount": 120,
             "renderReadinessPump": false,
-            "referenceImage": "particles-emitters-box.png",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Pixel diff after #1691 instance-data stride fix; not stride-related, needs follow-up."
+            "referenceImage": "particles-emitters-box.png"
         },
         {
             "title": "Particles - Emitters - Sphere",
             "playgroundId": "#WLX2I2#9",
             "renderCount": 120,
             "renderReadinessPump": false,
-            "referenceImage": "particles-emitters-sphere.png",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Pixel diff after #1691 instance-data stride fix; not stride-related, needs follow-up."
+            "referenceImage": "particles-emitters-sphere.png"
         },
         {
             "title": "Particles - Emitters - Directed Sphere",
@@ -4563,8 +4394,7 @@
             "renderCount": 120,
             "renderReadinessPump": false,
             "referenceImage": "particles-emitters-cylinder.png",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Pixel diff after #1691 instance-data stride fix; not stride-related, needs follow-up."
+            "errorRatio": 4
         },
         {
             "title": "Particles - Emitters - Directed Cylinder",
@@ -4585,9 +4415,7 @@
             "playgroundId": "#WLX2I2#17",
             "renderCount": 120,
             "renderReadinessPump": false,
-            "referenceImage": "particles-emitters-directed-cone.png",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Pixel diff after #1691 instance-data stride fix; not stride-related, needs follow-up."
+            "referenceImage": "particles-emitters-directed-cone.png"
         },
         {
             "title": "Particles - Emitters - Mesh",
@@ -4676,8 +4504,7 @@
             "playgroundId": "#A97UQ6#5",
             "renderCount": 120,
             "referenceImage": "particles-helper-sun.png",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Pixel diff after #1691 instance-data stride fix; not stride-related, needs follow-up."
+            "errorRatio": 8
         },
         {
             "title": "Particles - Helper - Smoke",
@@ -4700,8 +4527,6 @@
             "playgroundId": "#DEZ79M#73",
             "renderCount": 240,
             "renderReadinessPump": false,
-            "excludeFromAutomaticTesting": true,
-            "reason": "Pixel diff after #1691 instance-data stride fix; not stride-related, needs follow-up.",
             "referenceImage": "particles-attractors.png"
         },
         {
@@ -4742,9 +4567,7 @@
         {
             "title": "Vertex Pulling - Index Buffer Variants",
             "playgroundId": "#0C4ULD#2",
-            "referenceImage": "vertexPullingIndexBufferVariants.png",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Test fails locally on Win32 D3D11 sweep; disabled until BabylonNative fixes are made."
+            "referenceImage": "vertexPullingIndexBufferVariants.png"
         },
         {
             "title": "Vertex Pulling - Morph Targets and Bones",
@@ -4756,16 +4579,12 @@
         {
             "title": "Vertex Pulling - isUnIndexed with index buffer",
             "playgroundId": "#AWPYHM#4",
-            "referenceImage": "vertexPullingIsUnIndexed.png",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Test fails locally on Win32 D3D11 sweep; disabled until BabylonNative fixes are made."
+            "referenceImage": "vertexPullingIsUnIndexed.png"
         },
         {
             "title": "Vertex Pulling - UV Channels 1-6",
             "playgroundId": "#0SA2NH#4",
-            "referenceImage": "vertexPullingUVChannels.png",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Test fails locally on Win32 D3D11 sweep; disabled until BabylonNative fixes are made."
+            "referenceImage": "vertexPullingUVChannels.png"
         },
         {
             "title": "GPU Particles - Basic Properties - Size",
@@ -5111,8 +4930,6 @@
         {
             "title": "WebGPU async pipeline pre-warming",
             "playgroundId": "#823Q62#0",
-            "excludeFromAutomaticTesting": true,
-            "reason": "Requires WebGL2-only feature (not supported by Babylon Native)",
             "referenceImage": "webgpuAsyncPipelinePreWarm.png"
         }
     ]
