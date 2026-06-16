@@ -20,6 +20,7 @@ set(SCRIPTS
     "Scripts/gltf-roundtrip-grass.jpg"
     "Scripts/gltf-roundtrip-palm.png"
     "Scripts/gltf-roundtrip-sample_uastc.ktx2"
+    "Scripts/depth_prepass_material_variants.js"
     "Scripts/gltf_serializer_texture_roundtrip_native.js"
     "Scripts/playground_runner.js"
     "Scripts/validation_native.js"

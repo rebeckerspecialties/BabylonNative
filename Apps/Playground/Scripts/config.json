@@ -830,6 +830,15 @@
             "referenceImage": "needDepthPrePass.png"
         },
         {
+            "title": "needDepthPrePass material variants",
+            "scriptToRun": "app:///Scripts/depth_prepass_material_variants.js",
+            "functionToCall": "createScene",
+            "renderCount": 2,
+            "threshold": 5,
+            "errorRatio": 0.05,
+            "referenceImage": "needDepthPrePassMaterialVariants.png"
+        },
+        {
             "title": "Decal map PP",
             "playgroundId": "#9BVW2S#101",
             "renderCount": 50,
