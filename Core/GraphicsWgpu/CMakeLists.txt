@@ -459,7 +459,8 @@ endif()
 
 add_library(GraphicsDeviceContext INTERFACE)
 target_include_directories(GraphicsDeviceContext
-    INTERFACE "InternalInclude")
+    INTERFACE "InternalInclude"
+    INTERFACE "${CMAKE_CURRENT_LIST_DIR}/../Graphics/InternalInclude")
 target_link_libraries(GraphicsDeviceContext
     INTERFACE Graphics
     INTERFACE JsRuntimeInternal

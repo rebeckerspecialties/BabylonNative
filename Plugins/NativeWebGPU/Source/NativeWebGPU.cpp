@@ -50,6 +50,8 @@ namespace Babylon::Plugins::NativeWebGPU
         constexpr auto kBackendMode = "wgpu-native-command-recording";
         constexpr auto kWebGpuDeveloperFeaturesMode = "webgpu-developer-features";
         constexpr auto kUnsafeWebGpuMode = "unsafe-webgpu";
+        constexpr uint32_t kBufferUsageMapRead = 0x0001;
+        constexpr uint32_t kBufferUsageMapWrite = 0x0002;
 
         constexpr auto JS_NAVIGATOR_NAME = "navigator";
         constexpr auto JS_GPU_NAME = "gpu";
@@ -81,7 +83,9 @@ namespace Babylon::Plugins::NativeWebGPU
             NativeResourceKind Kind{};
             uint64_t Id{};
             size_t Size{};
+            uint32_t Usage{};
             bool Mapped{};
+            bool MappedForWrite{};
         };
 
         struct ByteSpan final
@@ -350,9 +354,9 @@ namespace Babylon::Plugins::NativeWebGPU
             delete state;
         }
 
-        Napi::Object AttachNativeHandle(Napi::Object object, NativeResourceKind kind, uint64_t id, size_t size = 0)
+        Napi::Object AttachNativeHandle(Napi::Object object, NativeResourceKind kind, uint64_t id, size_t size = 0, uint32_t usage = 0, bool mapped = false, bool mappedForWrite = false)
         {
-            auto* state = new NativeHandleState{kind, id, size, false};
+            auto* state = new NativeHandleState{kind, id, size, usage, mapped, mappedForWrite};
             object.Set(
                 JS_NATIVE_HANDLE_NAME,
                 Napi::External<NativeHandleState>::New(object.Env(), state, &FinalizeNativeHandleState));
@@ -2161,9 +2165,15 @@ namespace Babylon::Plugins::NativeWebGPU
             {
                 ThrowNativeWebGpuError(env, "NativeWebGPU failed to create GPUBuffer.", "GPUDevice.createBuffer");
             }
-            AttachNativeHandle(buffer, NativeResourceKind::Buffer, nativeId, size);
+            AttachNativeHandle(buffer, NativeResourceKind::Buffer, nativeId, size, usage, mappedAtCreation, mappedAtCreation);
 
             buffer.Set("mapAsync", Napi::Function::New(env, [](const Napi::CallbackInfo& info) -> Napi::Value {
+                if (auto* state = GetNativeHandleState(info.This()))
+                {
+                    const auto mode = info.Length() > 0 ? ToUint32(info[0], 0) : 0;
+                    state->Mapped = true;
+                    state->MappedForWrite = (mode & kBufferUsageMapWrite) != 0;
+                }
                 return GetCachedResolvedUndefinedPromise(info.Env());
             }));
 
@@ -2189,6 +2199,8 @@ namespace Babylon::Plugins::NativeWebGPU
                 }
 
                 auto bufferObject = info.This().As<Napi::Object>();
+                auto* state = GetNativeHandleState(bufferObject);
+                Napi::ArrayBuffer mappedRange;
                 if (bufferObject.Has("__cachedMappedRange") &&
                     bufferObject.Has("__cachedMappedRangeOffset") &&
                     bufferObject.Has("__cachedMappedRangeLength"))
@@ -2208,21 +2220,38 @@ namespace Babylon::Plugins::NativeWebGPU
 
                         if (cachedOffset == offset && cachedLength == byteLength)
                         {
-                            return cachedRangeValue;
+                            mappedRange = cachedRangeValue.As<Napi::ArrayBuffer>();
                         }
                     }
                 }
 
-                auto mappedRange = Napi::ArrayBuffer::New(info.Env(), byteLength);
-                // Hot-path optimization: Babylon can query mapped ranges every frame.
-                // Reusing the same backing ArrayBuffer for identical range requests
-                // avoids transient JS heap churn in simulator/device loops.
-                // Non-CTS note: this intentionally keeps stable object identity.
-                bufferObject.Set("__cachedMappedRange", mappedRange);
-                bufferObject.Set("__cachedMappedRangeOffset",
-                    Napi::Number::From(info.Env(), static_cast<double>(offset)));
-                bufferObject.Set("__cachedMappedRangeLength",
-                    Napi::Number::From(info.Env(), static_cast<double>(byteLength)));
+                if (mappedRange.IsEmpty())
+                {
+                    mappedRange = Napi::ArrayBuffer::New(info.Env(), byteLength);
+                    // Hot-path optimization: Babylon can query mapped ranges every frame.
+                    // Reusing the same backing ArrayBuffer for identical range requests
+                    // avoids transient JS heap churn in simulator/device loops.
+                    // Non-CTS note: this intentionally keeps stable object identity.
+                    bufferObject.Set("__cachedMappedRange", mappedRange);
+                    bufferObject.Set("__cachedMappedRangeOffset",
+                        Napi::Number::From(info.Env(), static_cast<double>(offset)));
+                    bufferObject.Set("__cachedMappedRangeLength",
+                        Napi::Number::From(info.Env(), static_cast<double>(byteLength)));
+                }
+
+                if (state != nullptr &&
+                    state->Id != 0 &&
+                    (state->Usage & kBufferUsageMapRead) != 0 &&
+                    byteLength > 0 &&
+                    !babylon_wgpu_native_read_buffer(
+                        state->Id,
+                        offset,
+                        static_cast<uint8_t*>(mappedRange.Data()),
+                        mappedRange.ByteLength()))
+                {
+                    ThrowNativeWebGpuError(info.Env(), "NativeWebGPU failed to read GPUBuffer mapped range.", "GPUBuffer.getMappedRange");
+                }
+
                 return mappedRange;
             }));
 
@@ -2233,7 +2262,9 @@ namespace Babylon::Plugins::NativeWebGPU
                 {
                     return;
                 }
-                if (bufferObject.Has("__cachedMappedRange") && bufferObject.Get("__cachedMappedRange").IsArrayBuffer())
+                if (state->MappedForWrite &&
+                    bufferObject.Has("__cachedMappedRange") &&
+                    bufferObject.Get("__cachedMappedRange").IsArrayBuffer())
                 {
                     auto arrayBuffer = bufferObject.Get("__cachedMappedRange").As<Napi::ArrayBuffer>();
                     size_t offset{};
@@ -2251,11 +2282,12 @@ namespace Babylon::Plugins::NativeWebGPU
                         static_cast<const uint8_t*>(arrayBuffer.Data()),
                         byteLength);
                 }
-                else
+                else if (state->MappedForWrite)
                 {
                     babylon_wgpu_native_write_buffer(state->Id, 0, nullptr, 0);
                 }
                 state->Mapped = false;
+                state->MappedForWrite = false;
             }));
             buffer.Set("destroy", Napi::Function::New(env, [](const Napi::CallbackInfo& info) {
                 if (auto* state = GetNativeHandleState(info.This()))

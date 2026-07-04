@@ -1,22 +1,138 @@
 #include <Babylon/Plugins/NativeEncoding.h>
 #include <Babylon/JsRuntime.h>
 #include <Babylon/JsRuntimeScheduler.h>
-#include <Babylon/Graphics/DeviceContext.h>
 
 #include <napi/napi.h>
 
+#if defined(__APPLE__)
+#include <CoreFoundation/CoreFoundation.h>
+#include <CoreGraphics/CoreGraphics.h>
+#include <ImageIO/ImageIO.h>
+#else
+#include <Babylon/Graphics/DeviceContext.h>
 #include <bimg/encode.h>
 #include <bx/readerwriter.h>
+#endif
 
 #include <arcana/threading/task.h>
 #include <arcana/threading/task_schedulers.h>
+
+#include <algorithm>
+#include <cstring>
 
 namespace Babylon::Plugins
 {
     namespace
     {
+#if defined(__APPLE__)
+        class ScopedCFRelease final
+        {
+        public:
+            explicit ScopedCFRelease(CFTypeRef value) noexcept
+                : m_value{value}
+            {
+            }
+
+            ~ScopedCFRelease()
+            {
+                if (m_value != nullptr)
+                {
+                    CFRelease(m_value);
+                }
+            }
+
+            ScopedCFRelease(const ScopedCFRelease&) = delete;
+            ScopedCFRelease& operator=(const ScopedCFRelease&) = delete;
+
+            template<typename T>
+            T Get() const noexcept
+            {
+                return reinterpret_cast<T>(const_cast<void*>(m_value));
+            }
+
+        private:
+            CFTypeRef m_value{};
+        };
+#endif
+
         std::shared_ptr<std::vector<std::byte>> EncodePNG(const std::vector<std::byte>& pixelData, uint32_t width, uint32_t height, bool invertY)
         {
+#if defined(__APPLE__)
+            auto rgba{pixelData};
+            const size_t rowStride{static_cast<size_t>(width) * 4u};
+            if (invertY)
+            {
+                for (uint32_t y = 0; y < height / 2; ++y)
+                {
+                    auto* top = rgba.data() + static_cast<size_t>(y) * rowStride;
+                    auto* bottom = rgba.data() + static_cast<size_t>(height - 1u - y) * rowStride;
+                    for (size_t x = 0; x < rowStride; ++x)
+                    {
+                        std::swap(top[x], bottom[x]);
+                    }
+                }
+            }
+
+            ScopedCFRelease colorSpace{CGColorSpaceCreateDeviceRGB()};
+            if (colorSpace.Get<CGColorSpaceRef>() == nullptr)
+            {
+                throw std::runtime_error{"Failed to create PNG color space."};
+            }
+
+            const auto bitmapInfo = static_cast<CGBitmapInfo>(
+                static_cast<uint32_t>(kCGBitmapByteOrder32Big) |
+                static_cast<uint32_t>(kCGImageAlphaPremultipliedLast));
+            ScopedCFRelease provider{CGDataProviderCreateWithData(nullptr, rgba.data(), rgba.size(), nullptr)};
+            if (provider.Get<CGDataProviderRef>() == nullptr)
+            {
+                throw std::runtime_error{"Failed to create PNG data provider."};
+            }
+
+            ScopedCFRelease image{CGImageCreate(
+                width,
+                height,
+                8,
+                32,
+                rowStride,
+                colorSpace.Get<CGColorSpaceRef>(),
+                bitmapInfo,
+                provider.Get<CGDataProviderRef>(),
+                nullptr,
+                false,
+                kCGRenderingIntentDefault)};
+            if (image.Get<CGImageRef>() == nullptr)
+            {
+                throw std::runtime_error{"Failed to create PNG image."};
+            }
+
+            ScopedCFRelease pngData{CFDataCreateMutable(kCFAllocatorDefault, 0)};
+            if (pngData.Get<CFMutableDataRef>() == nullptr)
+            {
+                throw std::runtime_error{"Failed to create PNG output buffer."};
+            }
+
+            ScopedCFRelease destination{CGImageDestinationCreateWithData(pngData.Get<CFMutableDataRef>(), CFSTR("public.png"), 1, nullptr)};
+            if (destination.Get<CGImageDestinationRef>() == nullptr)
+            {
+                throw std::runtime_error{"Failed to create PNG destination."};
+            }
+
+            CGImageDestinationAddImage(destination.Get<CGImageDestinationRef>(), image.Get<CGImageRef>(), nullptr);
+            if (!CGImageDestinationFinalize(destination.Get<CGImageDestinationRef>()))
+            {
+                throw std::runtime_error{"Failed to encode PNG image."};
+            }
+
+            const auto byteLength = static_cast<size_t>(CFDataGetLength(pngData.Get<CFDataRef>()));
+            if (byteLength == 0)
+            {
+                throw std::runtime_error{"Failed to encode PNG image: output is empty"};
+            }
+
+            auto result{std::make_shared<std::vector<std::byte>>(byteLength)};
+            std::memcpy(result->data(), CFDataGetBytePtr(pngData.Get<CFDataRef>()), byteLength);
+            return result;
+#else
             auto memoryBlock{bx::MemoryBlock(&Graphics::DeviceContext::GetDefaultAllocator())};
             auto writer{bx::MemoryWriter(&memoryBlock)};
             auto err{bx::Error()};
@@ -39,6 +155,7 @@ namespace Babylon::Plugins
             std::memcpy(result->data(), memoryBlock.more(0), byteLength);
 
             return result;
+#endif
         }
 
         Napi::Value EncodeImageAsync(const Napi::CallbackInfo& info)

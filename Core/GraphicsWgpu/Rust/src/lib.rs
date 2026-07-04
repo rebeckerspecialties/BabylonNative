@@ -596,6 +596,27 @@ pub extern "C" fn babylon_wgpu_native_write_buffer(
 }
 
 #[no_mangle]
+pub extern "C" fn babylon_wgpu_native_read_buffer(
+    buffer_id: u64,
+    offset: u64,
+    data: *mut u8,
+    data_len: usize,
+) -> bool {
+    run_with_active_backend("GPUBuffer.getMappedRange", false, |backend| {
+        let output = if data_len == 0 {
+            &mut []
+        } else {
+            if data.is_null() {
+                return Err("GPUBuffer.getMappedRange output pointer was null".to_string());
+            }
+            unsafe { std::slice::from_raw_parts_mut(data, data_len) }
+        };
+        backend.read_buffer(buffer_id, offset, output)?;
+        Ok(true)
+    })
+}
+
+#[no_mangle]
 pub extern "C" fn babylon_wgpu_native_create_texture(descriptor_json: *const c_char) -> u64 {
     run_with_active_backend("GPUDevice.createTexture", 0, |backend| {
         backend.create_texture(read_c_string(descriptor_json, "GPUTextureDescriptor")?)
@@ -3558,6 +3579,57 @@ mod upstream_wgpu_native {
                     .queue
                     .write_buffer(&target_buffer, offset, data);
             }
+            Ok(())
+        }
+
+        pub fn read_buffer(
+            &mut self,
+            buffer_id: u64,
+            offset: u64,
+            output: &mut [u8],
+        ) -> Result<(), String> {
+            if output.is_empty() {
+                return Ok(());
+            }
+
+            let buffer_resource = self
+                .resources
+                .buffers
+                .get(&buffer_id)
+                .ok_or_else(|| format!("GPUBuffer {buffer_id} was not found"))?;
+            let start = offset.min(buffer_resource.size);
+            let available = buffer_resource.size.saturating_sub(start);
+            let copy_len = (output.len() as u64).min(available) as usize;
+            if copy_len == 0 {
+                return Ok(());
+            }
+
+            let end = start + copy_len as u64;
+            let slice = buffer_resource.buffer.slice(start..end);
+            let (tx, rx) = std::sync::mpsc::channel::<Result<(), String>>();
+            slice.map_async(wgpu::MapMode::Read, move |result| {
+                let _ = tx.send(result.map_err(|error| error.to_string()));
+            });
+            self.runtime
+                .device
+                .poll(wgpu::PollType::wait_indefinitely())
+                .map_err(|error| format!("GPUBuffer.getMappedRange poll failed: {error}"))?;
+            match rx.recv() {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => {
+                    return Err(format!("GPUBuffer.getMappedRange map_async failed: {error}"))
+                }
+                Err(error) => {
+                    return Err(format!(
+                        "GPUBuffer.getMappedRange map_async channel failed: {error}"
+                    ))
+                }
+            }
+
+            let mapped = slice.get_mapped_range();
+            output[..copy_len].copy_from_slice(&mapped[..copy_len]);
+            drop(mapped);
+            buffer_resource.buffer.unmap();
             Ok(())
         }
 

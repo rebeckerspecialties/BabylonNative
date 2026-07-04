@@ -7,15 +7,35 @@ class DepthPrePassHookGuardPlugin extends BABYLON.MaterialPluginBase {
         return true;
     }
 
-    getCustomCode(shaderType) {
+    getCustomCode(shaderType, shaderLanguage) {
         if (shaderType !== "fragment") {
             return null;
+        }
+
+        if (shaderLanguage === BABYLON.ShaderLanguage.WGSL) {
+            return {
+                CUSTOM_FRAGMENT_BEFORE_LIGHTS: `
+#ifdef DEPTHPREPASS
+discard;
+#endif
+`,
+                CUSTOM_FRAGMENT_MAIN_END: `
+#ifdef DEPTHPREPASS
+fragmentOutputs.color = vec4f(1.0, 0.0, 1.0, 1.0);
+#endif
+`,
+            };
         }
 
         return {
             CUSTOM_FRAGMENT_BEFORE_LIGHTS: `
 #ifdef DEPTHPREPASS
 discard;
+#endif
+`,
+            CUSTOM_FRAGMENT_MAIN_END: `
+#ifdef DEPTHPREPASS
+gl_FragColor = vec4(1.0, 0.0, 1.0, 1.0);
 #endif
 `,
         };

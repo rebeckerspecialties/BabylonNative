@@ -106,7 +106,9 @@ if(APPLE)
         set(PLIST_FILE "${CMAKE_CURRENT_LIST_DIR}/macOS/Info.plist")
         set(STORYBOARD "${CMAKE_CURRENT_LIST_DIR}/macOS/Base.lproj/Main.storyboard")
         set(RESOURCE_FILES ${STORYBOARD})
-        set(ADDITIONAL_LIBRARIES PRIVATE BabylonNativeEmbedding)
+        set(ADDITIONAL_LIBRARIES
+            PRIVATE BabylonNativeEmbedding
+            PRIVATE "-framework AppKit")
         set(SOURCES ${SOURCES}
             "macOS/main.mm"
             "macOS/AppDelegate.h"
@@ -189,11 +191,9 @@ target_include_directories(Playground PRIVATE ".")
 # forwards them transitively, so the Playground only needs to list the
 # libraries it consumes directly:
 #   - Embedding : the Runtime + View API the host is built on.
-#   - bx        : <bx/*.h> used by Shared/Diagnostics.cpp.
 #   - TestUtils : <Babylon/Plugins/TestUtils.h> used by Win32/X11 --test mode.
 target_link_libraries(Playground
     PRIVATE Embedding
-    PRIVATE bx
     PRIVATE CubeTexture
     PRIVATE TestUtils
     ${ADDITIONAL_LIBRARIES}

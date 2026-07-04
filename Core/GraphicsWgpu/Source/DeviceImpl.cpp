@@ -11,6 +11,7 @@
 #include <stdexcept>
 
 #if defined(__APPLE__)
+#import <QuartzCore/CAMetalLayer.h>
 #include <TargetConditionals.h>
 #endif
 
@@ -21,6 +22,23 @@ namespace
 
 namespace Babylon::Graphics
 {
+    float GetDevicePixelRatio(WindowT window)
+    {
+#if defined(__APPLE__)
+        if (window != nullptr)
+        {
+            const auto scale = static_cast<float>(((__bridge CAMetalLayer*)window).contentsScale);
+            if (std::isfinite(scale) && scale > 0.0f)
+            {
+                return scale;
+            }
+        }
+#else
+        (void)window;
+#endif
+        return 1.0f;
+    }
+
     DeviceImpl::DeviceImpl(const Configuration& config)
         : m_context{*this}
     {
@@ -613,9 +631,9 @@ namespace Babylon::Graphics
         m_screenShotCallbacks.emplace(std::move(callback));
     }
 
-    float DeviceImpl::GetDevicePixelRatio(WindowT)
+    float DeviceImpl::GetDevicePixelRatio(WindowT window)
     {
-        return 1.0f;
+        return Babylon::Graphics::GetDevicePixelRatio(window);
     }
 
     uint32_t DeviceImpl::CurrentRenderWidth() const
