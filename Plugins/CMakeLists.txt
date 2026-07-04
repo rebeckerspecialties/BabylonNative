@@ -2,8 +2,16 @@ if(BABYLON_NATIVE_PLUGIN_NATIVEINPUT)
     add_subdirectory(NativeInput)
 endif()
 
+if(BABYLON_NATIVE_PLUGIN_NATIVEOPTIMIZATIONS)
+    add_subdirectory(NativeOptimizations)
+endif()
+
 if(BABYLON_NATIVE_PLUGIN_NATIVEWEBGPU)
     add_subdirectory(NativeWebGPU)
+endif()
+
+if(BABYLON_NATIVE_PLUGIN_NATIVEENCODING AND (APPLE OR TARGET bimg))
+    add_subdirectory(NativeEncoding)
 endif()
 
 if(BABYLON_NATIVE_PLUGIN_SHADERCOMPILER)
@@ -21,4 +29,3 @@ endif()
 if(BABYLON_NATIVE_PLUGIN_TESTUTILS)
     add_subdirectory(TestUtils)
 endif()
-

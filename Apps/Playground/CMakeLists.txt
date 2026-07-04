@@ -212,6 +212,11 @@ if(TARGET TestUtils)
     target_compile_definitions(Playground PRIVATE BABYLON_NATIVE_PLAYGROUND_HAS_TESTUTILS=1)
 endif()
 
+if(TARGET NativeEncoding)
+    target_link_libraries(Playground PRIVATE NativeEncoding)
+    target_compile_definitions(Playground PRIVATE BABYLON_NATIVE_PLAYGROUND_HAS_NATIVEENCODING=1)
+endif()
+
 if(TARGET NativeOptimizations)
     target_link_libraries(Playground PRIVATE NativeOptimizations)
     target_compile_definitions(Playground PRIVATE BABYLON_NATIVE_PLAYGROUND_HAS_NATIVEOPTIMIZATIONS=1)

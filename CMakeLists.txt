@@ -153,10 +153,12 @@ option(BABYLON_NATIVE_PLUGIN_NATIVEINPUT "Include Babylon Native Plugin NativeIn
 # NativeWebGPU/Canvas options are hardwired ON for the wgpu branch (see FORCE overrides below).
 # TODO(bgfx-removal): Convert these back to user-facing option() toggles once the bgfx backend
 # is fully removed and the wgpu path is the only backend.
+option(BABYLON_NATIVE_PLUGIN_NATIVEOPTIMIZATIONS "Include Babylon Native Plugin NativeOptimizations." ON)
 option(BABYLON_NATIVE_BUILD_WEBGPU_TESTS "Build NativeWebGPU async bridge gtests on desktop hosts." OFF)
 option(BABYLON_NATIVE_ENABLE_WEBGPU_DEVELOPER_FEATURES "Expose non-standard WebGPU developer hooks (Chromium/WebKit developer-features analog)." OFF)
 option(BABYLON_NATIVE_ENABLE_UNSAFE_WEBGPU "Expose non-standard unsafe WebGPU hooks (Chromium enable-unsafe-webgpu analog)." OFF)
 option(BABYLON_NATIVE_LTO_BITCODE_STATIC_LIBS "Compile native static libraries as LLVM bitcode and use Rust linker-plugin LTO for final whole-program optimization." OFF)
+option(BABYLON_NATIVE_PLUGIN_NATIVEENCODING "Include Babylon Native Plugin NativeEncoding." ON)
 
 # Polyfills
 option(BABYLON_NATIVE_POLYFILL_WINDOW "Include Babylon Native Polyfill Window." ON)
@@ -249,6 +251,7 @@ endif()
 set(BABYLON_NATIVE_INSTALL OFF CACHE BOOL "Include the install target." FORCE)
 set(BABYLON_NATIVE_PLUGIN_NATIVEINPUT ON CACHE BOOL "Include Babylon Native Plugin NativeInput." FORCE)
 set(BABYLON_NATIVE_PLUGIN_NATIVEOPTIMIZATIONS ON CACHE BOOL "Include Babylon Native Plugin NativeOptimizations." FORCE)
+set(BABYLON_NATIVE_PLUGIN_NATIVEENCODING ON CACHE BOOL "Include Babylon Native Plugin NativeEncoding." FORCE)
 set(BABYLON_NATIVE_PLUGIN_NATIVEWEBGPU ON CACHE BOOL "Include Babylon Native Plugin NativeWebGPU." FORCE)
 set(BABYLON_NATIVE_WGPU_USE_UPSTREAM_NATIVE ON CACHE BOOL "Use upstream wgpu-native as the Rust backend base." FORCE)
 set(BABYLON_NATIVE_WGPU_NATIVE_RLIB ON CACHE BOOL "Build wgpu-native in the shared Cargo graph instead of linking a second Rust staticlib." FORCE)
@@ -264,7 +267,6 @@ set(BABYLON_NATIVE_POLYFILL_CANVAS_WGPU ON CACHE BOOL "Use the wgpu/femtovg Canv
 set(BABYLON_NATIVE_PLUGIN_EXTERNALTEXTURE OFF CACHE BOOL "" FORCE)
 set(BABYLON_NATIVE_PLUGIN_NATIVECAMERA OFF CACHE BOOL "" FORCE)
 set(BABYLON_NATIVE_PLUGIN_NATIVECAPTURE OFF CACHE BOOL "" FORCE)
-set(BABYLON_NATIVE_PLUGIN_NATIVEENCODING OFF CACHE BOOL "" FORCE)
 set(BABYLON_NATIVE_PLUGIN_NATIVEENGINE OFF CACHE BOOL "" FORCE)
 set(BABYLON_NATIVE_PLUGIN_NATIVEENGINE_LOAD_IMAGES OFF CACHE BOOL "" FORCE)
 set(BABYLON_NATIVE_PLUGIN_NATIVEENGINE_WEBP OFF CACHE BOOL "" FORCE)

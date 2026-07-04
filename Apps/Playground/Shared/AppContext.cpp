@@ -7,6 +7,9 @@
 #include <Babylon/ScriptLoader.h>
 
 #include <Babylon/Plugins/NativeInput.h>
+#if defined(BABYLON_NATIVE_PLAYGROUND_HAS_NATIVEENCODING)
+#include <Babylon/Plugins/NativeEncoding.h>
+#endif
 #if defined(BABYLON_NATIVE_PLAYGROUND_HAS_NATIVEOPTIMIZATIONS)
 #include <Babylon/Plugins/NativeOptimizations.h>
 #endif
@@ -306,8 +309,11 @@ AppContext::AppContext(
         Babylon::Polyfills::Fetch::Initialize(env);
 
         m_input = &Babylon::Plugins::NativeInput::CreateForJavaScript(env);
+#if defined(BABYLON_NATIVE_PLAYGROUND_HAS_NATIVEENCODING)
+        Babylon::Plugins::NativeEncoding::Initialize(env);
+#endif
 #if defined(BABYLON_NATIVE_PLAYGROUND_HAS_NATIVEOPTIMIZATIONS)
-        Babylon::Plugins::NativeOptimizations::Initialize(env);
+        Babylon::Plugins::NativeOptimizations::InitializeGaussianSplatting(env);
 #endif
         Babylon::Plugins::NativeWebGPU::Initialize(env);
 #if defined(BABYLON_NATIVE_PLAYGROUND_HAS_NATIVEXR)

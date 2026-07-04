@@ -327,6 +327,12 @@ namespace
 
 namespace Babylon::Plugins::NativeOptimizations
 {
+    void BABYLON_API InitializeGaussianSplatting(Napi::Env env)
+    {
+        auto nativeObject{JsRuntime::NativeObject::GetFromJavaScript(env)};
+        nativeObject.Set("sortSplats", Napi::Function::New(env, sortSplats, "sortSplats"));
+    }
+
     void BABYLON_API Initialize(Napi::Env env)
     {
         auto nativeObject{JsRuntime::NativeObject::GetFromJavaScript(env)};
@@ -337,6 +343,6 @@ namespace Babylon::Plugins::NativeOptimizations
         nativeObject.Set("_FlipFaces", Napi::Function::New(env, FlipFaces, "_FlipFaces"));
         nativeObject.Set("extractMinAndMaxIndexed", Napi::Function::New(env, ExtractMinAndMaxIndexed, "extractMinAndMaxIndexed"));
         nativeObject.Set("extractMinAndMax", Napi::Function::New(env, ExtractMinAndMax, "extractMinAndMax"));
-        nativeObject.Set("sortSplats", Napi::Function::New(env, sortSplats, "sortSplats"));
+        InitializeGaussianSplatting(env);
     }
 }

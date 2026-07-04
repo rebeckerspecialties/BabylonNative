@@ -750,6 +750,45 @@
 
             expectPixel(navigator.gpu._testReadTexturePixel(texture, 1, 1), [0, 255, 0, 255], "CanvasWgpu 2D upload should include pre-flush draw commands");
         }],
+        ["GPUBuffer.getMappedRange exposes texture copy readback bytes", async function () {
+            var adapter = await navigator.gpu.requestAdapter();
+            var device = await adapter.requestDevice();
+            var rgba = new Uint8Array([
+                255, 0, 0, 255,   0, 255, 0, 255,
+                0, 0, 255, 255,   255, 255, 255, 255
+            ]);
+            var source = {
+                _getNativeImageData: function () {
+                    return { width: 2, height: 2, data: rgba };
+                }
+            };
+            var texture = device.createTexture({
+                size: [2, 2, 1],
+                format: "rgba8unorm",
+                usage: GPUTextureUsage.COPY_SRC | GPUTextureUsage.COPY_DST | GPUTextureUsage.TEXTURE_BINDING
+            });
+            device.queue.copyExternalImageToTexture({ source: source }, { texture: texture }, { width: 2, height: 2 });
+
+            var bytesPerRow = 256;
+            var readback = device.createBuffer({
+                size: bytesPerRow * 2,
+                usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ
+            });
+            var encoder = device.createCommandEncoder();
+            encoder.copyTextureToBuffer(
+                { texture: texture },
+                { buffer: readback, bytesPerRow: bytesPerRow, rowsPerImage: 2 },
+                { width: 2, height: 2, depthOrArrayLayers: 1 }
+            );
+            device.queue.submit([encoder.finish()]);
+            await readback.mapAsync(GPUMapMode.READ);
+
+            var mapped = new Uint8Array(readback.getMappedRange());
+            expectPixel(mapped.slice(0, 4), [255, 0, 0, 255], "mapped texture readback row 0 pixel 0");
+            expectPixel(mapped.slice(4, 8), [0, 255, 0, 255], "mapped texture readback row 0 pixel 1");
+            expectPixel(mapped.slice(bytesPerRow, bytesPerRow + 4), [0, 0, 255, 255], "mapped texture readback row 1 pixel 0");
+            readback.unmap();
+        }],
         ["GPUQueue.copyExternalImageToTexture converts CanvasWgpu alpha mode", async function () {
             var source = new _native.Canvas();
             source.width = 2;
