@@ -11,6 +11,13 @@
     constexpr CGFloat kInitialWidth = 1280.0;
     constexpr CGFloat kInitialHeight = 720.0;
 
+    // The storyboard creates a window controller before this programmatic landscape window.
+    for (NSWindow* storyboardWindow in NSApp.windows)
+    {
+        storyboardWindow.contentViewController = nil;
+        [storyboardWindow close];
+    }
+
     NSRect frame = NSMakeRect(0.0, 0.0, kInitialWidth, kInitialHeight);
     self.window = [[NSWindow alloc]
         initWithContentRect:frame
