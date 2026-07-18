@@ -1,3 +1,4 @@
 # Babylon.js source patch stack for NativeWebGPU local validation.
 # The apply script treats missing or non-applying patches as hard failures.
-0001-add-webgpu-render-command-batching.patch
+0001-enable-webgpu-layers-for-native-xr.patch
+0002-add-webgpu-render-command-batching.patch

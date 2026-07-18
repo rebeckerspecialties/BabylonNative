@@ -1177,6 +1177,10 @@ setNativeArPortalDefault("__nativeArPortalExitDelayMs", 70000);
         });
 
         var fm = xr.baseExperience.featuresManager;
+        if (engine.isWebGPU && BABYLON.WebXRLayers) {
+            fm.enableFeature(BABYLON.WebXRLayers.Name, "latest");
+            reportStatus("native-xr-portal:webgpu-layers=enabled");
+        }
         var nativeHitTestEntityTypes = globalThis.__nativeArPortalAllowEstimatedPointPlacement === true ? ["plane", "point"] : ["plane"];
         var xrTest = fm.enableFeature(BABYLON.WebXRHitTest.Name, "latest", {
             entityTypes: nativeHitTestEntityTypes

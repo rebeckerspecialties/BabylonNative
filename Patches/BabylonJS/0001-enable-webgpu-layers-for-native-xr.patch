@@ -1,0 +1,152 @@
+From ab5e38d3f75ee40430b3c5ed470e7ad69d93990e Mon Sep 17 00:00:00 2001
+From: Matt Hargett <plaztiksyke@gmail.com>
+Date: Fri, 17 Jul 2026 23:00:43 -0700
+Subject: [PATCH] Allow WebGPU layers with native XR runtimes
+
+---
+ .../core/src/XR/features/WebXRLayers.pure.ts  |   8 +-
+ .../dev/core/test/unit/XR/webXRLayers.test.ts | 111 ++++++++++++++++++
+ 2 files changed, 115 insertions(+), 4 deletions(-)
+ create mode 100644 packages/dev/core/test/unit/XR/webXRLayers.test.ts
+
+diff --git a/packages/dev/core/src/XR/features/WebXRLayers.pure.ts b/packages/dev/core/src/XR/features/WebXRLayers.pure.ts
+index 9f81b75eac..6c53443f8f 100644
+--- a/packages/dev/core/src/XR/features/WebXRLayers.pure.ts
++++ b/packages/dev/core/src/XR/features/WebXRLayers.pure.ts
+@@ -368,13 +368,13 @@ export class WebXRLayers extends WebXRAbstractFeature {
+     }
+ 
+     public override isCompatible(): boolean {
+-        // TODO (rgerd): Add native support.
+-        if (this._xrSessionManager.isNative) {
+-            return false;
+-        }
+         if (this._xrSessionManager.scene.getEngine().isWebGPU) {
+             return typeof XRGPUBinding !== "undefined" && !!XRGPUBinding.prototype.createProjectionLayer;
+         }
++        // Native WebGL continues to use NativeXRRenderTarget instead of WebXR Layers.
++        if (this._xrSessionManager.isNative) {
++            return false;
++        }
+         return typeof XRWebGLBinding !== "undefined" && !!XRWebGLBinding.prototype.createProjectionLayer;
+     }
+ 
+diff --git a/packages/dev/core/test/unit/XR/webXRLayers.test.ts b/packages/dev/core/test/unit/XR/webXRLayers.test.ts
+new file mode 100644
+index 0000000000..b69d2c8e8f
+--- /dev/null
++++ b/packages/dev/core/test/unit/XR/webXRLayers.test.ts
+@@ -0,0 +1,111 @@
++/* @vitest-environment jsdom */
++
++import { NullEngine } from "core/Engines/nullEngine";
++import { Scene } from "core/scene";
++import { WebXRLayers } from "core/XR/features/WebXRLayers";
++import { WebXRSessionManager } from "core/XR/webXRSessionManager";
++import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
++
++interface ProjectionLayerBindingConstructor {
++    prototype: {
++        createProjectionLayer?: () => void;
++    };
++}
++
++type TestGlobals = typeof globalThis & {
++    XRGPUBinding?: ProjectionLayerBindingConstructor;
++    XRWebGLBinding?: ProjectionLayerBindingConstructor;
++};
++
++describe("WebXRLayers", () => {
++    let engine: NullEngine;
++    let scene: Scene;
++    let sessionManager: WebXRSessionManager;
++    const testGlobals = globalThis as TestGlobals;
++    let originalGPUBinding: ProjectionLayerBindingConstructor | undefined;
++    let originalWebGLBinding: ProjectionLayerBindingConstructor | undefined;
++
++    beforeEach(() => {
++        engine = new NullEngine({
++            renderHeight: 256,
++            renderWidth: 256,
++            textureSize: 256,
++            deterministicLockstep: false,
++            lockstepMaxSteps: 1,
++        });
++        scene = new Scene(engine);
++        sessionManager = new WebXRSessionManager(scene);
++        originalGPUBinding = testGlobals.XRGPUBinding;
++        originalWebGLBinding = testGlobals.XRWebGLBinding;
++    });
++
++    afterEach(() => {
++        if (originalGPUBinding) {
++            testGlobals.XRGPUBinding = originalGPUBinding;
++        } else {
++            delete testGlobals.XRGPUBinding;
++        }
++        if (originalWebGLBinding) {
++            testGlobals.XRWebGLBinding = originalWebGLBinding;
++        } else {
++            delete testGlobals.XRWebGLBinding;
++        }
++        vi.restoreAllMocks();
++        scene.dispose();
++        engine.dispose();
++    });
++
++    function setEnvironment(isNative: boolean, isWebGPU: boolean): void {
++        vi.spyOn(sessionManager, "isNative", "get").mockReturnValue(isNative);
++        vi.spyOn(engine, "isWebGPU", "get").mockReturnValue(isWebGPU);
++    }
++
++    function installGPUBinding(): void {
++        const binding = vi.fn() as unknown as ProjectionLayerBindingConstructor;
++        binding.prototype.createProjectionLayer = vi.fn();
++        testGlobals.XRGPUBinding = binding;
++    }
++
++    function installWebGLBinding(): void {
++        const binding = vi.fn() as unknown as ProjectionLayerBindingConstructor;
++        binding.prototype.createProjectionLayer = vi.fn();
++        testGlobals.XRWebGLBinding = binding;
++    }
++
++    describe("isCompatible", () => {
++        it("accepts native WebGPU when XRGPUBinding exposes projection layers", () => {
++            setEnvironment(true, true);
++            installGPUBinding();
++
++            expect(new WebXRLayers(sessionManager).isCompatible()).toBe(true);
++        });
++
++        it("rejects native WebGPU when XRGPUBinding is absent", () => {
++            setEnvironment(true, true);
++            delete testGlobals.XRGPUBinding;
++
++            expect(new WebXRLayers(sessionManager).isCompatible()).toBe(false);
++        });
++
++        it("keeps native WebGL on the legacy render-target path", () => {
++            setEnvironment(true, false);
++            installWebGLBinding();
++
++            expect(new WebXRLayers(sessionManager).isCompatible()).toBe(false);
++        });
++
++        it("accepts browser WebGPU when XRGPUBinding exposes projection layers", () => {
++            setEnvironment(false, true);
++            installGPUBinding();
++
++            expect(new WebXRLayers(sessionManager).isCompatible()).toBe(true);
++        });
++
++        it("accepts browser WebGL when XRWebGLBinding exposes projection layers", () => {
++            setEnvironment(false, false);
++            installWebGLBinding();
++
++            expect(new WebXRLayers(sessionManager).isCompatible()).toBe(true);
++        });
++    });
++});
+--
+2.55.0

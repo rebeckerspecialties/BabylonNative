@@ -3,3 +3,5 @@
 *.java diff
 *.txt diff
 
+# Patch payloads preserve upstream line endings and diff marker whitespace.
+Patches/BabylonJS/*.patch -whitespace

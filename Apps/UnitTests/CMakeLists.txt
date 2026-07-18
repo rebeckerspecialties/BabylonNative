@@ -80,6 +80,10 @@ if(TARGET NativeEngine)
 elseif(TARGET NativeWebGPU)
     list(APPEND TEST_ASSETS
         "JavaScript/dist/tests.wgpu.js")
+    if(APPLE)
+        list(APPEND SOURCES
+            "Source/MetalCppImplementation.cpp")
+    endif()
     list(APPEND UNITTEST_LIBRARIES NativeWebGPU)
     list(APPEND ADDITIONAL_COMPILE_DEFINITIONS BABYLON_NATIVE_UNITTESTS_WITH_WEBGPU)
 else()

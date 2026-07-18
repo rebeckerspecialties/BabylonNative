@@ -138,6 +138,95 @@ namespace Babylon
             }
         }
 
+        void NativeXr::Impl::SetRenderTextureFunctions(const Napi::Function& createFunction, const Napi::Function& destroyFunction)
+        {
+            if (m_sessionState == nullptr)
+            {
+                throw std::runtime_error{"NativeXR render-target callbacks require an active XR session."};
+            }
+            m_sessionState->CreateRenderTexture = Napi::Persistent(createFunction);
+            m_sessionState->DestroyRenderTexture = Napi::Persistent(destroyFunction);
+        }
+
+        Napi::Value NativeXr::Impl::GetRenderTargetForViewIndex(uint32_t viewIndex) const
+        {
+            if (m_sessionState == nullptr || m_sessionState->ActiveViewConfigurations.size() <= viewIndex)
+            {
+                return m_env.Null();
+            }
+
+            auto* viewConfig = m_sessionState->ActiveViewConfigurations[viewIndex];
+            if (viewConfig == nullptr || !viewConfig->Initialized)
+            {
+                return m_env.Null();
+            }
+
+            const auto startViewIterator = m_sessionState->ViewConfigurationStartViewIdx.find(viewConfig);
+            if (startViewIterator == m_sessionState->ViewConfigurationStartViewIdx.end())
+            {
+                return m_env.Null();
+            }
+            const auto renderTargetIndex = viewIndex - startViewIterator->second;
+            if (viewConfig->RenderTargets.size() <= renderTargetIndex || viewConfig->RenderTargets[renderTargetIndex].JsRenderTarget.IsEmpty())
+            {
+                return m_env.Null();
+            }
+            return viewConfig->RenderTargets[renderTargetIndex].JsRenderTarget.Value();
+        }
+
+        std::optional<XRGPUSubImageData> NativeXr::Impl::GetWebGPUSubImage(uint32_t viewIndex) const
+        {
+            if (m_sessionState == nullptr || m_sessionState->ActiveViewConfigurations.size() <= viewIndex)
+            {
+                return std::nullopt;
+            }
+
+            auto* viewConfig = m_sessionState->ActiveViewConfigurations[viewIndex];
+            if (viewConfig == nullptr || !viewConfig->Initialized)
+            {
+                return std::nullopt;
+            }
+
+            const auto startViewIterator = m_sessionState->ViewConfigurationStartViewIdx.find(viewConfig);
+            if (startViewIterator == m_sessionState->ViewConfigurationStartViewIdx.end())
+            {
+                return std::nullopt;
+            }
+            const auto renderTargetIndex = viewIndex - startViewIterator->second;
+            if (viewConfig->RenderTargets.size() <= renderTargetIndex)
+            {
+                return std::nullopt;
+            }
+
+            const auto& renderTarget = viewConfig->RenderTargets[renderTargetIndex];
+            if (renderTarget.JsColorTexture.IsEmpty() || renderTarget.JsDepthTexture.IsEmpty())
+            {
+                return std::nullopt;
+            }
+
+            return XRGPUSubImageData{
+                renderTarget.JsColorTexture.Value(),
+                renderTarget.JsDepthTexture.Value(),
+                static_cast<uint32_t>(viewConfig->ViewTextureSize.Width),
+                static_cast<uint32_t>(viewConfig->ViewTextureSize.Height),
+                renderTargetIndex};
+        }
+
+        uint32_t NativeXr::Impl::GetWebGPUTextureWidth() const
+        {
+            return m_sessionState == nullptr ? 0 : m_sessionState->LastTextureWidth;
+        }
+
+        uint32_t NativeXr::Impl::GetWebGPUTextureHeight() const
+        {
+            return m_sessionState == nullptr ? 0 : m_sessionState->LastTextureHeight;
+        }
+
+        uint32_t NativeXr::Impl::GetWebGPUTextureArrayLength() const
+        {
+            return m_sessionState == nullptr ? 0 : m_sessionState->LastTextureArrayLength;
+        }
+
         arcana::task<void, std::exception_ptr> NativeXr::Impl::BeginSessionAsync()
         {
             if (m_beginTask)
@@ -334,9 +423,15 @@ namespace Babylon
             arcana::trace_region beginUpdateRegion{"NativeXR::BeginUpdate"};
 
             m_sessionState->ActiveViewConfigurations.resize(m_sessionState->Frame->Views.size());
+            m_sessionState->LastTextureWidth = 0;
+            m_sessionState->LastTextureHeight = 0;
+            m_sessionState->LastTextureArrayLength = 0;
             for (uint32_t viewIdx = 0; viewIdx < m_sessionState->Frame->Views.size(); viewIdx++)
             {
                 const auto& view = m_sessionState->Frame->Views[viewIdx];
+                m_sessionState->LastTextureWidth = static_cast<uint32_t>(view.ColorTextureSize.Width);
+                m_sessionState->LastTextureHeight = static_cast<uint32_t>(view.ColorTextureSize.Height);
+                m_sessionState->LastTextureArrayLength = std::max<uint32_t>(1, static_cast<uint32_t>(view.ColorTextureSize.Depth));
                 const auto& it{m_sessionState->TextureToViewConfigurationMap.find(view.ColorTexturePointer)};
 
                 if (it == m_sessionState->TextureToViewConfigurationMap.end() ||
@@ -384,8 +479,6 @@ namespace Babylon
                         throw std::runtime_error{error.str()};
                     }
 
-                    auto requiresAppClear = view.RequiresAppClear;
-
                     const auto eyeCount = std::max<uint32_t>(1, static_cast<uint32_t>(viewConfig.ViewTextureSize.Depth));
                     viewConfig.RenderTargets.resize(eyeCount);
                     for (uint32_t eyeIdx = 0; eyeIdx < eyeCount; eyeIdx++)
@@ -410,16 +503,18 @@ namespace Babylon
                             textureLayers,
                             depthUsage);
 
-                        auto jsWidth{Napi::Value::From(m_env, textureWidth)};
-                        auto jsHeight{Napi::Value::From(m_env, textureHeight)};
-                        auto jsRenderTarget = m_sessionState->CreateRenderTexture.Call({jsWidth, jsHeight, m_env.Null(), jsColorTexture, jsDepthTexture}).As<Napi::Object>();
-                        jsRenderTarget.Set("skipInitialClear", Napi::Boolean::New(m_env, !requiresAppClear));
-
                         renderTarget.ColorTextureId = colorTextureId;
                         renderTarget.DepthTextureId = depthTextureId;
                         renderTarget.JsColorTexture = Napi::Persistent(jsColorTexture);
                         renderTarget.JsDepthTexture = Napi::Persistent(jsDepthTexture);
-                        renderTarget.JsRenderTarget = Napi::Persistent(jsRenderTarget);
+                        if (!m_sessionState->CreateRenderTexture.IsEmpty())
+                        {
+                            auto jsWidth{Napi::Value::From(m_env, textureWidth)};
+                            auto jsHeight{Napi::Value::From(m_env, textureHeight)};
+                            auto jsRenderTarget = m_sessionState->CreateRenderTexture.Call({jsWidth, jsHeight, m_env.Null(), jsColorTexture, jsDepthTexture}).As<Napi::Object>();
+                            jsRenderTarget.Set("skipInitialClear", Napi::Boolean::New(m_env, !view.RequiresAppClear));
+                            renderTarget.JsRenderTarget = Napi::Persistent(jsRenderTarget);
+                        }
                     }
                     viewConfig.Initialized = true;
                 }

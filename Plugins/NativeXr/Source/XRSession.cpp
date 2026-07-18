@@ -9,6 +9,7 @@
 #include "PointerEvent.h"
 #include "XRWebGLBinding.h"
 #include "XRWebGLLayer.h"
+#include "XRProjectionLayer.h"
 #include "XRRigidTransform.h"
 #include "XRView.h"
 #include "XRViewerPose.h"
@@ -240,7 +241,7 @@ namespace Babylon
 
         Napi::Promise XRSession::CreateAsync(const Napi::CallbackInfo& info, std::shared_ptr<Plugins::NativeXr::Impl> nativeXr)
         {
-            auto jsSession{ Napi::Persistent(info.Env().Global().Get(JS_CLASS_NAME).As<Napi::Function>().New({info[0]})) };
+            auto jsSession{ Napi::Persistent(info.Env().Global().Get(JS_CLASS_NAME).As<Napi::Function>().New({info[0], info[1]})) };
             auto& session{ *XRSession::Unwrap(jsSession.Value()) };
             session.m_xr = std::move(nativeXr);
 
@@ -297,11 +298,93 @@ namespace Babylon
             , m_runtimeScheduler{ JsRuntime::GetFromJavaScript(info.Env()) }
             , m_jsXRFrame{ Napi::Persistent(Plugins::XRFrame::New(info)) }
             , m_xrFrame{ *Plugins::XRFrame::Unwrap(m_jsXRFrame.Get("_nativeImpl").As<Napi::Object>()) }
+            , m_renderState{ Napi::Persistent(Napi::Object::New(info.Env())) }
             , m_jsInputSources{ Napi::Persistent(Napi::Array::New(info.Env())) }
         {
             // Currently only immersive VR and immersive AR are supported.
-            assert(info[0].As<Napi::String>().Utf8Value() == XRSessionType::IMMERSIVE_VR ||
-                info[0].As<Napi::String>().Utf8Value() == XRSessionType::IMMERSIVE_AR);
+            const auto sessionType = info[0].As<Napi::String>().Utf8Value();
+            assert(sessionType == XRSessionType::IMMERSIVE_VR || sessionType == XRSessionType::IMMERSIVE_AR);
+
+            m_renderState.Set("depthNear", Napi::Number::New(info.Env(), m_depthNear));
+            m_renderState.Set("depthFar", Napi::Number::New(info.Env(), m_depthFar));
+            m_renderState.Set("baseLayer", info.Env().Null());
+            m_renderState.Set("layers", Napi::Array::New(info.Env()));
+
+            auto session = info.This().As<Napi::Object>();
+            session.Set("renderState", m_renderState.Value());
+            session.Set("environmentBlendMode", sessionType == XRSessionType::IMMERSIVE_AR ? "alpha-blend" : "opaque");
+            session.Set("interactionMode", sessionType == XRSessionType::IMMERSIVE_AR ? "screen-space" : "world-space");
+            session.Set("visibilityState", "visible");
+
+            auto enabledFeatures = Napi::Array::New(info.Env());
+            uint32_t enabledFeatureCount{};
+            if (info.Length() > 1 && info[1].IsObject())
+            {
+                const auto sessionInit = info[1].As<Napi::Object>();
+                for (const auto* featureListName : {"requiredFeatures", "optionalFeatures"})
+                {
+                    if (!sessionInit.Has(featureListName) || !sessionInit.Get(featureListName).IsArray())
+                    {
+                        continue;
+                    }
+
+                    const auto featureList = sessionInit.Get(featureListName).As<Napi::Array>();
+                    for (uint32_t index = 0; index < featureList.Length(); ++index)
+                    {
+                        if (!featureList.Get(index).IsString())
+                        {
+                            continue;
+                        }
+
+                        const auto feature = featureList.Get(index).As<Napi::String>().Utf8Value();
+                        bool alreadyEnabled{};
+                        for (uint32_t enabledIndex = 0; enabledIndex < enabledFeatureCount; ++enabledIndex)
+                        {
+                            if (enabledFeatures.Get(enabledIndex).As<Napi::String>().Utf8Value() == feature)
+                            {
+                                alreadyEnabled = true;
+                                break;
+                            }
+                        }
+                        if (!alreadyEnabled)
+                        {
+                            enabledFeatures.Set(enabledFeatureCount++, feature);
+                        }
+                        m_webGPUFeatureEnabled = m_webGPUFeatureEnabled || feature == "webgpu";
+                    }
+                }
+            }
+            session.Set("enabledFeatures", enabledFeatures);
+        }
+
+        bool XRSession::IsWebGPUFeatureEnabled() const
+        {
+            return m_webGPUFeatureEnabled;
+        }
+
+        bool XRSession::IsProjectionLayerActive(const Babylon::XRProjectionLayer& layer) const
+        {
+            return m_activeProjectionLayer == &layer;
+        }
+
+        std::optional<XRGPUSubImageData> XRSession::GetWebGPUSubImage(uint32_t viewIndex) const
+        {
+            return m_xr->GetWebGPUSubImage(viewIndex);
+        }
+
+        uint32_t XRSession::GetWebGPUTextureWidth() const
+        {
+            return m_xr->GetWebGPUTextureWidth();
+        }
+
+        uint32_t XRSession::GetWebGPUTextureHeight() const
+        {
+            return m_xr->GetWebGPUTextureHeight();
+        }
+
+        uint32_t XRSession::GetWebGPUTextureArrayLength() const
+        {
+            return m_xr->GetWebGPUTextureArrayLength();
         }
 
         void XRSession::InitializeXrLayer(Napi::Object layer)
@@ -346,14 +429,107 @@ namespace Babylon
             return m_xrFrame.DeclareNativeAnchor(env, nativeAnchor);
         }
 
+        Napi::Value XRSession::RequestReferenceSpace(const Napi::CallbackInfo& info)
+        {
+            auto deferred = Napi::Promise::Deferred::New(info.Env());
+            deferred.Resolve(XRReferenceSpace::New(info));
+            return deferred.Promise();
+        }
+
         Napi::Value XRSession::UpdateRenderState(const Napi::CallbackInfo& info)
         {
-            auto renderState = info[0].As<Napi::Object>();
-            info.This().As<Napi::Object>().Set("renderState", renderState);
+            if (info.Length() == 0 || !info[0].IsObject())
+            {
+                throw std::runtime_error{"XRSession.updateRenderState requires an XRRenderStateInit object."};
+            }
 
-            float depthNear = renderState.Get("depthNear").As<Napi::Number>().FloatValue();
-            float depthFar = renderState.Get("depthFar").As<Napi::Number>().FloatValue();
-            m_xr->SetDepthsNarFar(depthNear, depthFar);
+            const auto update = info[0].As<Napi::Object>();
+            auto depthNear = m_depthNear;
+            auto depthFar = m_depthFar;
+            bool depthsChanged{};
+            if (update.Has("depthNear") && !update.Get("depthNear").IsUndefined())
+            {
+                if (!update.Get("depthNear").IsNumber())
+                {
+                    throw std::runtime_error{"XRSession.updateRenderState depthNear must be a number."};
+                }
+                depthNear = update.Get("depthNear").As<Napi::Number>().FloatValue();
+                depthsChanged = true;
+            }
+            if (update.Has("depthFar") && !update.Get("depthFar").IsUndefined())
+            {
+                if (!update.Get("depthFar").IsNumber())
+                {
+                    throw std::runtime_error{"XRSession.updateRenderState depthFar must be a number."};
+                }
+                depthFar = update.Get("depthFar").As<Napi::Number>().FloatValue();
+                depthsChanged = true;
+            }
+            if (depthNear <= 0.0f || depthFar <= depthNear)
+            {
+                throw std::runtime_error{"XRSession.updateRenderState requires 0 < depthNear < depthFar."};
+            }
+
+            const auto hasLayers = update.Has("layers") && !update.Get("layers").IsUndefined();
+            Babylon::XRProjectionLayer* projectionLayerCandidate{};
+            if (hasLayers)
+            {
+                if (!update.Get("layers").IsArray())
+                {
+                    throw std::runtime_error{"XRSession.updateRenderState layers must be an array."};
+                }
+
+                const auto layers = update.Get("layers").As<Napi::Array>();
+                if (layers.Length() > 1)
+                {
+                    throw std::runtime_error{"NativeXR currently supports one active WebGPU projection layer."};
+                }
+
+                if (layers.Length() == 1)
+                {
+                    const auto layerValue = layers.Get(uint32_t{0});
+                    const auto projectionLayerConstructor = info.Env().Global().Get("XRProjectionLayer").As<Napi::Function>();
+                    if (!layerValue.IsObject() || !layerValue.As<Napi::Object>().InstanceOf(projectionLayerConstructor))
+                    {
+                        throw std::runtime_error{"NativeXR renderState.layers only supports XRProjectionLayer objects."};
+                    }
+
+                    projectionLayerCandidate = Babylon::XRProjectionLayer::Unwrap(layerValue.As<Napi::Object>());
+                    if (projectionLayerCandidate == nullptr || !projectionLayerCandidate->BelongsTo(*this))
+                    {
+                        throw std::runtime_error{"XRSession.updateRenderState received a projection layer from another XRSession."};
+                    }
+                }
+            }
+
+            if (depthsChanged)
+            {
+                m_xr->SetDepthsNarFar(depthNear, depthFar);
+                m_depthNear = depthNear;
+                m_depthFar = depthFar;
+                m_renderState.Set("depthNear", Napi::Number::New(info.Env(), m_depthNear));
+                m_renderState.Set("depthFar", Napi::Number::New(info.Env(), m_depthFar));
+            }
+
+            if (hasLayers)
+            {
+                const auto layers = update.Get("layers").As<Napi::Array>();
+                m_activeProjectionLayer = projectionLayerCandidate;
+                m_renderState.Set("layers", layers);
+                m_renderState.Set("baseLayer", info.Env().Null());
+            }
+            else if (update.Has("baseLayer"))
+            {
+                const auto baseLayer = update.Get("baseLayer");
+                m_renderState.Set("baseLayer", baseLayer.IsUndefined() ? info.Env().Null() : baseLayer);
+                m_renderState.Set("layers", Napi::Array::New(info.Env()));
+                m_activeProjectionLayer = nullptr;
+            }
+
+            if (update.Has("inlineVerticalFieldOfView"))
+            {
+                m_renderState.Set("inlineVerticalFieldOfView", update.Get("inlineVerticalFieldOfView"));
+            }
 
             auto deferred = Napi::Promise::Deferred::New(info.Env());
             deferred.Resolve(info.Env().Undefined());

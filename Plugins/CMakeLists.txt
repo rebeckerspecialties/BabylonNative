@@ -10,6 +10,10 @@ if(BABYLON_NATIVE_PLUGIN_NATIVEWEBGPU)
     add_subdirectory(NativeWebGPU)
 endif()
 
+if(BABYLON_NATIVE_PLUGIN_NATIVEXR AND (ANDROID OR IOS))
+    add_subdirectory(NativeXr)
+endif()
+
 if(BABYLON_NATIVE_PLUGIN_NATIVEENCODING AND (APPLE OR TARGET bimg))
     add_subdirectory(NativeEncoding)
 endif()

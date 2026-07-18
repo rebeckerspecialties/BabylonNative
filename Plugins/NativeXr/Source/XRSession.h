@@ -1,9 +1,26 @@
 #pragma once
 
+#include <Babylon/JsRuntimeScheduler.h>
+#include <Babylon/Plugins/NativeXr.h>
+
+#include <XR.h>
+
+#include "XRGPUSubImage.h"
+
+#include <algorithm>
+#include <map>
+#include <optional>
+#include <string>
+#include <vector>
+
 namespace Babylon
 {
+    class XRProjectionLayer;
+
     namespace Plugins
     {
+        class XRFrame;
+
         // Implementation of the XRSession interface: https://immersive-web.github.io/webxr/#xrsession-interface
         class XRSession : public Napi::ObjectWrap<XRSession>
         {
@@ -31,6 +48,12 @@ namespace Babylon
             XRSession(const Napi::CallbackInfo& info);
             void InitializeXrLayer(Napi::Object layer);
 
+            bool IsWebGPUFeatureEnabled() const;
+            bool IsProjectionLayerActive(const Babylon::XRProjectionLayer& layer) const;
+            std::optional<XRGPUSubImageData> GetWebGPUSubImage(uint32_t viewIndex) const;
+            uint32_t GetWebGPUTextureWidth() const;
+            uint32_t GetWebGPUTextureHeight() const;
+            uint32_t GetWebGPUTextureArrayLength() const;
             Napi::Value GetRenderTargetForEye(const std::string& eye) const;
             void SetRenderTextureFunctions(const Napi::Function& createFunction, const Napi::Function& destroyFunction);
             Napi::Value DeclareNativeAnchor(const Napi::Env& env, xr::NativeAnchorPtr nativeAnchor);
@@ -42,6 +65,11 @@ namespace Babylon
             Napi::ObjectReference m_jsXRFrame{};
             Plugins::XRFrame& m_xrFrame;
             uint32_t m_timestamp{ 0 };
+            Napi::ObjectReference m_renderState{};
+            Babylon::XRProjectionLayer* m_activeProjectionLayer{};
+            float m_depthNear{0.1f};
+            float m_depthFar{1000.0f};
+            bool m_webGPUFeatureEnabled{};
 
             std::vector<std::pair<std::string, Napi::FunctionReference>> m_eventNamesAndCallbacks{};
 
@@ -79,12 +107,7 @@ namespace Babylon
                     m_eventNamesAndCallbacks.end());
             }
 
-            Napi::Value RequestReferenceSpace(const Napi::CallbackInfo& info)
-            {
-                auto deferred = Napi::Promise::Deferred::New(info.Env());
-                deferred.Resolve(XRReferenceSpace::New(info));
-                return deferred.Promise();
-            }
+            Napi::Value RequestReferenceSpace(const Napi::CallbackInfo& info);
 
             Napi::Value UpdateRenderState(const Napi::CallbackInfo& info);
 

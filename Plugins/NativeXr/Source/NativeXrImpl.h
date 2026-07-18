@@ -1,5 +1,9 @@
 #pragma once
 
+#include "XRGPUSubImage.h"
+
+#include <optional>
+
 namespace Babylon
 {
     namespace Plugins
@@ -17,30 +21,13 @@ namespace Babylon
 
             void ScheduleFrame(std::function<void(const std::shared_ptr<const xr::System::Session::Frame>&)>&& callback);
 
-            void SetRenderTextureFunctions(const Napi::Function& createFunction, const Napi::Function& destroyFunction)
-            {
-                m_sessionState->CreateRenderTexture = Napi::Persistent(createFunction);
-                m_sessionState->DestroyRenderTexture = Napi::Persistent(destroyFunction);
-            }
+            void SetRenderTextureFunctions(const Napi::Function& createFunction, const Napi::Function& destroyFunction);
 
-            Napi::Value GetRenderTargetForViewIndex(uint32_t viewIndex) const
-            {
-                const auto& activeViewConfigs = m_sessionState->ActiveViewConfigurations;
-                if (activeViewConfigs.size() <= viewIndex ||
-                    activeViewConfigs[viewIndex] == nullptr ||
-                    !activeViewConfigs[viewIndex]->Initialized)
-                {
-                    return m_env.Null();
-                }
-
-                const auto viewConfig = activeViewConfigs[viewIndex];
-                const auto startViewIdx = m_sessionState->ViewConfigurationStartViewIdx[viewConfig];
-                if (viewConfig->RenderTargets.size() <= viewIndex - startViewIdx)
-                {
-                    return m_env.Null();
-                }
-                return viewConfig->RenderTargets[viewIndex - startViewIdx].JsRenderTarget.Value();
-            }
+            Napi::Value GetRenderTargetForViewIndex(uint32_t viewIndex) const;
+            std::optional<XRGPUSubImageData> GetWebGPUSubImage(uint32_t viewIndex) const;
+            uint32_t GetWebGPUTextureWidth() const;
+            uint32_t GetWebGPUTextureHeight() const;
+            uint32_t GetWebGPUTextureArrayLength() const;
 
             void SetDepthsNarFar(float depthNear, float depthFar)
             {
@@ -123,15 +110,20 @@ namespace Babylon
             {
                 explicit SessionState(Graphics::DeviceContext& graphicsContext)
                     : GraphicsContext{graphicsContext}
+                    , Update{graphicsContext.GetUpdate("NativeXR")}
                 {
                 }
 
                 Graphics::DeviceContext& GraphicsContext;
+                Graphics::Update Update;
                 Napi::FunctionReference CreateRenderTexture{};
                 Napi::FunctionReference DestroyRenderTexture{};
                 std::vector<ViewConfiguration*> ActiveViewConfigurations{};
                 std::unordered_map<ViewConfiguration*, uint32_t> ViewConfigurationStartViewIdx{};
                 std::unordered_map<void*, ViewConfiguration> TextureToViewConfigurationMap{};
+                uint32_t LastTextureWidth{};
+                uint32_t LastTextureHeight{};
+                uint32_t LastTextureArrayLength{};
                 std::shared_ptr<xr::System::Session> Session{};
                 std::shared_ptr<xr::System::Session::Frame> Frame{};
                 arcana::cancellation_source CancellationSource{};

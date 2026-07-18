@@ -12,6 +12,9 @@
 #include "PointerEvent.h"
 #include "XRWebGLBinding.h"
 #include "XRWebGLLayer.h"
+#include "XRGPUBinding.h"
+#include "XRGPUSubImage.h"
+#include "XRProjectionLayer.h"
 #include "XRRigidTransform.h"
 #include "XRView.h"
 #include "XRViewerPose.h"
@@ -67,6 +70,9 @@ namespace Babylon
             XRHitTestResult::Initialize(env);
             XRRay::Initialize(env);
             XRSession::Initialize(env);
+            XRGPUSubImage::Initialize(env);
+            XRProjectionLayer::Initialize(env);
+            XRGPUBinding::Initialize(env);
             NativeWebXRRenderTarget::Initialize(env);
             NativeRenderTargetProvider::Initialize(env);
             XR::Initialize(env, impl);

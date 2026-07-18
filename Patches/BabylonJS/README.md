@@ -9,9 +9,13 @@ The patches are source-oriented on purpose. Avoid patching generated UMD files
 such as `Apps/node_modules/babylonjs/babylon.max.js`; those diffs are large,
 hard to review, and hide the real upstreamable changes.
 
-## Included Patch
+## Included Patches
 
-- `0001-add-webgpu-render-command-batching.patch`
+- `0001-enable-webgpu-layers-for-native-xr.patch`
+  - Lets a native runtime use the standard WebXR-WebGPU projection-layer path
+    when it exposes `XRGPUBinding`, while retaining the legacy native WebGL
+    render-target path. Browser WebGL and WebGPU behavior is unchanged.
+- `0002-add-webgpu-render-command-batching.patch`
   - Adds a backend-neutral render command batcher and WebGPU render-pass
     lowering path, with fallback replay and focused unit tests for
     compatibility boundaries.
