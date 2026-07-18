@@ -11,13 +11,13 @@
     "patch:babylonjs:apply": "node scripts/applyBabylonJsPatchStack.js --apply"
   },
   "dependencies": {
-    "babylonjs": "^9.12.0",
-    "babylonjs-addons": "^9.12.0",
-    "babylonjs-gltf2interface": "^9.12.0",
-    "babylonjs-gui": "^9.12.0",
-    "babylonjs-loaders": "^9.12.0",
-    "babylonjs-materials": "^9.12.0",
-    "babylonjs-serializers": "^9.12.0",
+    "babylonjs": "^9.15.0",
+    "babylonjs-addons": "^9.15.0",
+    "babylonjs-gltf2interface": "^9.15.0",
+    "babylonjs-gui": "^9.15.0",
+    "babylonjs-loaders": "^9.15.0",
+    "babylonjs-materials": "^9.15.0",
+    "babylonjs-serializers": "^9.15.0",
     "jsc-android": "^241213.1.0",
     "v8-android": "^7.8.2"
   }

@@ -3,7 +3,6 @@
 
 #ifdef BABYLON_NATIVE_PLUGIN_NATIVEENGINE_LOAD_IMAGES
 #include <bgfx/bgfx.h>
-#include <bgfx/platform.h>
 #include <bimg/decode.h>
 #include <bimg/encode.h>
 #include <bx/file.h>

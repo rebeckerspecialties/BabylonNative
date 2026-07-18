@@ -266,6 +266,27 @@
         return collector;
     }
 
+    // Emitted after a pixel-comparison failure to make triage faster. Prints the
+    // rendered/diff PNG paths and, for scenes fetched from the Babylon snippet
+    // server, a transient-flake hint: those tests pull the GUI library, textures
+    // and web fonts over the network/CDN, so their output depends on async
+    // asset/font-load timing. A pixel diff there is frequently a transient flake
+    // rather than a real regression -- the 'Parse GUI json with unicode' snippet
+    // test is the canonical example (its GUI text renders with the fallback font
+    // until 'droidsans' finishes loading, shifting thousands of glyph pixels).
+    function logFailureDiagnostics(test) {
+        const outDir = TestUtils.getOutputDirectory();
+        if (test.referenceImage) {
+            console.log(`  Rendered result: ${outDir}/Results/${test.referenceImage}`);
+            console.log(`  Diff overlay:    ${outDir}/Errors/${test.referenceImage}`);
+        }
+        if (test.playgroundId) {
+            console.log(`  Note: this test loads playgroundId ${test.playgroundId} from the snippet server and pulls GUI/assets/fonts over the network, so a pixel diff is often a transient async asset/font-load timing flake.`);
+            console.log("  Re-run in isolation to confirm a real regression:");
+            console.log(`    Playground --headless --once --test "${test.title || ""}" app:///Scripts/validation_native.js`);
+        }
+    }
+
     // Per-run counters surfaced as a final summary line on exit.
     let ranCount = 0;
     let passedCount = 0;
@@ -2394,7 +2415,9 @@ fragmentOutputs.color=color;
             }
 
             if (differencesCount === 0) {
-                console.log(`First pixel off at ${index}: Value: (${renderData[index]}, ${renderData[index + 1]}, ${renderData[index + 2]}) - Expected: (${referenceData[index]}, ${referenceData[index + 1]}, ${referenceData[index + 2]}) `);
+                const pixel = index / 4;
+                const width = Math.round(comparisonWidth / getValidationHardwareScalingLevel());
+                console.log(`First pixel off at ${index} (pixel ${pixel} @ x=${pixel % width}, y=${Math.floor(pixel / width)}): Value: (${renderData[index]}, ${renderData[index + 1]}, ${renderData[index + 2]}) - Expected: (${referenceData[index]}, ${referenceData[index + 1]}, ${referenceData[index + 2]}) `);
             }
 
             referenceData[index] = 255;
@@ -2404,7 +2427,9 @@ fragmentOutputs.color=color;
         }
 
         if (differencesCount) {
-            console.log("Pixel difference: " + differencesCount + " pixels.");
+            const pixelCount = size / 4;
+            const diffRatio = (differencesCount * 100) / pixelCount;
+            console.log(`Pixel difference: ${differencesCount} / ${pixelCount} pixels (${diffRatio.toFixed(3)}%, per-channel threshold ${threshold}); allowed errorRatio ${errorRatio}%.`);
         } else {
             console.log("No pixel difference!");
         }
@@ -2441,7 +2466,8 @@ fragmentOutputs.color=color;
 
             if (compareFunction(test, screenshot, referenceImage, test.threshold || 25, test.errorRatio || defaultErrorRatio, screenshotWidth, screenshotHeight)) {
                 testRes = false;
-                console.log("Test '" + (test.title || "(unnamed)") + "' failed");
+                console.log("Test '" + (test.title || "(unnamed)") + "' failed (pixel comparison)");
+                logFailureDiagnostics(test);
                 logNativeWebGPUStats("after failed " + (test.title || "(unnamed)"));
                 if (engine.isWebGPU) {
                     console.error("SCENE_RENDER_MISMATCH_DIAGNOSTICS: " + getSceneFamilyReadinessDiagnostics(currentScene));
@@ -2845,22 +2871,37 @@ fragmentOutputs.color=color;
                                 }
                             }
 
-                            seed = 1;
-                            currentScene = eval(code + "\r\ncreateScene(engine)");
+                            const pgCode = code + "\r\ncreateScene(engine)";
+                            // Defer scene construction to a fresh macrotask so
+                            // eval()/createScene() run at a shallow native-stack
+                            // depth instead of nested inside the native snippet
+                            // load callback. Deep scenes otherwise pile onto the
+                            // native XHR dispatch frames and can overflow engines
+                            // with a small C stack (e.g. QuickJS).
+                            setTimeout(function () {
+                                try {
+                                    seed = 1;
+                                    currentScene = eval(pgCode);
 
-                            if (currentScene.then) {
-                                // Handle if createScene returns a promise
-                                currentScene.then(function (scene) {
-                                    currentScene = scene;
-                                    processCurrentScene(test, referenceImage, done, compareFunction);
-                                }).catch(function (e) {
-                                    console.error(e);
+                                    if (currentScene && currentScene.then) {
+                                        // Handle if createScene returns a promise
+                                        currentScene.then(function (scene) {
+                                            currentScene = scene;
+                                            processCurrentScene(test, referenceImage, done, compareFunction);
+                                        }).catch(function (e) {
+                                            console.error(e);
+                                            failTest(done);
+                                        });
+                                    } else {
+                                        // Handle if createScene returns a scene
+                                        processCurrentScene(test, referenceImage, done, compareFunction);
+                                    }
+                                }
+                                catch (e) {
+                                    console.error("Failed to evaluate playground snippet " + test.playgroundId + ": " + e);
                                     failTest(done);
-                                });
-                            } else {
-                                // Handle if createScene returns a scene
-                                processCurrentScene(test, referenceImage, done, compareFunction);
-                            }
+                                }
+                            }, 0);
                         }
                         catch (e) {
                             console.error("Failed to evaluate playground snippet " + test.playgroundId + ": " + e);
@@ -2913,19 +2954,28 @@ fragmentOutputs.color=color;
                         }
                     }
 
-                    seed = 1;
-                    currentScene = eval(scriptToRun + test.functionToCall + "(engine)");
-                    if (currentScene && currentScene.then) {
-                        currentScene.then(function (scene) {
-                            currentScene = scene;
-                            processCurrentScene(test, referenceImage, done, compareFunction);
-                        }).catch(function (e) {
+                    const scriptCode = scriptToRun + test.functionToCall + "(engine)";
+                    // Keep scene construction off the native load callback's C stack.
+                    setTimeout(function () {
+                        try {
+                            seed = 1;
+                            currentScene = eval(scriptCode);
+                            if (currentScene && currentScene.then) {
+                                currentScene.then(function (scene) {
+                                    currentScene = scene;
+                                    processCurrentScene(test, referenceImage, done, compareFunction);
+                                }).catch(function (e) {
+                                    console.error(e);
+                                    failTest(done);
+                                });
+                            } else {
+                                processCurrentScene(test, referenceImage, done, compareFunction);
+                            }
+                        } catch (e) {
                             console.error(e);
                             failTest(done);
-                        });
-                    } else {
-                        processCurrentScene(test, referenceImage, done, compareFunction);
-                    }
+                        }
+                    }, 0);
                 }
                 catch (e) {
                     console.error(e);

@@ -26,7 +26,7 @@ FetchContent_Declare(AndroidExtensions
     EXCLUDE_FROM_ALL)
 FetchContent_Declare(arcana.cpp
     GIT_REPOSITORY https://github.com/microsoft/arcana.cpp.git
-    GIT_TAG 0b9f9b6d761909fbca9d3ab1f2d8ff1c3d25ed3d
+    GIT_TAG fe41b17dedea47b5dead98f0271ca284e94ac6a8
     EXCLUDE_FROM_ALL)
 FetchContent_Declare(arcore-android-sdk
     GIT_REPOSITORY https://github.com/google-ar/arcore-android-sdk.git
@@ -35,6 +35,10 @@ FetchContent_Declare(arcore-android-sdk
 FetchContent_Declare(base-n
     GIT_REPOSITORY https://github.com/azawadzki/base-n.git
     GIT_TAG 7573e77c0b9b0e8a5fb63d96dbde212c921993b4
+    EXCLUDE_FROM_ALL)
+FetchContent_Declare(bgfx.cmake
+    GIT_REPOSITORY https://github.com/BabylonJS/bgfx.cmake.git
+    GIT_TAG 9c64597523a4edb3c54ef66f7ad1c7c3fa806ceb
     EXCLUDE_FROM_ALL)
 FetchContent_Declare(CMakeExtensions
     GIT_REPOSITORY https://github.com/BabylonJS/CMakeExtensions.git
@@ -53,7 +57,7 @@ FetchContent_Declare(ios-cmake
     EXCLUDE_FROM_ALL)
 FetchContent_Declare(JsRuntimeHost
     GIT_REPOSITORY https://github.com/BabylonJS/JsRuntimeHost.git
-    GIT_TAG f07d99119887131a89a3580ada9c2a8dbc7782f7)
+    GIT_TAG 8cd142951018de07c89c23f726fb7dc9c8374599)
 FetchContent_Declare(libwebp
     GIT_REPOSITORY https://github.com/webmproject/libwebp.git
     GIT_TAG baff2c8980970f58e2aa88622c6575bdee2f876a
@@ -69,7 +73,7 @@ FetchContent_Declare(wgpu_native
     EXCLUDE_FROM_ALL)
 FetchContent_Declare(metal-cpp
     GIT_REPOSITORY https://github.com/bkaradzic/metal-cpp.git
-    GIT_TAG 9a8bc57c0318b84863bec2faf6605594877c5f5d
+    GIT_TAG metal-cpp_26
     EXCLUDE_FROM_ALL)
 FetchContent_Declare(SPIRV-Cross
     GIT_REPOSITORY https://github.com/BabylonJS/SPIRV-Cross.git
