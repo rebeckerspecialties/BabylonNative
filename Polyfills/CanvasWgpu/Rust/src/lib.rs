@@ -356,20 +356,11 @@ fn gradient_stops_from_raw(stops: *const NVGgradientStop, stop_count: usize) -> 
 
 fn lerp_color(start: Color, end: Color, t: f32) -> Color {
     let t = t.clamp(0.0, 1.0);
-    let alpha = start.a + (end.a - start.a) * t;
-    let premultiplied_r = start.r * start.a + (end.r * end.a - start.r * start.a) * t;
-    let premultiplied_g = start.g * start.a + (end.g * end.a - start.g * start.a) * t;
-    let premultiplied_b = start.b * start.a + (end.b * end.a - start.b * start.a) * t;
-
-    if alpha <= f32::EPSILON {
-        return Color::rgbaf(0.0, 0.0, 0.0, 0.0);
-    }
-
     Color::rgbaf(
-        (premultiplied_r / alpha).clamp(0.0, 1.0),
-        (premultiplied_g / alpha).clamp(0.0, 1.0),
-        (premultiplied_b / alpha).clamp(0.0, 1.0),
-        alpha.clamp(0.0, 1.0),
+        (start.r + (end.r - start.r) * t).clamp(0.0, 1.0),
+        (start.g + (end.g - start.g) * t).clamp(0.0, 1.0),
+        (start.b + (end.b - start.b) * t).clamp(0.0, 1.0),
+        (start.a + (end.a - start.a) * t).clamp(0.0, 1.0),
     )
 }
 
@@ -393,6 +384,26 @@ fn sample_gradient(stops: &[(f32, Color)], offset: f32) -> Color {
     }
 
     stops[stops.len() - 1].1
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn canvas_gradient_interpolates_straight_rgba() {
+        let stops = [
+            (0.0, Color::rgbaf(1.0, 0.0, 0.0, 1.0)),
+            (1.0, Color::rgbaf(0.0, 0.0, 0.0, 0.0)),
+        ];
+
+        let midpoint = sample_gradient(&stops, 0.5);
+
+        assert!((midpoint.r - 0.5).abs() < f32::EPSILON);
+        assert_eq!(midpoint.g, 0.0);
+        assert_eq!(midpoint.b, 0.0);
+        assert!((midpoint.a - 0.5).abs() < f32::EPSILON);
+    }
 }
 
 fn linear_gradient_offset(px: f32, py: f32, x0: f32, y0: f32, x1: f32, y1: f32) -> f32 {
