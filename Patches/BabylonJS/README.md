@@ -2,33 +2,25 @@
 
 This directory contains the local Babylon.js source patches needed for
 NativeWebGPU and NativeXR portal validation in this BabylonNative branch.
-The stack is maintained against the sibling Babylon.js checkout used for this
-branch, currently the `codex/webgpu-wgsl-gui3d-particles` branch carrying
-`BabylonJS/Babylon.js#18460`.
+The stack is maintained against the Babylon.js `9.17.0` release used by this
+branch.
 
 The patches are source-oriented on purpose. Avoid patching generated UMD files
 such as `Apps/node_modules/babylonjs/babylon.max.js`; those diffs are large,
 hard to review, and hide the real upstreamable changes.
 
-## Included Patches
+## Included Patch
 
-- `0001-preserve-ktx-compressed-srgb-metadata.patch`
-  - Preserves compressed KTX sRGB/gamma metadata so native compressed texture
-    uploads keep the intended color space.
-- `0002-support-ssao2-world-space-normals.patch`
-  - Lets SSAO2 consume world-space normals by transforming them into view space
-    in the shader.
-- `0003-wrap-native-xr-webgpu-render-targets.patch`
-  - Wraps NativeXR WebGPU color/depth textures as Babylon.js render targets.
-- `0004-add-webgpu-render-command-batching.patch`
+- `0001-add-webgpu-render-command-batching.patch`
   - Adds a backend-neutral render command batcher and WebGPU render-pass
     lowering path, with fallback replay and focused unit tests for
     compatibility boundaries.
 
-The DOM-free font offset fallback from `BabylonJS/Babylon.js#18463` is not
-included because it is already part of Babylon.js 9.10.1. IBL-shadow
-experiments and custom animation-frame requester plumbing are intentionally not
-part of this stack.
+The KTX compressed-sRGB fix (`BabylonJS/Babylon.js#18538`), SSAO2 world-space
+normal fix (`BabylonJS/Babylon.js#18539`), DOM-free font offset fallback
+(`BabylonJS/Babylon.js#18463`), and standard WebGPU XR render-target provider
+are already part of Babylon.js 9.17.0. IBL-shadow experiments and custom
+animation-frame requester plumbing are intentionally not part of this stack.
 
 ## Apply And Verify
 
@@ -45,9 +37,10 @@ The default Babylon.js path is the sibling checkout at `../Babylon.js`, so the
 The check command creates a temporary clean worktree from the target checkout's
 current `HEAD`, then requires every patch in `series` to either apply cleanly
 or be detected as already present by a reverse-apply check. Anything else fails
-hard. The apply command performs the same temporary-worktree preflight before
-mutating the target checkout, then applies or skips already-present patches in
-order. It refuses to apply over unstaged or staged local changes.
+hard. Run it against a checkout at the documented Babylon.js release. The apply
+command performs the same temporary-worktree preflight before mutating the
+target checkout, then applies or skips already-present patches in order. It
+refuses to apply over unstaged or staged local changes.
 
 After applying, rebuild Babylon.js and copy the generated bundles into
 BabylonNative using the flow documented in `AGENTS.md`.

@@ -1,8 +1,3 @@
-# Babylon.js source patch stack for NativeWebGPU/NativeXR local validation.
-# Keep this ordered from browser-shaped correctness fixes to native-only bridge
-# optimizations. The apply script treats missing or non-applying patches as hard
-# failures.
-0001-preserve-ktx-compressed-srgb-metadata.patch
-0002-support-ssao2-world-space-normals.patch
-0003-wrap-native-xr-webgpu-render-targets.patch
-0004-add-webgpu-render-command-batching.patch
+# Babylon.js source patch stack for NativeWebGPU local validation.
+# The apply script treats missing or non-applying patches as hard failures.
+0001-add-webgpu-render-command-batching.patch

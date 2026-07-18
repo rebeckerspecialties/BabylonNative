@@ -1,6 +1,6 @@
-From 667696d51f2c8e698625f1d71e35ceb38ff1c001 Mon Sep 17 00:00:00 2001
+From 98b4353b317464e2a8246d3d4ed87962e476220a Mon Sep 17 00:00:00 2001
 From: Matt Hargett <plaztiksyke@gmail.com>
-Date: Tue, 2 Jun 2026 13:21:01 -0700
+Date: Fri, 17 Jul 2026 22:30:33 -0700
 Subject: [PATCH] Add WebGPU render command batching
 
 ---
@@ -347,13 +347,13 @@ index 0000000000..9b7929b337
 +    }
 +}
 diff --git a/packages/dev/core/src/Engines/pure.ts b/packages/dev/core/src/Engines/pure.ts
-index 2cd3aaa19f..88c2fe568b 100644
+index 640b71f265..5bead6a187 100644
 --- a/packages/dev/core/src/Engines/pure.ts
 +++ b/packages/dev/core/src/Engines/pure.ts
-@@ -42,5 +42,6 @@ export * from "./Processors/iShaderProcessor";
- export * from "./engine.common";
+@@ -43,5 +43,6 @@ export * from "./engine.common";
  export * from "./engineRegistration.pure";
  export * from "./nullEngineRegistration.pure";
+ export * from "./thinEngine.scissor.pure";
 +export * from "./renderCommandBatcher.pure";
  export * from "./Processors/pure";
  export * from "./WebGPU/pure";
@@ -399,7 +399,7 @@ index 0000000000..5c630659c7
 +    }
 +}
 diff --git a/packages/dev/core/src/Engines/webgpuEngine.pure.ts b/packages/dev/core/src/Engines/webgpuEngine.pure.ts
-index f89292f182..544efb7dcd 100644
+index 02a0d0a135..4ebfd86ba9 100644
 --- a/packages/dev/core/src/Engines/webgpuEngine.pure.ts
 +++ b/packages/dev/core/src/Engines/webgpuEngine.pure.ts
 @@ -79,8 +79,15 @@ import { PerfCounter } from "../Misc/perfCounter";
@@ -418,7 +418,7 @@ index f89292f182..544efb7dcd 100644
  import { type TextureSampler } from "../Materials/Textures/textureSampler";
  import { type StorageBuffer } from "../Buffers/storageBuffer";
  
-@@ -406,6 +413,19 @@ export class WebGPUEngine extends ThinWebGPUEngine {
+@@ -416,6 +423,19 @@ export class WebGPUEngine extends ThinWebGPUEngine {
      private _currentVertexBuffers: { [key: string]: Nullable<VertexBuffer> } = {};
      private _currentOverrideVertexBuffers: Nullable<{ [key: string]: Nullable<VertexBuffer> }> = null;
      private _currentIndexBuffer: Nullable<DataBuffer> = null;
@@ -438,7 +438,7 @@ index f89292f182..544efb7dcd 100644
      private _dummyIndexBuffer: WebGPUDataBuffer;
      private _colorWriteLocal = true;
      private _forceEnableEffect = false;
-@@ -1330,6 +1350,12 @@ export class WebGPUEngine extends ThinWebGPUEngine {
+@@ -1343,6 +1363,12 @@ export class WebGPUEngine extends ThinWebGPUEngine {
          return this._currentRenderTarget ? this._rttRenderPassWrapper : this._mainRenderPassWrapper;
      }
  
@@ -451,7 +451,7 @@ index f89292f182..544efb7dcd 100644
      //------------------------------------------------------------------------------
      //                          Static Pipeline WebGPU States
      //------------------------------------------------------------------------------
-@@ -1432,6 +1458,7 @@ export class WebGPUEngine extends ThinWebGPUEngine {
+@@ -1455,6 +1481,7 @@ export class WebGPUEngine extends ThinWebGPUEngine {
          if (bundleList) {
              bundleList.addItem(new WebGPURenderItemViewport(x, y, w, h));
          } else {
@@ -459,7 +459,7 @@ index f89292f182..544efb7dcd 100644
              this._getCurrentRenderPass().setViewport(x, y, w, h, 0, 1);
          }
      }
-@@ -1473,6 +1500,7 @@ export class WebGPUEngine extends ThinWebGPUEngine {
+@@ -1496,6 +1523,7 @@ export class WebGPUEngine extends ThinWebGPUEngine {
          if (bundleList) {
              bundleList.addItem(new WebGPURenderItemScissor(this._scissorCached.x, y, this._scissorCached.z, this._scissorCached.w));
          } else {
@@ -467,7 +467,7 @@ index f89292f182..544efb7dcd 100644
              this._getCurrentRenderPass().setScissorRect(this._scissorCached.x, y, this._scissorCached.z, this._scissorCached.w);
          }
      }
-@@ -1517,6 +1545,7 @@ export class WebGPUEngine extends ThinWebGPUEngine {
+@@ -1540,6 +1568,7 @@ export class WebGPUEngine extends ThinWebGPUEngine {
          if (bundleList) {
              bundleList.addItem(new WebGPURenderItemStencilRef(this._stencilStateComposer.funcRef ?? 0));
          } else {
@@ -475,7 +475,7 @@ index f89292f182..544efb7dcd 100644
              this._getCurrentRenderPass().setStencilReference(this._stencilStateComposer.funcRef ?? 0);
          }
      }
-@@ -1546,6 +1575,7 @@ export class WebGPUEngine extends ThinWebGPUEngine {
+@@ -1569,6 +1598,7 @@ export class WebGPUEngine extends ThinWebGPUEngine {
          if (bundleList) {
              bundleList.addItem(new WebGPURenderItemBlendColor(this._alphaState._blendConstants.slice()));
          } else {
@@ -483,7 +483,7 @@ index f89292f182..544efb7dcd 100644
              this._getCurrentRenderPass().setBlendConstant(this._alphaState._blendConstants as GPUColor);
          }
      }
-@@ -1603,6 +1633,8 @@ export class WebGPUEngine extends ThinWebGPUEngine {
+@@ -1626,6 +1656,8 @@ export class WebGPUEngine extends ThinWebGPUEngine {
      }
  
      private _clearFullQuad(clearColor?: Nullable<IColor4Like>, clearDepth?: boolean, clearStencil?: boolean): void {
@@ -492,7 +492,7 @@ index f89292f182..544efb7dcd 100644
          const renderPass = !this.compatibilityMode ? null : this._getCurrentRenderPass();
  
          this._clearQuad.setColorFormat(this._colorFormat);
-@@ -3704,14 +3736,25 @@ export class WebGPUEngine extends ThinWebGPUEngine {
+@@ -3734,14 +3766,25 @@ export class WebGPUEngine extends ThinWebGPUEngine {
          this._stencilStateComposer.stencilMaterial = stencil;
      }
  
@@ -520,7 +520,7 @@ index f89292f182..544efb7dcd 100644
              this._applyScissor(bundleList);
          }
          if (mustUpdateStencilRef) {
-@@ -3722,7 +3765,7 @@ export class WebGPUEngine extends ThinWebGPUEngine {
+@@ -3752,7 +3795,7 @@ export class WebGPUEngine extends ThinWebGPUEngine {
          }
      }
  
@@ -529,7 +529,7 @@ index f89292f182..544efb7dcd 100644
          const renderPass = this._getCurrentRenderPass();
          const bundleList = this._bundleList;
  
-@@ -3795,6 +3838,8 @@ export class WebGPUEngine extends ThinWebGPUEngine {
+@@ -3825,6 +3868,8 @@ export class WebGPUEngine extends ThinWebGPUEngine {
          const pipeline = this._cacheRenderPipeline.getRenderPipeline(fillMode, this._currentEffect!, this.currentSampleCount, textureState);
  
          const bindGroups = this._cacheBindGroups.getBindGroups(webgpuPipelineContext, this._currentDrawContext, this._currentMaterialContext);
@@ -538,7 +538,7 @@ index f89292f182..544efb7dcd 100644
  
          if (!this._snapshotRendering.record) {
              this._applyRenderPassChanges(!this.compatibilityMode ? bundleList : null);
-@@ -3808,48 +3853,49 @@ export class WebGPUEngine extends ThinWebGPUEngine {
+@@ -3838,48 +3883,49 @@ export class WebGPUEngine extends ThinWebGPUEngine {
              }
          }
  
@@ -625,7 +625,7 @@ index f89292f182..544efb7dcd 100644
  
          if (nonCompatMode) {
              this._currentDrawContext.fastBundle = (renderPass2 as GPURenderBundleEncoder).finish();
-@@ -3867,7 +3913,7 @@ export class WebGPUEngine extends ThinWebGPUEngine {
+@@ -3897,7 +3943,7 @@ export class WebGPUEngine extends ThinWebGPUEngine {
       * @param instancesCount defines the number of instances to draw (if instantiation is enabled)
       */
      public drawElementsType(fillMode: number, indexStart: number, indexCount: number, instancesCount: number = 1): void {
@@ -634,7 +634,7 @@ index f89292f182..544efb7dcd 100644
      }
  
      /**
-@@ -3879,7 +3925,7 @@ export class WebGPUEngine extends ThinWebGPUEngine {
+@@ -3909,7 +3955,7 @@ export class WebGPUEngine extends ThinWebGPUEngine {
       */
      public drawArraysType(fillMode: number, verticesStart: number, verticesCount: number, instancesCount: number = 1): void {
          this._currentIndexBuffer = null;
@@ -1198,5 +1198,5 @@ index 0000000000..b113027f1b
 +    });
 +});
 -- 
-2.54.0
+2.55.0
 

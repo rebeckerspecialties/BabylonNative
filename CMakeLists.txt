@@ -68,7 +68,7 @@ FetchContent_Declare(webgpu_headers
     EXCLUDE_FROM_ALL)
 FetchContent_Declare(wgpu_native
     GIT_REPOSITORY https://github.com/gfx-rs/wgpu-native.git
-    GIT_TAG v29.0.0.0
+    GIT_TAG v29.0.1.1
     GIT_SHALLOW TRUE
     EXCLUDE_FROM_ALL)
 FetchContent_Declare(metal-cpp
