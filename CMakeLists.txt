@@ -56,8 +56,8 @@ FetchContent_Declare(ios-cmake
     GIT_TAG 4.5.0
     EXCLUDE_FROM_ALL)
 FetchContent_Declare(JsRuntimeHost
-    GIT_REPOSITORY https://github.com/BabylonJS/JsRuntimeHost.git
-    GIT_TAG 8cd142951018de07c89c23f726fb7dc9c8374599)
+    GIT_REPOSITORY https://github.com/rebeckerspecialties/JsRuntimeHost.git
+    GIT_TAG fd10c92710472477f0557fb80a79e3a696d5ddf6)
 FetchContent_Declare(libwebp
     GIT_REPOSITORY https://github.com/webmproject/libwebp.git
     GIT_TAG baff2c8980970f58e2aa88622c6575bdee2f876a
@@ -272,6 +272,11 @@ if(ENABLE_THREAD_SANITIZER)
             $<$<COMPILE_LANGUAGE:C,CXX,OBJC,OBJCXX>:-fsanitize=thread>
             $<$<COMPILE_LANGUAGE:C,CXX,OBJC,OBJCXX>:-fno-omit-frame-pointer>)
         add_link_options(-fsanitize=thread)
+        if(APPLE)
+            # The Playground combines Rust, C++, Objective-C, and TSan
+            # personalities, which exceeds Mach-O compact unwind's limit.
+            add_link_options(LINKER:-no_compact_unwind)
+        endif()
     else()
         message(FATAL_ERROR "ThreadSanitizer is not supported on this compiler.")
     endif()

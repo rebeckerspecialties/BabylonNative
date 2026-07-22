@@ -22,6 +22,7 @@
 #include <arcana/threading/task.h>
 
 #include <atomic>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <utility>
@@ -87,6 +88,13 @@ namespace Babylon::Embedding
         // Reference-counted suspend depth. Mutated only on the frame
         // thread; atomic so `IsSuspended()` can be polled from any thread.
         std::atomic<int> m_suspendCount{0};
+
+#if BABYLON_NATIVE_PLUGIN_NATIVEWEBGPU
+        // Prevent host display ticks from flooding the JS queue when a frame
+        // takes longer than the display interval. The shared state outlives a
+        // queued callback if the embedding Runtime begins teardown first.
+        std::shared_ptr<std::atomic_bool> m_webGpuAnimationFrameInFlight{std::make_shared<std::atomic_bool>(false)};
+#endif
 
         // 0..1 — enforces "at most one View attached at a time". Points
         // at the ViewImpl directly (not the outer View), so the back-ref

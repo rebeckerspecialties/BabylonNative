@@ -55,6 +55,10 @@
 #include <Babylon/Polyfills/WebSocket.h>
 #endif
 
+#if BABYLON_NATIVE_POLYFILL_WORKER
+#include <Babylon/Polyfills/Worker.h>
+#endif
+
 #if BABYLON_NATIVE_POLYFILL_WINDOW
 #include <Babylon/Polyfills/Window.h>
 #endif
@@ -257,6 +261,9 @@ namespace Babylon::Embedding
 #endif
 #if BABYLON_NATIVE_POLYFILL_WEBSOCKET
             Babylon::Polyfills::WebSocket::Initialize(env);
+#endif
+#if BABYLON_NATIVE_POLYFILL_WORKER
+            Babylon::Polyfills::Worker::Initialize(env);
 #endif
 
 #if BABYLON_NATIVE_POLYFILL_CANVAS

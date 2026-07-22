@@ -2115,6 +2115,7 @@ mod upstream_wgpu_native {
         depth_or_array_layers: u32,
         mip_level_count: u32,
         sample_count: u32,
+        dimension: wgpu::TextureDimension,
         format: wgpu::TextureFormat,
     }
 
@@ -2891,6 +2892,17 @@ mod upstream_wgpu_native {
         })
     }
 
+    fn default_texture_view_dimension(texture: &TextureResource) -> wgpu::TextureViewDimension {
+        match texture.dimension {
+            wgpu::TextureDimension::D1 => wgpu::TextureViewDimension::D1,
+            wgpu::TextureDimension::D2 if texture.depth_or_array_layers > 1 => {
+                wgpu::TextureViewDimension::D2Array
+            }
+            wgpu::TextureDimension::D2 => wgpu::TextureViewDimension::D2,
+            wgpu::TextureDimension::D3 => wgpu::TextureViewDimension::D3,
+        }
+    }
+
     fn map_texture_aspect(aspect: Option<&str>) -> wgpu::TextureAspect {
         match aspect.unwrap_or("all") {
             "depth-only" => wgpu::TextureAspect::DepthOnly,
@@ -3617,7 +3629,9 @@ mod upstream_wgpu_native {
             match rx.recv() {
                 Ok(Ok(())) => {}
                 Ok(Err(error)) => {
-                    return Err(format!("GPUBuffer.getMappedRange map_async failed: {error}"))
+                    return Err(format!(
+                        "GPUBuffer.getMappedRange map_async failed: {error}"
+                    ))
                 }
                 Err(error) => {
                     return Err(format!(
@@ -3651,6 +3665,7 @@ mod upstream_wgpu_native {
             let mip_level_count = json_u32(&descriptor, "mipLevelCount", 1).max(1);
             let sample_count = json_u32(&descriptor, "sampleCount", 1).max(1);
             let label = json_str(&descriptor, "label").map(str::to_owned);
+            let dimension = map_texture_dimension(json_str(&descriptor, "dimension"));
             let texture = self
                 .runtime
                 .device
@@ -3659,7 +3674,7 @@ mod upstream_wgpu_native {
                     size,
                     mip_level_count,
                     sample_count,
-                    dimension: map_texture_dimension(json_str(&descriptor, "dimension")),
+                    dimension,
                     format,
                     usage,
                     view_formats: &view_formats,
@@ -3682,6 +3697,7 @@ mod upstream_wgpu_native {
                     depth_or_array_layers: size.depth_or_array_layers,
                     mip_level_count,
                     sample_count,
+                    dimension,
                     format,
                 },
             );
@@ -3802,6 +3818,7 @@ mod upstream_wgpu_native {
                     depth_or_array_layers: size.depth_or_array_layers,
                     mip_level_count,
                     sample_count,
+                    dimension,
                     format,
                 },
             );
@@ -3885,7 +3902,9 @@ mod upstream_wgpu_native {
                         .ok_or_else(|| format!("unsupported GPUTextureView format '{format}'"))
                 })
                 .transpose()?;
-            let dimension = map_texture_view_dimension(json_str(&descriptor, "dimension"));
+            let dimension = json_str(&descriptor, "dimension")
+                .and_then(|value| map_texture_view_dimension(Some(value)))
+                .or_else(|| Some(default_texture_view_dimension(texture)));
             let base_mip_level = json_u32(&descriptor, "baseMipLevel", 0);
             let width = texture
                 .width
@@ -6144,6 +6163,7 @@ mod upstream_wgpu_native {
                     depth_or_array_layers: 1,
                     mip_level_count: 1,
                     sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
                     format,
                 },
             );

@@ -10,6 +10,7 @@
 namespace Babylon::Plugins::NativeWebGPU
 {
     void BABYLON_API Initialize(Napi::Env env);
+    void BABYLON_API TickAnimationFrame(Napi::Env env);
     Napi::Object BABYLON_API CreateTextureFromNativeId(
         Napi::Env env,
         uint64_t nativeId,

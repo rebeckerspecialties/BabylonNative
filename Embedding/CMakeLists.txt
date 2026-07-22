@@ -80,6 +80,11 @@ if(BABYLON_NATIVE_POLYFILL_WEBSOCKET)
     target_link_libraries(Embedding PRIVATE WebSocket)
 endif()
 
+if(TARGET Worker)
+    target_compile_definitions(Embedding PUBLIC BABYLON_NATIVE_POLYFILL_WORKER=1)
+    target_link_libraries(Embedding PRIVATE Worker)
+endif()
+
 # ----- Conditionally-included plugins -----
 
 if(BABYLON_NATIVE_PLUGIN_NATIVEENGINE)

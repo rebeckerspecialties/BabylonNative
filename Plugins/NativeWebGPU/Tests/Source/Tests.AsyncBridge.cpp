@@ -132,6 +132,130 @@ TEST(NativeWebGPUAsyncBridge, ResolveIsAsynchronous)
     )JS");
 }
 
+TEST(NativeWebGPUAsyncBridge, AnimationFrameCancellationAndNestingMatchBrowserSemantics)
+{
+    ScopedWgpuBackend backend{};
+    ASSERT_TRUE(backend.IsValid()) << backend.LastError();
+
+    std::promise<std::string> completionPromise{};
+    auto completionFlag = std::make_shared<std::atomic_bool>(false);
+
+    Babylon::AppRuntime::Options options{};
+    options.UnhandledExceptionHandler = [&completionPromise, completionFlag](const Napi::Error& error) {
+        bool expected = false;
+        if (completionFlag->compare_exchange_strong(expected, true))
+        {
+            completionPromise.set_value(Napi::GetErrorString(error));
+        }
+    };
+
+    Babylon::AppRuntime runtime{options};
+    runtime.Dispatch([&completionPromise, completionFlag](Napi::Env env) {
+        Babylon::Polyfills::Window::Initialize(env);
+        Babylon::Plugins::NativeWebGPU::Initialize(env);
+        env.Global().Set("__nativeWebGpuTestDone", Napi::Function::New(env, [&completionPromise, completionFlag](const Napi::CallbackInfo& info) {
+            const bool success = info.Length() > 0 && info[0].IsBoolean() && info[0].As<Napi::Boolean>().Value();
+            const std::string details = info.Length() > 1 && info[1].IsString() ? info[1].As<Napi::String>().Utf8Value() : std::string{};
+
+            bool expected = false;
+            if (completionFlag->compare_exchange_strong(expected, true))
+            {
+                completionPromise.set_value(success ? std::string{} : details);
+            }
+        }));
+    });
+
+    Babylon::ScriptLoader loader{runtime};
+    loader.Eval(R"JS(
+        (() => {
+            const calls = [];
+            __babylonNativeWebGpuAnimationFrameState.nextId = 0x70000000;
+            const canceledId = requestAnimationFrame(() => calls.push("canceled"));
+            let canceledDuringFrameId;
+            const firstId = requestAnimationFrame((timestamp) => {
+                if (typeof timestamp !== "number" || !Number.isFinite(timestamp)) {
+                    throw new Error("Animation frame timestamp is not finite: " + String(timestamp));
+                }
+                calls.push("first");
+                cancelAnimationFrame(canceledDuringFrameId);
+                requestAnimationFrame(() => {
+                    calls.push("nested");
+                    const actual = calls.join(",");
+                    __nativeWebGpuTestDone(actual === "first,nested", "Unexpected callback order: " + actual);
+                });
+                if (calls.join(",") !== "first") {
+                    throw new Error("Nested callback ran in the same frame.");
+                }
+            });
+            canceledDuringFrameId = requestAnimationFrame(() => calls.push("canceled-during-frame"));
+
+            if (typeof canceledId !== "number" || typeof firstId !== "number" ||
+                typeof canceledDuringFrameId !== "number" || canceledId === firstId ||
+                firstId === canceledDuringFrameId) {
+                throw new Error("requestAnimationFrame did not return distinct numeric IDs.");
+            }
+            cancelAnimationFrame(canceledId);
+        })();
+    )JS", "nativewebgpu.animation-frame.test.js");
+    runtime.Dispatch([](Napi::Env env) {
+        Babylon::Plugins::NativeWebGPU::TickAnimationFrame(env);
+    });
+    runtime.Dispatch([](Napi::Env env) {
+        Babylon::Plugins::NativeWebGPU::TickAnimationFrame(env);
+    });
+
+    auto completionFuture = completionPromise.get_future();
+    ASSERT_EQ(completionFuture.wait_for(30s), std::future_status::ready) << "Animation frame test timed out.";
+
+    const auto errorText = completionFuture.get();
+    EXPECT_TRUE(errorText.empty()) << errorText;
+}
+
+TEST(NativeWebGPUAsyncBridge, DescriptorlessArrayTextureViewUsesWebGpuDefaultDimension)
+{
+    RunNativeWebGpuAsyncScript(R"JS(
+        (async () => {
+            const adapter = await navigator.gpu.requestAdapter();
+            const device = await adapter.requestDevice();
+            const texture = device.createTexture({
+                size: { width: 4, height: 4, depthOrArrayLayers: 4 },
+                format: "depth32float",
+                usage: 0x04 | 0x10
+            });
+
+            const defaultView = texture.createView();
+            if (defaultView.dimension !== "2d-array") {
+                throw new Error("Unexpected default array texture view dimension: " + defaultView.dimension);
+            }
+
+            const layout = device.createBindGroupLayout({
+                entries: [{
+                    binding: 0,
+                    visibility: 0x02,
+                    texture: { sampleType: "depth", viewDimension: "2d-array" }
+                }]
+            });
+            device.createBindGroup({
+                layout,
+                entries: [{ binding: 0, resource: defaultView }]
+            });
+
+            const layerView = texture.createView({
+                dimension: "2d",
+                baseArrayLayer: 0,
+                arrayLayerCount: 1
+            });
+            if (layerView.dimension !== "2d") {
+                throw new Error("Explicit 2d layer view dimension was not preserved.");
+            }
+
+            __nativeWebGpuTestDone(true, "");
+        })().catch((error) => {
+            __nativeWebGpuTestDone(false, error && error.stack ? error.stack : String(error));
+        });
+    )JS");
+}
+
 TEST(NativeWebGPUAsyncBridge, RejectPropagatesExactMessage)
 {
     RunNativeWebGpuAsyncScript(R"JS(

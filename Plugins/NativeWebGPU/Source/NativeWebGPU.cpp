@@ -59,6 +59,13 @@ namespace Babylon::Plugins::NativeWebGPU
         constexpr auto JS_NATIVE_HANDLE_ID_NAME = "__babylonNativeWebGPUHandleId";
         constexpr auto JS_NATIVE_HANDLE_KIND_NAME = "__babylonNativeWebGPUHandleKind";
         constexpr auto JS_NATIVE_JSON_REPLACER_NAME = "__nativeWebGpuJsonReplacer";
+        constexpr auto JS_REQUEST_ANIMATION_FRAME_NAME = "requestAnimationFrame";
+        constexpr auto JS_CANCEL_ANIMATION_FRAME_NAME = "cancelAnimationFrame";
+        constexpr auto JS_ANIMATION_FRAME_STATE_NAME = "__babylonNativeWebGpuAnimationFrameState";
+        constexpr auto JS_ANIMATION_FRAME_CALLBACKS_NAME = "callbacks";
+        constexpr auto JS_ANIMATION_FRAME_ACTIVE_CALLBACKS_NAME = "activeCallbacks";
+        constexpr auto JS_ANIMATION_FRAME_PENDING_IDS_NAME = "pendingIds";
+        constexpr auto JS_ANIMATION_FRAME_NEXT_ID_NAME = "nextId";
 
         enum class NativeResourceKind : uint32_t
         {
@@ -124,6 +131,73 @@ namespace Babylon::Plugins::NativeWebGPU
             uint64_t DrawCallCount{};
             std::vector<std::function<void(uint64_t)>> Commands{};
         };
+
+        void InstallAnimationFrameFunctions(Napi::Env env)
+        {
+            auto global = env.Global();
+            if (global.Get(JS_REQUEST_ANIMATION_FRAME_NAME).IsFunction())
+            {
+                return;
+            }
+
+            auto state = Napi::Object::New(env);
+            state.Set(JS_ANIMATION_FRAME_CALLBACKS_NAME, Napi::Object::New(env));
+            state.Set(JS_ANIMATION_FRAME_ACTIVE_CALLBACKS_NAME, Napi::Object::New(env));
+            state.Set(JS_ANIMATION_FRAME_PENDING_IDS_NAME, Napi::Array::New(env));
+            state.Set(JS_ANIMATION_FRAME_NEXT_ID_NAME, Napi::Number::New(env, 1));
+            global.Set(JS_ANIMATION_FRAME_STATE_NAME, state);
+
+            global.Set(JS_REQUEST_ANIMATION_FRAME_NAME, Napi::Function::New(env, [](const Napi::CallbackInfo& info) -> Napi::Value {
+                auto env = info.Env();
+                if (info.Length() == 0 || !info[0].IsFunction())
+                {
+                    Napi::TypeError::New(env, "requestAnimationFrame requires a callback.").ThrowAsJavaScriptException();
+                    return env.Undefined();
+                }
+
+                auto state = env.Global().Get(JS_ANIMATION_FRAME_STATE_NAME).As<Napi::Object>();
+                auto callbacks = state.Get(JS_ANIMATION_FRAME_CALLBACKS_NAME).As<Napi::Object>();
+                auto activeCallbacks = state.Get(JS_ANIMATION_FRAME_ACTIVE_CALLBACKS_NAME).As<Napi::Object>();
+                auto pendingIds = state.Get(JS_ANIMATION_FRAME_PENDING_IDS_NAME).As<Napi::Array>();
+                auto id = state.Get(JS_ANIMATION_FRAME_NEXT_ID_NAME).As<Napi::Number>().Uint32Value();
+                if (id == 0)
+                {
+                    id = 1;
+                }
+
+                const auto firstCandidate = id;
+                while (callbacks.Has(id) || activeCallbacks.Has(id))
+                {
+                    ++id;
+                    if (id == 0)
+                    {
+                        id = 1;
+                    }
+                    if (id == firstCandidate)
+                    {
+                        Napi::Error::New(env, "requestAnimationFrame callback queue is full.").ThrowAsJavaScriptException();
+                        return env.Undefined();
+                    }
+                }
+
+                callbacks.Set(id, info[0]);
+                pendingIds.Set(pendingIds.Length(), Napi::Number::New(env, id));
+                auto nextId = id + 1;
+                state.Set(JS_ANIMATION_FRAME_NEXT_ID_NAME, Napi::Number::New(env, nextId == 0 ? 1 : nextId));
+                return Napi::Number::New(env, id);
+            }, JS_REQUEST_ANIMATION_FRAME_NAME));
+
+            global.Set(JS_CANCEL_ANIMATION_FRAME_NAME, Napi::Function::New(env, [](const Napi::CallbackInfo& info) -> Napi::Value {
+                if (info.Length() > 0)
+                {
+                    auto state = info.Env().Global().Get(JS_ANIMATION_FRAME_STATE_NAME).As<Napi::Object>();
+                    const auto id = info[0].ToNumber().Uint32Value();
+                    state.Get(JS_ANIMATION_FRAME_CALLBACKS_NAME).As<Napi::Object>().Delete(id);
+                    state.Get(JS_ANIMATION_FRAME_ACTIVE_CALLBACKS_NAME).As<Napi::Object>().Delete(id);
+                }
+                return info.Env().Undefined();
+            }, JS_CANCEL_ANIMATION_FRAME_NAME));
+        }
 
         struct CommandEncoderState final
         {
@@ -1413,7 +1487,9 @@ namespace Babylon::Plugins::NativeWebGPU
                 }
 
                 auto viewFormat = descriptor.Format;
-                auto viewDimension = descriptor.Dimension;
+                auto viewDimension = descriptor.Dimension == "2d" && descriptor.DepthOrArrayLayers > 1
+                    ? std::string{"2d-array"}
+                    : descriptor.Dimension;
                 auto viewAspect = std::string{"all"};
                 auto baseMipLevel = uint32_t{0};
                 auto mipLevelCount = descriptor.MipLevelCount;
@@ -3226,6 +3302,69 @@ namespace Babylon::Plugins::NativeWebGPU
         return CreateGpuTextureObject(env, descriptor, nativeId);
     }
 
+    void TickAnimationFrame(Napi::Env env)
+    {
+        Napi::HandleScope scope{env};
+
+        auto global = env.Global();
+        auto stateValue = global.Get(JS_ANIMATION_FRAME_STATE_NAME);
+        if (!stateValue.IsObject())
+        {
+            return;
+        }
+
+        auto state = stateValue.As<Napi::Object>();
+        auto callbacksValue = state.Get(JS_ANIMATION_FRAME_CALLBACKS_NAME);
+        auto pendingIdsValue = state.Get(JS_ANIMATION_FRAME_PENDING_IDS_NAME);
+        if (!callbacksValue.IsObject() || !pendingIdsValue.IsArray())
+        {
+            return;
+        }
+
+        auto callbacks = callbacksValue.As<Napi::Object>();
+        auto pendingIds = pendingIdsValue.As<Napi::Array>();
+        state.Set(JS_ANIMATION_FRAME_ACTIVE_CALLBACKS_NAME, callbacks);
+        state.Set(JS_ANIMATION_FRAME_CALLBACKS_NAME, Napi::Object::New(env));
+        state.Set(JS_ANIMATION_FRAME_PENDING_IDS_NAME, Napi::Array::New(env));
+
+        double timestamp = std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+        auto performanceValue = global.Get("performance");
+        if (performanceValue.IsObject())
+        {
+            auto performance = performanceValue.As<Napi::Object>();
+            auto nowValue = performance.Get("now");
+            if (nowValue.IsFunction())
+            {
+                auto now = nowValue.As<Napi::Function>().Call(performance, {});
+                if (now.IsNumber())
+                {
+                    timestamp = now.As<Napi::Number>().DoubleValue();
+                }
+            }
+        }
+
+        try
+        {
+            for (uint32_t index = 0; index < pendingIds.Length(); ++index)
+            {
+                const auto id = pendingIds.Get(index).As<Napi::Number>().Uint32Value();
+                auto callback = callbacks.Get(id);
+                callbacks.Delete(id);
+                if (callback.IsFunction())
+                {
+                    callback.As<Napi::Function>().Call(global, {Napi::Number::New(env, timestamp)});
+                }
+            }
+        }
+        catch (...)
+        {
+            state.Set(JS_ANIMATION_FRAME_ACTIVE_CALLBACKS_NAME, Napi::Object::New(env));
+            throw;
+        }
+        state.Set(JS_ANIMATION_FRAME_ACTIVE_CALLBACKS_NAME, Napi::Object::New(env));
+    }
+
     // Initialization contract: this function must be called from an
     // AppRuntime::Dispatch callback BEFORE any user JavaScript executes.
     // The AppRuntime WorkQueue is FIFO, and ScriptLoader dispatches through
@@ -3241,6 +3380,7 @@ namespace Babylon::Plugins::NativeWebGPU
         Napi::HandleScope scope{env};
 
         auto global = env.Global();
+        InstallAnimationFrameFunctions(env);
         Napi::Object navigator;
 
         if (global.Has(JS_NAVIGATOR_NAME) && global.Get(JS_NAVIGATOR_NAME).IsObject())

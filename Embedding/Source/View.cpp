@@ -3,6 +3,10 @@
 #include <Babylon/DebugTrace.h>
 #include <Babylon/Graphics/DeviceQueries.h>
 
+#if BABYLON_NATIVE_PLUGIN_NATIVEWEBGPU
+#include <Babylon/Plugins/NativeWebGPU.h>
+#endif
+
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -173,6 +177,33 @@ namespace Babylon::Embedding
         // via DeviceUpdate's SafeTimespanGuarantor onto the JS thread.
         impl.m_device->FinishRenderingCurrentFrame();
         impl.m_device->StartRenderingCurrentFrame();
+
+#if BABYLON_NATIVE_PLUGIN_NATIVEWEBGPU
+        auto animationFrameInFlight = impl.m_webGpuAnimationFrameInFlight;
+        if (!animationFrameInFlight->exchange(true, std::memory_order_relaxed))
+        {
+            try
+            {
+                impl.m_appRuntime->Dispatch([animationFrameInFlight](Napi::Env env) {
+                    try
+                    {
+                        Babylon::Plugins::NativeWebGPU::TickAnimationFrame(env);
+                    }
+                    catch (...)
+                    {
+                        animationFrameInFlight->store(false, std::memory_order_relaxed);
+                        throw;
+                    }
+                    animationFrameInFlight->store(false, std::memory_order_relaxed);
+                });
+            }
+            catch (...)
+            {
+                animationFrameInFlight->store(false, std::memory_order_relaxed);
+                throw;
+            }
+        }
+#endif
     }
 
     // Stores the host-supplied size on the ViewImpl, then either pushes
