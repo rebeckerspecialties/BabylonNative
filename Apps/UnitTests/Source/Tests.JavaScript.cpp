@@ -173,6 +173,58 @@ TEST(JavaScript, WindowDocumentCreateEvent)
 }
 
 #if defined(BABYLON_NATIVE_UNITTESTS_WITH_WEBGPU)
+TEST(JavaScript, CanvasWgpuCreateImageBitmapDecodesBlob)
+{
+    Babylon::Graphics::Device device{g_deviceConfig};
+    std::optional<Babylon::Polyfills::Canvas> nativeCanvas;
+    std::promise<std::string> scriptDonePromise;
+
+    Babylon::AppRuntime::Options options{};
+    options.UnhandledExceptionHandler = [&scriptDonePromise](const Napi::Error& error) {
+        scriptDonePromise.set_value(Napi::GetErrorString(error));
+    };
+
+    Babylon::AppRuntime runtime{options};
+    runtime.Dispatch([&device, &nativeCanvas, &scriptDonePromise](Napi::Env env) {
+        device.AddToJavaScript(env);
+        Babylon::Polyfills::Window::Initialize(env);
+        Babylon::Polyfills::Blob::Initialize(env);
+        nativeCanvas.emplace(Babylon::Polyfills::Canvas::Initialize(env));
+        env.Global().Set("__canvasWgpuImageBitmapTestDone", Napi::Function::New(env, [&scriptDonePromise](const Napi::CallbackInfo& info) {
+            scriptDonePromise.set_value(info.Length() > 0 && info[0].IsString() ? info[0].As<Napi::String>().Utf8Value() : std::string{});
+        }));
+    });
+
+    Babylon::ScriptLoader loader{runtime};
+    loader.Eval(R"JS(
+        (async () => {
+            const png = new Uint8Array([
+                137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82,
+                0, 0, 0, 1, 0, 0, 0, 1, 8, 4, 0, 0, 0, 181, 28, 12, 2,
+                0, 0, 0, 11, 73, 68, 65, 84, 120, 218, 99, 100, 248, 15, 0, 1,
+                5, 1, 1, 39, 24, 227, 102, 0, 0, 0, 0, 73, 69, 78, 68, 174,
+                66, 96, 130
+            ]);
+            const bitmap = await createImageBitmap(new Blob([png], { type: "image/png" }));
+            if (bitmap.width !== 1 || bitmap.height !== 1) {
+                throw new Error("Unexpected bitmap dimensions: " + bitmap.width + "x" + bitmap.height);
+            }
+            const payload = bitmap._getNativeImageData();
+            if (!payload || payload.width !== 1 || payload.height !== 1 || payload.data.byteLength !== 4) {
+                throw new Error("Decoded bitmap did not expose a 1x1 RGBA payload.");
+            }
+            bitmap.close();
+            __canvasWgpuImageBitmapTestDone("");
+        })().catch((error) => {
+            __canvasWgpuImageBitmapTestDone(error && error.stack ? String(error.stack) : String(error));
+        });
+    )JS", "canvaswgpu.create-image-bitmap.test.js");
+
+    auto scriptDoneFuture = scriptDonePromise.get_future();
+    ASSERT_EQ(scriptDoneFuture.wait_for(30s), std::future_status::ready) << "CanvasWgpu createImageBitmap test timed out.";
+    EXPECT_TRUE(scriptDoneFuture.get().empty());
+}
+
 TEST(JavaScript, CanvasWgpuLiveContextCanSurviveRuntimeTeardown)
 {
     Babylon::Graphics::Device device{g_deviceConfig};

@@ -34,6 +34,10 @@ if(APPLE)
 
     add_library(CanvasAppleImageDecoder STATIC "Source/ImageDecoderApple.swift")
     set_property(TARGET CanvasAppleImageDecoder PROPERTY Swift_LANGUAGE_VERSION 6)
+    if(CMAKE_SYSTEM_NAME STREQUAL "Darwin" AND CMAKE_OSX_DEPLOYMENT_TARGET)
+        target_compile_options(CanvasAppleImageDecoder
+            PRIVATE "SHELL:-target ${CMAKE_SYSTEM_PROCESSOR}-apple-macosx${CMAKE_OSX_DEPLOYMENT_TARGET}")
+    endif()
     target_compile_options(CanvasAppleImageDecoder
         PRIVATE
             "SHELL:-strict-concurrency=complete"
@@ -88,6 +92,11 @@ target_link_libraries(Canvas
     PRIVATE GraphicsDeviceContext
     PRIVATE UrlLib
     PRIVATE babylon_canvas_wgpu_backend)
+
+if(TARGET NativeEncoding)
+    target_compile_definitions(Canvas PRIVATE BABYLON_NATIVE_CANVAS_TO_DATA_URL=1)
+    target_link_libraries(Canvas PRIVATE NativeEncoding)
+endif()
 
 if(APPLE)
     target_link_libraries(Canvas

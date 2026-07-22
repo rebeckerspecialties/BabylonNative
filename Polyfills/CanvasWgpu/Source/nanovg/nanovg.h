@@ -103,6 +103,7 @@ static inline NVGcolor nvgRGBAf(float r, float g, float b, float a)
 
 NVGcontext* nvgCreate(int flags);
 const char* nvgLastCreateError();
+const char* nvgLastReadPixelsError();
 void nvgDelete(NVGcontext* ctx);
 
 int nvgCreateFontMem(NVGcontext* ctx, const char* name, unsigned char* data, int size, int freeData);
@@ -169,6 +170,7 @@ NVGpaint nvgImagePattern(NVGcontext* ctx, float ox, float oy, float ex, float ey
 NVGpaint nvgLinearGradientStops(NVGcontext* ctx, int canvasWidth, int canvasHeight, float x0, float y0, float x1, float y1, const NVGgradientStop* stops, size_t stopCount);
 NVGpaint nvgRadialGradientStops(NVGcontext* ctx, int canvasWidth, int canvasHeight, float x0, float y0, float r0, float x1, float y1, float r1, const NVGgradientStop* stops, size_t stopCount);
 const void* nvgGetRenderTexture(NVGcontext* ctx);
+int nvgReadPixels(NVGcontext* ctx, int sourceX, int sourceY, unsigned int width, unsigned int height, int unpremultiplyAlpha, unsigned char* output, size_t outputLength);
 
 #ifdef __cplusplus
 }

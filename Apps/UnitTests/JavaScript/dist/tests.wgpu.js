@@ -664,6 +664,106 @@
             expectPixel(await readCanvasPixel(destination, 8, 8, 3, 4), [255, 0, 0, 255], "drawImage copied putImageData canvas pixel");
             expectPixel(await readCanvasPixel(destination, 8, 8, 1, 1), [0, 0, 0, 0], "drawImage offset left destination transparent");
         }],
+        ["Canvas 2D getImageData returns straight-alpha pixels and transparent out-of-bounds pixels", function () {
+            var canvas = new _native.Canvas();
+            canvas.width = 2;
+            canvas.height = 2;
+            var context = canvas.getContext("2d");
+            var source = context.getImageData(0, 0, 2, 2);
+            source.data.set([
+                200, 40, 20, 128, 0, 255, 0, 255,
+                0, 0, 255, 255, 255, 255, 255, 64
+            ]);
+            context.putImageData(source, 0, 0);
+
+            var readback = context.getImageData(-1, -1, 4, 4);
+            expect(readback.data instanceof Uint8ClampedArray, "ImageData.data should be a Uint8ClampedArray");
+            expectPixel(readback.data.slice(0, 4), [0, 0, 0, 0], "out-of-bounds top-left pixel");
+            expectPixel(readback.data.slice((1 + 1 * 4) * 4, (1 + 1 * 4) * 4 + 4), [200, 40, 20, 128], "straight-alpha source pixel");
+            expectPixel(readback.data.slice((2 + 2 * 4) * 4, (2 + 2 * 4) * 4 + 4), [255, 255, 255, 64], "straight-alpha lower-right pixel");
+            expectPixel(readback.data.slice((3 + 3 * 4) * 4, (3 + 3 * 4) * 4 + 4), [0, 0, 0, 0], "out-of-bounds bottom-right pixel");
+
+            var normalized = context.getImageData(2, 2, -2, -2);
+            for (var i = 0; i < source.data.length; i++) {
+                expectNear(normalized.data[i], source.data[i], 2, "negative dimensions should normalize without mirroring at byte " + i);
+            }
+
+            var zeroWidthThrew = false;
+            try {
+                context.getImageData(0, 0, 0, 1);
+            } catch (_) {
+                zeroWidthThrew = true;
+            }
+            expect(zeroWidthThrew, "getImageData should reject zero width");
+
+            var zeroHeightThrew = false;
+            try {
+                context.getImageData(0, 0, 1, 0);
+            } catch (_) {
+                zeroHeightThrew = true;
+            }
+            expect(zeroHeightThrew, "getImageData should reject zero height");
+        }],
+        ["createImageBitmap snapshots ImageData and canvas sources", async function () {
+            var imageData = new ImageData(new Uint8ClampedArray([
+                255, 0, 0, 255, 0, 255, 0, 128
+            ]), 2, 1);
+            var imageDataBitmap = await createImageBitmap(imageData);
+            imageData.data.fill(0);
+            var imagePayload = imageDataBitmap._getNativeImageData();
+            expectPixel(imagePayload.data.slice(0, 4), [255, 0, 0, 255], "ImageData bitmap snapshot first pixel");
+            expectPixel(imagePayload.data.slice(4, 8), [0, 255, 0, 128], "ImageData bitmap snapshot second pixel");
+            imageDataBitmap.close();
+
+            var canvas = new _native.Canvas();
+            canvas.width = 1;
+            canvas.height = 1;
+            var context = canvas.getContext("2d");
+            var red = context.getImageData(0, 0, 1, 1);
+            red.data.set([255, 0, 0, 255]);
+            context.putImageData(red, 0, 0);
+
+            var canvasBitmap = await createImageBitmap(canvas);
+            var blue = context.getImageData(0, 0, 1, 1);
+            blue.data.set([0, 0, 255, 255]);
+            context.putImageData(blue, 0, 0);
+            var canvasPayload = canvasBitmap._getNativeImageData();
+            expectPixel(canvasPayload.data, [255, 0, 0, 255], "canvas bitmap should retain its source snapshot");
+            canvasBitmap.close();
+        }],
+        ["Canvas 2D toDataURL encodes a decodable PNG round trip", async function () {
+            var canvas = new _native.Canvas();
+            canvas.width = 2;
+            canvas.height = 1;
+            var context = canvas.getContext("2d");
+            var source = context.getImageData(0, 0, 2, 1);
+            source.data.set([255, 0, 0, 255, 0, 0, 255, 128]);
+            context.putImageData(source, 0, 0);
+
+            var dataUrl = canvas.toDataURL("image/webp");
+            expect(dataUrl.indexOf("data:image/png;base64,") === 0, "unsupported toDataURL types should fall back to PNG");
+            expect(dataUrl.length > 64, "toDataURL PNG payload was unexpectedly short");
+
+            var ImageCtor = _native.Image || Image;
+            var image = new ImageCtor();
+            var loaded = await new Promise(function (resolve) {
+                image.onload = function () { resolve(true); };
+                image.onerror = function () { resolve(false); };
+                image.src = dataUrl;
+            });
+            expect(loaded, "toDataURL PNG did not decode");
+            expectEqual(image.width, 2, "toDataURL round-trip width");
+            expectEqual(image.height, 1, "toDataURL round-trip height");
+
+            var decoded = new _native.Canvas();
+            decoded.width = 2;
+            decoded.height = 1;
+            var decodedContext = decoded.getContext("2d");
+            decodedContext.drawImage(image, 0, 0);
+            var roundTrip = decodedContext.getImageData(0, 0, 2, 1);
+            expectPixel(roundTrip.data.slice(0, 4), [255, 0, 0, 255], "toDataURL opaque pixel");
+            expectPixel(roundTrip.data.slice(4, 8), [0, 0, 255, 128], "toDataURL straight-alpha pixel");
+        }],
         ["Canvas 2D drawImage applies the current transform to image paints", async function () {
             var source = new _native.Canvas();
             source.width = 4;

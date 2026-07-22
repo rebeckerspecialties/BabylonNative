@@ -300,6 +300,7 @@ fn create_device() -> Result<(wgpu::Device, wgpu::Queue), String> {
 }
 
 static LAST_CREATE_ERROR: Mutex<Option<CString>> = Mutex::new(None);
+static LAST_READ_PIXELS_ERROR: Mutex<Option<CString>> = Mutex::new(None);
 
 fn set_last_create_error(message: Option<String>) {
     let Ok(mut slot) = LAST_CREATE_ERROR.lock() else {
@@ -310,6 +311,21 @@ fn set_last_create_error(message: Option<String>) {
         CString::new(message)
             .unwrap_or_else(|_| CString::new("CanvasWgpu nvgCreate failed").unwrap())
     });
+}
+
+fn set_last_read_pixels_error(message: Option<String>) {
+    let Ok(mut slot) = LAST_READ_PIXELS_ERROR.lock() else {
+        return;
+    };
+
+    *slot = message.map(|message| {
+        CString::new(message)
+            .unwrap_or_else(|_| CString::new("CanvasWgpu pixel readback failed").unwrap())
+    });
+}
+
+fn align_to(value: u32, alignment: u32) -> u32 {
+    value.div_ceil(alignment).saturating_mul(alignment)
 }
 
 fn shared_device() -> Result<(wgpu::Device, wgpu::Queue), String> {
@@ -681,6 +697,139 @@ impl Backend {
         self.interop_handle.queue = (&self.queue as *const wgpu::Queue).cast::<c_void>();
         self.interop_handle.width = self.width;
         self.interop_handle.height = self.height;
+    }
+
+    fn read_pixels(
+        &self,
+        source_x: i32,
+        source_y: i32,
+        width: u32,
+        height: u32,
+        unpremultiply_alpha: bool,
+        output: &mut [u8],
+    ) -> Result<(), String> {
+        let expected_len = (width as usize)
+            .checked_mul(height as usize)
+            .and_then(|size| size.checked_mul(4))
+            .ok_or_else(|| "CanvasWgpu pixel readback dimensions overflowed".to_string())?;
+        if output.len() != expected_len {
+            return Err(format!(
+                "CanvasWgpu pixel readback expected {expected_len} output bytes, received {}",
+                output.len()
+            ));
+        }
+        output.fill(0);
+
+        let requested_left = i64::from(source_x);
+        let requested_top = i64::from(source_y);
+        let requested_right = requested_left.saturating_add(i64::from(width));
+        let requested_bottom = requested_top.saturating_add(i64::from(height));
+        let copy_left = requested_left.clamp(0, i64::from(self.width));
+        let copy_top = requested_top.clamp(0, i64::from(self.height));
+        let copy_right = requested_right.clamp(0, i64::from(self.width));
+        let copy_bottom = requested_bottom.clamp(0, i64::from(self.height));
+        if copy_left >= copy_right || copy_top >= copy_bottom {
+            return Ok(());
+        }
+
+        let copy_width = (copy_right - copy_left) as u32;
+        let copy_height = (copy_bottom - copy_top) as u32;
+        let unpadded_bytes_per_row = copy_width.saturating_mul(4);
+        let padded_bytes_per_row =
+            align_to(unpadded_bytes_per_row, wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
+        let buffer_size = u64::from(padded_bytes_per_row).saturating_mul(u64::from(copy_height));
+        let staging_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("babylon-canvas-wgpu.read-pixels"),
+            size: buffer_size,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("babylon-canvas-wgpu.read-pixels-encoder"),
+            });
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &self.render_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d {
+                    x: copy_left as u32,
+                    y: copy_top as u32,
+                    z: 0,
+                },
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &staging_buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(padded_bytes_per_row),
+                    rows_per_image: Some(copy_height),
+                },
+            },
+            wgpu::Extent3d {
+                width: copy_width,
+                height: copy_height,
+                depth_or_array_layers: 1,
+            },
+        );
+        self.queue.submit(Some(encoder.finish()));
+
+        let slice = staging_buffer.slice(..);
+        let (sender, receiver) = std::sync::mpsc::channel::<Result<(), String>>();
+        slice.map_async(wgpu::MapMode::Read, move |result| {
+            let _ = sender.send(result.map_err(|error| error.to_string()));
+        });
+        self.device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .map_err(|error| format!("CanvasWgpu pixel readback poll failed: {error}"))?;
+        match receiver.recv() {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => {
+                return Err(format!(
+                    "CanvasWgpu pixel readback map_async failed: {error}"
+                ));
+            }
+            Err(error) => {
+                return Err(format!("CanvasWgpu pixel readback channel failed: {error}"));
+            }
+        }
+
+        let mapped = slice.get_mapped_range();
+        let destination_x = (copy_left - requested_left) as usize;
+        let destination_y = (copy_top - requested_top) as usize;
+        let destination_bytes_per_row = width as usize * 4;
+        for row in 0..copy_height as usize {
+            let source_start = row * padded_bytes_per_row as usize;
+            let source_end = source_start + unpadded_bytes_per_row as usize;
+            let destination_start =
+                (destination_y + row) * destination_bytes_per_row + destination_x * 4;
+            let destination_end = destination_start + unpadded_bytes_per_row as usize;
+            output[destination_start..destination_end]
+                .copy_from_slice(&mapped[source_start..source_end]);
+        }
+        drop(mapped);
+        staging_buffer.unmap();
+
+        if unpremultiply_alpha {
+            for pixel in output.chunks_exact_mut(4) {
+                let alpha = u32::from(pixel[3]);
+                if alpha == 0 {
+                    pixel[0] = 0;
+                    pixel[1] = 0;
+                    pixel[2] = 0;
+                    continue;
+                }
+
+                for component in &mut pixel[..3] {
+                    *component = ((u32::from(*component) * 255 + alpha / 2) / alpha).min(255) as u8;
+                }
+            }
+        }
+
+        Ok(())
     }
 
     fn to_color(color: NVGcolor) -> Color {
@@ -1130,6 +1279,16 @@ pub extern "C" fn nvgCreate(_flags: i32) -> *mut NVGcontext {
 #[no_mangle]
 pub extern "C" fn nvgLastCreateError() -> *const c_char {
     let Ok(slot) = LAST_CREATE_ERROR.lock() else {
+        return ptr::null();
+    };
+
+    slot.as_ref()
+        .map_or(ptr::null(), |message| message.as_ptr())
+}
+
+#[no_mangle]
+pub extern "C" fn nvgLastReadPixelsError() -> *const c_char {
+    let Ok(slot) = LAST_READ_PIXELS_ERROR.lock() else {
         return ptr::null();
     };
 
@@ -2039,6 +2198,74 @@ pub extern "C" fn nvgGetRenderTexture(ctx: *mut NVGcontext) -> *const c_void {
     with_ctx_ref(ctx, ptr::null(), |backend| {
         (&backend.interop_handle as *const BabylonCanvasNativeTextureHandle).cast::<c_void>()
     })
+}
+
+#[no_mangle]
+pub extern "C" fn nvgReadPixels(
+    ctx: *mut NVGcontext,
+    source_x: i32,
+    source_y: i32,
+    width: u32,
+    height: u32,
+    unpremultiply_alpha: i32,
+    output: *mut u8,
+    output_len: usize,
+) -> i32 {
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        if output.is_null() && output_len != 0 {
+            return Err("CanvasWgpu pixel readback output pointer was null".to_string());
+        }
+
+        let expected_len = (width as usize)
+            .checked_mul(height as usize)
+            .and_then(|size| size.checked_mul(4))
+            .ok_or_else(|| "CanvasWgpu pixel readback dimensions overflowed".to_string())?;
+        if output_len != expected_len {
+            return Err(format!(
+                "CanvasWgpu pixel readback expected {expected_len} output bytes, received {output_len}"
+            ));
+        }
+
+        if ctx.is_null() {
+            return Err("CanvasWgpu pixel readback context was null".to_string());
+        }
+
+        if output_len == 0 {
+            return Ok(());
+        }
+
+        // SAFETY: The caller provides exactly width * height * 4 writable bytes.
+        let output = unsafe { slice::from_raw_parts_mut(output, output_len) };
+        with_ctx_ref(
+            ctx,
+            Err("CanvasWgpu pixel readback context was null".to_string()),
+            |backend| {
+                backend.read_pixels(
+                    source_x,
+                    source_y,
+                    width,
+                    height,
+                    unpremultiply_alpha != 0,
+                    output,
+                )
+            },
+        )
+    }));
+
+    match result {
+        Ok(Ok(())) => {
+            set_last_read_pixels_error(None);
+            1
+        }
+        Ok(Err(error)) => {
+            set_last_read_pixels_error(Some(error));
+            0
+        }
+        Err(_) => {
+            set_last_read_pixels_error(Some("CanvasWgpu pixel readback panicked".to_string()));
+            0
+        }
+    }
 }
 
 #[no_mangle]

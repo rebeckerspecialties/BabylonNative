@@ -13,6 +13,7 @@ namespace Babylon::Polyfills::Internal
     {
     public:
         static void Initialize(Napi::Env env);
+        static Napi::Value CreateImageBitmap(const Napi::CallbackInfo& info);
 
         explicit NativeCanvasImage(const Napi::CallbackInfo& info);
         virtual ~NativeCanvasImage();
@@ -35,7 +36,10 @@ namespace Babylon::Polyfills::Internal
         void SetOnerror(const Napi::CallbackInfo&, const Napi::Value&);
         void DisposeJs(const Napi::CallbackInfo&);
         void HandleLoadImageError(const Napi::Error& error);
+        static Napi::Object DecodeImageBitmap(Napi::Env env, const Napi::Value& source);
+        static Napi::Object SnapshotImageBitmap(Napi::Env env, const Napi::Object& source);
         bool SetBuffer(gsl::span<const std::byte> buffer);
+        bool SetPixels(uint32_t width, uint32_t height, std::vector<uint8_t> pixels);
         void Dispose();
 
         uint32_t m_width{1};

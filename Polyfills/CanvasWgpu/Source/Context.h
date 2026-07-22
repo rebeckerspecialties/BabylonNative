@@ -29,6 +29,7 @@ namespace Babylon::Polyfills::Internal
         NVGcontext* GetNVGContext() const { return *m_nvg.get(); }
         void* GetNativeRenderTexture() const;
         void Flush();
+        std::vector<uint8_t> ReadPixels(int32_t sourceX, int32_t sourceY, uint32_t width, uint32_t height, bool unpremultiplyAlpha);
 
     private:
         void FillRect(const Napi::CallbackInfo&);

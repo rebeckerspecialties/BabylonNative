@@ -11,6 +11,7 @@
 #include <napi/pointer.h>
 #include <basen.hpp>
 #include <cstdint>
+#include <limits>
 
 extern "C"
 {
@@ -114,12 +115,223 @@ namespace Babylon::Polyfills::Internal
                 InstanceAccessor("onload", nullptr, &NativeCanvasImage::SetOnload),
                 InstanceAccessor("onerror", nullptr, &NativeCanvasImage::SetOnerror),
                 InstanceMethod("dispose", &NativeCanvasImage::DisposeJs),
+                InstanceMethod("close", &NativeCanvasImage::DisposeJs),
                 InstanceMethod("_getNativeImageData", &NativeCanvasImage::GetNativeImageData),
                 // TODO: This should be set directly on the JS Object rather than via an instanceAccessor see: https://github.com/BabylonJS/BabylonNative/issues/1030
                 InstanceAccessor("_imageContainer", &NativeCanvasImage::GetImageContainer, nullptr),
             });
 
         JsRuntime::NativeObject::GetFromJavaScript(env).Set(JS_IMAGE_CONSTRUCTOR_NAME, func);
+
+        auto global = env.Global();
+        if (global.Get(JS_IMAGE_CONSTRUCTOR_NAME).IsUndefined())
+        {
+            global.Set(JS_IMAGE_CONSTRUCTOR_NAME, func);
+        }
+        if (global.Get("HTMLImageElement").IsUndefined())
+        {
+            global.Set("HTMLImageElement", func);
+        }
+        if (global.Get("createImageBitmap").IsUndefined())
+        {
+            global.Set("createImageBitmap", Napi::Function::New(env, &NativeCanvasImage::CreateImageBitmap, "createImageBitmap"));
+        }
+    }
+
+    Napi::Object NativeCanvasImage::DecodeImageBitmap(Napi::Env env, const Napi::Value& source)
+    {
+        const std::byte* data{};
+        size_t size{};
+        if (source.IsArrayBuffer())
+        {
+            auto buffer = source.As<Napi::ArrayBuffer>();
+            data = static_cast<const std::byte*>(buffer.Data());
+            size = buffer.ByteLength();
+        }
+        else if (source.IsTypedArray())
+        {
+            auto typedArray = source.As<Napi::TypedArray>();
+            auto buffer = typedArray.ArrayBuffer();
+            data = static_cast<const std::byte*>(buffer.Data()) + typedArray.ByteOffset();
+            size = typedArray.ByteLength();
+        }
+        else
+        {
+            throw Napi::TypeError::New(env, "createImageBitmap expected a Blob or encoded image buffer.");
+        }
+
+        if (data == nullptr || size == 0)
+        {
+            throw Napi::Error::New(env, "createImageBitmap received an empty image buffer.");
+        }
+
+        auto constructor = JsRuntime::NativeObject::GetFromJavaScript(env).Get(JS_IMAGE_CONSTRUCTOR_NAME).As<Napi::Function>();
+        auto imageObject = constructor.New({});
+        auto* image = NativeCanvasImage::Unwrap(imageObject);
+        if (image == nullptr || !image->SetBuffer({data, size}))
+        {
+            throw Napi::Error::New(env, "createImageBitmap could not decode the supplied image.");
+        }
+
+        return imageObject;
+    }
+
+    Napi::Object NativeCanvasImage::SnapshotImageBitmap(Napi::Env env, const Napi::Object& source)
+    {
+        Napi::Object pixelSource;
+        auto nativeImageData = source.Get("_getNativeImageData");
+        if (nativeImageData.IsFunction())
+        {
+            auto payload = nativeImageData.As<Napi::Function>().Call(source, {});
+            if (!payload.IsObject())
+            {
+                throw Napi::Error::New(env, "createImageBitmap source image has no pixel data.");
+            }
+            pixelSource = payload.As<Napi::Object>();
+        }
+        else
+        {
+            auto getContext = source.Get("getContext");
+            if (getContext.IsFunction())
+            {
+                const auto width = source.Get("width").ToNumber().Uint32Value();
+                const auto height = source.Get("height").ToNumber().Uint32Value();
+                auto contextValue = getContext.As<Napi::Function>().Call(source, {Napi::String::New(env, "2d")});
+                if (!contextValue.IsObject())
+                {
+                    throw Napi::Error::New(env, "createImageBitmap could not access the canvas 2D context.");
+                }
+
+                auto context = contextValue.As<Napi::Object>();
+                auto getImageData = context.Get("getImageData");
+                if (!getImageData.IsFunction())
+                {
+                    throw Napi::Error::New(env, "createImageBitmap canvas context cannot read pixels.");
+                }
+                auto imageData = getImageData.As<Napi::Function>().Call(context, {
+                    Napi::Number::New(env, 0),
+                    Napi::Number::New(env, 0),
+                    Napi::Number::New(env, width),
+                    Napi::Number::New(env, height),
+                });
+                if (!imageData.IsObject())
+                {
+                    throw Napi::Error::New(env, "createImageBitmap canvas readback did not return ImageData.");
+                }
+                pixelSource = imageData.As<Napi::Object>();
+            }
+            else if (source.Get("data").IsTypedArray())
+            {
+                pixelSource = source;
+            }
+            else
+            {
+                throw Napi::TypeError::New(env, "createImageBitmap could not read the supplied image source.");
+            }
+        }
+
+        auto widthValue = pixelSource.Get("width");
+        auto heightValue = pixelSource.Get("height");
+        auto dataValue = pixelSource.Get("data");
+        if (!widthValue.IsNumber() || !heightValue.IsNumber() || !dataValue.IsTypedArray())
+        {
+            throw Napi::TypeError::New(env, "createImageBitmap source pixel data is invalid.");
+        }
+
+        const auto width = widthValue.As<Napi::Number>().Uint32Value();
+        const auto height = heightValue.As<Napi::Number>().Uint32Value();
+        auto data = dataValue.As<Napi::TypedArray>();
+        const auto expectedLength = static_cast<uint64_t>(width) * static_cast<uint64_t>(height) * 4u;
+        if (width == 0 || height == 0 || data.ElementSize() != 1 ||
+            expectedLength > std::numeric_limits<size_t>::max() || data.ByteLength() < expectedLength)
+        {
+            throw Napi::RangeError::New(env, "createImageBitmap source pixel data does not match its dimensions.");
+        }
+
+        auto buffer = data.ArrayBuffer();
+        const auto* begin = static_cast<const uint8_t*>(buffer.Data()) + data.ByteOffset();
+        std::vector<uint8_t> pixels(begin, begin + static_cast<size_t>(expectedLength));
+        auto constructor = JsRuntime::NativeObject::GetFromJavaScript(env).Get(JS_IMAGE_CONSTRUCTOR_NAME).As<Napi::Function>();
+        auto imageObject = constructor.New({});
+        auto* image = NativeCanvasImage::Unwrap(imageObject);
+        if (image == nullptr || !image->SetPixels(width, height, std::move(pixels)))
+        {
+            throw Napi::Error::New(env, "createImageBitmap could not snapshot the supplied image source.");
+        }
+        return imageObject;
+    }
+
+    Napi::Value NativeCanvasImage::CreateImageBitmap(const Napi::CallbackInfo& info)
+    {
+        auto env = info.Env();
+        auto deferred = Napi::Promise::Deferred::New(env);
+        if (info.Length() == 0)
+        {
+            deferred.Reject(Napi::TypeError::New(env, "createImageBitmap requires an image source.").Value());
+            return deferred.Promise();
+        }
+
+        try
+        {
+            auto source = info[0];
+            if (source.IsArrayBuffer() || source.IsTypedArray())
+            {
+                deferred.Resolve(DecodeImageBitmap(env, source));
+                return deferred.Promise();
+            }
+
+            if (!source.IsObject())
+            {
+                throw Napi::TypeError::New(env, "createImageBitmap expected a Blob, image, or canvas source.");
+            }
+
+            auto sourceObject = source.As<Napi::Object>();
+            if ((sourceObject.Has("_getNativeImageData") && sourceObject.Get("_getNativeImageData").IsFunction()) ||
+                sourceObject.Get("getContext").IsFunction() || sourceObject.Get("data").IsTypedArray())
+            {
+                deferred.Resolve(SnapshotImageBitmap(env, sourceObject));
+                return deferred.Promise();
+            }
+
+            auto arrayBufferValue = sourceObject.Get("arrayBuffer");
+            if (!arrayBufferValue.IsFunction())
+            {
+                throw Napi::TypeError::New(env, "createImageBitmap could not read the supplied image source.");
+            }
+
+            auto bufferPromise = arrayBufferValue.As<Napi::Function>().Call(sourceObject, {});
+            if (!bufferPromise.IsObject())
+            {
+                throw Napi::Error::New(env, "createImageBitmap source arrayBuffer() did not return a Promise.");
+            }
+
+            auto promiseObject = bufferPromise.As<Napi::Object>();
+            auto thenValue = promiseObject.Get("then");
+            if (!thenValue.IsFunction())
+            {
+                throw Napi::Error::New(env, "createImageBitmap source arrayBuffer() did not return a Promise.");
+            }
+
+            auto onResolved = Napi::Function::New(env, [deferred](const Napi::CallbackInfo& callbackInfo) {
+                try
+                {
+                    deferred.Resolve(DecodeImageBitmap(callbackInfo.Env(), callbackInfo[0]));
+                }
+                catch (const Napi::Error& error)
+                {
+                    deferred.Reject(error.Value());
+                }
+            });
+            auto onRejected = Napi::Function::New(env, [deferred](const Napi::CallbackInfo& callbackInfo) {
+                deferred.Reject(callbackInfo.Length() > 0 ? callbackInfo[0] : Napi::Error::New(callbackInfo.Env(), "createImageBitmap could not read the supplied Blob.").Value());
+            });
+            thenValue.As<Napi::Function>().Call(promiseObject, {onResolved, onRejected});
+        }
+        catch (const Napi::Error& error)
+        {
+            deferred.Reject(error.Value());
+        }
+        return deferred.Promise();
     }
 
     NativeCanvasImage::NativeCanvasImage(const Napi::CallbackInfo& info)
@@ -231,6 +443,20 @@ namespace Babylon::Polyfills::Internal
         {
             m_onloadHandlerRef.Call({});
         }
+        return true;
+    }
+
+    bool NativeCanvasImage::SetPixels(uint32_t width, uint32_t height, std::vector<uint8_t> pixels)
+    {
+        const auto expectedLength = static_cast<uint64_t>(width) * static_cast<uint64_t>(height) * 4u;
+        if (width == 0 || height == 0 || expectedLength != pixels.size())
+        {
+            return false;
+        }
+
+        m_width = width;
+        m_height = height;
+        m_rgbaData = std::move(pixels);
         return true;
     }
 

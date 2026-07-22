@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <fstream>
 #include <iterator>
+#include <limits>
 #include <limits.h>
 #include <optional>
 #include <regex>
@@ -1236,6 +1237,41 @@ namespace Babylon::Polyfills::Internal
         }
     }
 
+    std::vector<uint8_t> Context::ReadPixels(int32_t sourceX, int32_t sourceY, uint32_t width, uint32_t height, bool unpremultiplyAlpha)
+    {
+        Flush();
+
+        constexpr auto bytesPerPixel = size_t{4};
+        if (static_cast<size_t>(width) > std::numeric_limits<size_t>::max() / bytesPerPixel)
+        {
+            throw std::range_error{"CanvasWgpu pixel readback dimensions overflowed."};
+        }
+
+        const auto bytesPerRow = static_cast<size_t>(width) * bytesPerPixel;
+        if (bytesPerRow != 0u && static_cast<size_t>(height) > std::numeric_limits<size_t>::max() / bytesPerRow)
+        {
+            throw std::range_error{"CanvasWgpu pixel readback dimensions overflowed."};
+        }
+
+        const auto byteLength = bytesPerRow * static_cast<size_t>(height);
+        std::vector<uint8_t> pixels(byteLength);
+        if (nvgReadPixels(
+                *m_nvg,
+                sourceX,
+                sourceY,
+                width,
+                height,
+                unpremultiplyAlpha ? 1 : 0,
+                pixels.data(),
+                pixels.size()) == 0)
+        {
+            const auto* error = nvgLastReadPixelsError();
+            throw std::runtime_error{error == nullptr ? "CanvasWgpu pixel readback failed." : error};
+        }
+
+        return pixels;
+    }
+
     void Context::PutImageData(const Napi::CallbackInfo& info)
     {
         if (info.Length() < 3 || !info[0].IsObject())
@@ -1517,13 +1553,41 @@ namespace Babylon::Polyfills::Internal
 
     Napi::Value Context::GetImageData(const Napi::CallbackInfo& info)
     {
-        // TODO: support source x and y
-        //const auto sx = info[0].As<Napi::Number>().Uint32Value();
-        //const auto sy = info[1].As<Napi::Number>().Uint32Value();
-        const auto sw = info[2].As<Napi::Number>().Uint32Value();
-        const auto sh = info[3].As<Napi::Number>().Uint32Value();
+        if (info.Length() < 4 || !info[0].IsNumber() || !info[1].IsNumber() || !info[2].IsNumber() || !info[3].IsNumber())
+        {
+            throw Napi::TypeError::New(info.Env(), "Context2D.getImageData requires sx, sy, sw, and sh.");
+        }
 
-        return ImageData::CreateInstance(info.Env(), this, sw, sh);
+        auto sourceX = static_cast<int64_t>(info[0].As<Napi::Number>().Int32Value());
+        auto sourceY = static_cast<int64_t>(info[1].As<Napi::Number>().Int32Value());
+        auto signedWidth = static_cast<int64_t>(info[2].As<Napi::Number>().Int32Value());
+        auto signedHeight = static_cast<int64_t>(info[3].As<Napi::Number>().Int32Value());
+        if (signedWidth == 0 || signedHeight == 0)
+        {
+            throw Napi::RangeError::New(info.Env(), "Context2D.getImageData width and height must be non-zero.");
+        }
+
+        if (signedWidth < 0)
+        {
+            sourceX += signedWidth;
+            signedWidth = -signedWidth;
+        }
+        if (signedHeight < 0)
+        {
+            sourceY += signedHeight;
+            signedHeight = -signedHeight;
+        }
+
+        if (sourceX < std::numeric_limits<int32_t>::min() || sourceX > std::numeric_limits<int32_t>::max() ||
+            sourceY < std::numeric_limits<int32_t>::min() || sourceY > std::numeric_limits<int32_t>::max())
+        {
+            throw Napi::RangeError::New(info.Env(), "Context2D.getImageData normalized coordinates are out of range.");
+        }
+
+        const auto width = static_cast<uint32_t>(signedWidth);
+        const auto height = static_cast<uint32_t>(signedHeight);
+        auto pixels = ReadPixels(static_cast<int32_t>(sourceX), static_cast<int32_t>(sourceY), width, height, true);
+        return ImageData::CreateInstance(info.Env(), width, height, std::move(pixels));
     }
 
     void Context::SetLineDash(const Napi::CallbackInfo& info)

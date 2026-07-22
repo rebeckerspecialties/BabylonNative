@@ -1,13 +1,15 @@
 #pragma once
 
 #include <Babylon/Polyfills/Canvas.h>
+#include <vector>
 
 namespace Babylon::Polyfills::Internal
 {
     class ImageData final : public Napi::ObjectWrap<ImageData>
     {
     public:
-        static Napi::Value CreateInstance(Napi::Env env, Context* context, uint32_t width, uint32_t height);
+        static void Initialize(Napi::Env env);
+        static Napi::Value CreateInstance(Napi::Env env, uint32_t width, uint32_t height, std::vector<uint8_t> pixels);
 
         explicit ImageData(const Napi::CallbackInfo& info);
 

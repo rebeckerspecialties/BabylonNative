@@ -4,9 +4,20 @@
 #include "Context.h"
 #include "Colors.h"
 #include "Gradient.h"
+#include "ImageData.h"
+
+#if defined(BABYLON_NATIVE_CANVAS_TO_DATA_URL)
+#include <Babylon/Plugins/NativeEncoding.h>
+#include <basen.hpp>
+#endif
 
 #include <algorithm>
+#include <cstddef>
 #include <cstdint>
+#include <cstring>
+#include <iterator>
+#include <string>
+#include <vector>
 
 namespace
 {
@@ -41,6 +52,7 @@ namespace Babylon::Polyfills::Internal
                 InstanceAccessor("height", &NativeCanvas::GetHeight, &NativeCanvas::SetHeight),
                 InstanceMethod("getContext", &NativeCanvas::GetContext),
                 InstanceMethod("getCanvasTexture", &NativeCanvas::GetCanvasTexture),
+                InstanceMethod("toDataURL", &NativeCanvas::ToDataUrl),
                 InstanceMethod("dispose", &NativeCanvas::Dispose),
                 InstanceMethod("destroy", &NativeCanvas::Dispose),
                 InstanceMethod("remove", &NativeCanvas::Remove),
@@ -236,6 +248,39 @@ namespace Babylon::Polyfills::Internal
         return payload;
     }
 
+    Napi::Value NativeCanvas::ToDataUrl(const Napi::CallbackInfo& info)
+    {
+#if defined(BABYLON_NATIVE_CANVAS_TO_DATA_URL)
+        auto contextValue = GetContext(info);
+        auto* context = Context::Unwrap(contextValue.As<Napi::Object>());
+        if (context == nullptr)
+        {
+            throw Napi::Error::New(info.Env(), "Canvas.toDataURL could not access the 2D rendering context.");
+        }
+
+        auto pixels = context->ReadPixels(0, 0, m_width, m_height, true);
+        std::vector<std::byte> pixelBytes(pixels.size());
+        if (!pixels.empty())
+        {
+            std::memcpy(pixelBytes.data(), pixels.data(), pixels.size());
+        }
+
+        auto png = Plugins::NativeEncoding::EncodePng(pixelBytes, m_width, m_height, false, false);
+        std::string base64;
+        base64.reserve(((png->size() + 2u) / 3u) * 4u);
+        const auto* pngBegin = reinterpret_cast<const uint8_t*>(png->data());
+        bn::encode_b64(pngBegin, pngBegin + png->size(), std::back_inserter(base64));
+        const auto remainder = png->size() % 3u;
+        if (remainder != 0u)
+        {
+            base64.append(3u - remainder, '=');
+        }
+        return Napi::String::New(info.Env(), "data:image/png;base64," + base64);
+#else
+        throw Napi::Error::New(info.Env(), "Canvas.toDataURL requires the NativeEncoding plugin in this build.");
+#endif
+    }
+
     Napi::Value NativeCanvas::ParseColor(const Napi::CallbackInfo& info)
     {
         const auto colorString = info[0].As<Napi::String>().Utf8Value();
@@ -351,6 +396,7 @@ namespace Babylon::Polyfills
 
         Internal::NativeCanvas::Initialize(env);
         Internal::NativeCanvasImage::Initialize(env);
+        Internal::ImageData::Initialize(env);
         Internal::NativeCanvasPath2D::Initialize(env);
         Internal::CanvasGradient::Initialize(env);
         Internal::Context::Initialize(env);

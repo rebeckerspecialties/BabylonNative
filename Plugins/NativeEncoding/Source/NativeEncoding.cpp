@@ -55,7 +55,12 @@ namespace Babylon::Plugins
         };
 #endif
 
-        std::shared_ptr<std::vector<std::byte>> EncodePNG(const std::vector<std::byte>& pixelData, uint32_t width, uint32_t height, bool invertY)
+        std::shared_ptr<std::vector<std::byte>> EncodePNG(
+            const std::vector<std::byte>& pixelData,
+            uint32_t width,
+            uint32_t height,
+            bool invertY,
+            bool premultipliedAlpha)
         {
 #if defined(__APPLE__)
             auto rgba{pixelData};
@@ -81,7 +86,7 @@ namespace Babylon::Plugins
 
             const auto bitmapInfo = static_cast<CGBitmapInfo>(
                 static_cast<uint32_t>(kCGBitmapByteOrder32Big) |
-                static_cast<uint32_t>(kCGImageAlphaPremultipliedLast));
+                static_cast<uint32_t>(premultipliedAlpha ? kCGImageAlphaPremultipliedLast : kCGImageAlphaLast));
             ScopedCFRelease provider{CGDataProviderCreateWithData(nullptr, rgba.data(), rgba.size(), nullptr)};
             if (provider.Get<CGDataProviderRef>() == nullptr)
             {
@@ -133,6 +138,7 @@ namespace Babylon::Plugins
             std::memcpy(result->data(), CFDataGetBytePtr(pngData.Get<CFDataRef>()), byteLength);
             return result;
 #else
+            (void)premultipliedAlpha;
             auto memoryBlock{bx::MemoryBlock(&Graphics::DeviceContext::GetDefaultAllocator())};
             auto writer{bx::MemoryWriter(&memoryBlock)};
             auto err{bx::Error()};
@@ -181,7 +187,17 @@ namespace Babylon::Plugins
 
             arcana::make_task(arcana::threadpool_scheduler, arcana::cancellation_source::none(),
                 [pixelData{std::move(pixelData)}, width, height, invertY]() {
-                    return EncodePNG(pixelData, width, height, invertY);
+                    return EncodePNG(
+                        pixelData,
+                        width,
+                        height,
+                        invertY,
+#if defined(__APPLE__)
+                        true
+#else
+                        false
+#endif
+                    );
                 })
                 .then(*runtimeScheduler, arcana::cancellation_source::none(),
                     [runtimeScheduler, deferred, env](const arcana::expected<std::shared_ptr<std::vector<std::byte>>, std::exception_ptr>& result) {
@@ -215,6 +231,16 @@ namespace Babylon::Plugins
 
 namespace Babylon::Plugins::NativeEncoding
 {
+    std::shared_ptr<std::vector<std::byte>> EncodePng(
+        const std::vector<std::byte>& pixelData,
+        uint32_t width,
+        uint32_t height,
+        bool invertY,
+        bool premultipliedAlpha)
+    {
+        return EncodePNG(pixelData, width, height, invertY, premultipliedAlpha);
+    }
+
     void BABYLON_API Initialize(Napi::Env env)
     {
         auto native{JsRuntime::NativeObject::GetFromJavaScript(env)};
