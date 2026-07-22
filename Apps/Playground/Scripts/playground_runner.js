@@ -17,6 +17,16 @@ var engine = null;
 (function () {
     var SMOKE_READY_WAIT_TIMEOUT_MS = 2000;
 
+    // Some validation inputs (for example Babylon-Lite scene bundles) create
+    // their own WebGPU engine and render loop. Those scripts set this internal
+    // marker before this runner is loaded so a second engine is not created.
+    if (globalThis.__babylonPlaygroundSelfManagedScript === true) {
+        if (typeof globalThis.__nativePlaygroundStatus === "function") {
+            globalThis.__nativePlaygroundStatus("runner:self-managed-script");
+        }
+        return;
+    }
+
     function releaseRuntimeResources(runtime, reason) {
         if (!runtime) {
             return;

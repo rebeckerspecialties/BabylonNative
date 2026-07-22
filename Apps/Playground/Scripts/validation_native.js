@@ -1,6 +1,7 @@
 (async function () {
     let currentScene;
     let currentValidationTest;
+    let testLoadTimer = null;
     let config;
     const opts = (typeof _playgroundOptions === "object" && _playgroundOptions) ? _playgroundOptions : {};
     const justOnce = !!opts.runOnce;
@@ -2504,6 +2505,17 @@ fragmentOutputs.color=color;
     }
 
     function processCurrentScene(test, renderImage, done, compareFunction) {
+        if (currentValidationTest !== test) {
+            if (currentScene && typeof currentScene.dispose === "function") {
+                currentScene.dispose();
+            }
+            return;
+        }
+        if (testLoadTimer !== null) {
+            clearTimeout(testLoadTimer);
+            testLoadTimer = null;
+        }
+
         currentScene.useConstantAnimationDeltaTime = true;
         // Some playgrounds start their own render loop before returning the
         // scene. Validation owns frame counting, so clear any stale loop state
@@ -2998,10 +3010,20 @@ fragmentOutputs.color=color;
 
         const test = config.tests[index];
         currentValidationTest = test;
+        let finished = false;
         const finishTest = function (status) {
+            if (finished) {
+                return;
+            }
+            finished = true;
+            if (testLoadTimer !== null) {
+                clearTimeout(testLoadTimer);
+                testLoadTimer = null;
+            }
             if (currentValidationTest === test) {
                 currentValidationTest = null;
             }
+            setNativeValidationFrameTimerEnabled(false);
             done(status);
         };
         const testInfo = "Running " + test.title;
@@ -3009,6 +3031,18 @@ fragmentOutputs.color=color;
         TestUtils.setTitle(testInfo);
 
         seed = 1;
+        // Async createScene implementations can start temporary render loops
+        // while constructing GPU-derived data. Keep native RAF ticks flowing,
+        // but do not advance the validation frame counter until readiness.
+        setNativeValidationFrameTimerEnabled(true);
+        const testSource = test.playgroundId || test.scriptToRun ||
+            ((test.sceneFolder || "") + (test.sceneFilename || "")) || "(unknown source)";
+        testLoadTimer = setTimeout(function () {
+            console.error(
+                "TEST_LOAD_TIMEOUT: Test '" + (test.title || "(unnamed)") +
+                "' did not create a scene from " + testSource + " within " + sceneReadyTimeoutMs + "ms.");
+            failTest(finishTest);
+        }, sceneReadyTimeoutMs);
 
         if (generateReferences) {
             loadPlayground(test, finishTest, undefined, saveRenderedResult);

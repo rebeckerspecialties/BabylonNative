@@ -354,6 +354,16 @@ namespace
                 validationFrameTimerEnabled.store(enabled);
             });
             env.Global().Set("__nativeValidationSetFrameTimerEnabled", setValidationFrameTimerEnabled);
+
+            auto reportValidationResult = Napi::Function::New(env, [](const Napi::CallbackInfo& info) {
+                if (info.Length() > 0)
+                {
+                    const auto message = info[0].ToString().Utf8Value();
+                    fprintf(stderr, "%s\n", message.c_str());
+                    fflush(stderr);
+                }
+            });
+            env.Global().Set("__nativeValidationReport", reportValidationResult);
         }, true);
     }
 
@@ -447,7 +457,10 @@ namespace
 - (void)viewDidAppear {
     [super viewDidAppear];
 
-    [self refreshBabylon];
+    if (self.initializesBabylonRuntime)
+    {
+        [self refreshBabylon];
+    }
 }
 
 - (void)viewDidDisappear {

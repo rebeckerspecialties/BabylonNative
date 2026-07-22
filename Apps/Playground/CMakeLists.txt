@@ -21,6 +21,8 @@ set(SCRIPTS
     "Scripts/gltf-roundtrip-palm.png"
     "Scripts/gltf-roundtrip-sample_uastc.ktx2"
     "Scripts/depth_prepass_material_variants.js"
+    "Scripts/babylon_lite_bootstrap.js"
+    "Scripts/babylon_lite_validation.js"
     "Scripts/gltf_serializer_texture_roundtrip_native.js"
     "Scripts/playground_runner.js"
     "Scripts/validation_native.js"
@@ -175,6 +177,16 @@ else()
     add_executable(Playground ${REFERENCE_IMAGES} ${BABYLON_SCRIPTS} ${DEPENDENCIES} ${SCRIPTS} ${SOURCES} ${RESOURCE_FILES})
 endif()
 
+if(APPLE)
+    set(_playground_bundle_inputs)
+    foreach(_playground_bundle_input ${REFERENCE_IMAGES} ${BABYLON_SCRIPTS} ${DEPENDENCIES} ${SCRIPTS})
+        list(APPEND _playground_bundle_inputs "${CMAKE_CURRENT_SOURCE_DIR}/${_playground_bundle_input}")
+    endforeach()
+    set_property(TARGET Playground APPEND PROPERTY LINK_DEPENDS ${_playground_bundle_inputs})
+    unset(_playground_bundle_input)
+    unset(_playground_bundle_inputs)
+endif()
+
 warnings_as_errors(Playground)
 target_compile_definitions(Playground PRIVATE UNICODE)
 target_compile_definitions(Playground PRIVATE _UNICODE)
@@ -245,6 +257,24 @@ if(APPLE)
                 "${CMAKE_CURRENT_SOURCE_DIR}/${REFERENCE_IMAGE_PATH}"
                 "$<TARGET_FILE_DIR:Playground>/../Resources/ReferenceImages/${REFERENCE_IMAGE_NAME}")
     endforeach()
+
+    if(NOT IOS AND NOT TVOS AND NOT VISIONOS AND NOT CMAKE_GENERATOR STREQUAL "Xcode")
+        execute_process(
+            COMMAND xcrun --find ibtool
+            OUTPUT_VARIABLE PLAYGROUND_IBTOOL
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            COMMAND_ERROR_IS_FATAL ANY)
+        add_custom_command(TARGET Playground POST_BUILD
+            COMMAND "${PLAYGROUND_IBTOOL}"
+                --errors
+                --warnings
+                --notices
+                --target-device mac
+                --minimum-deployment-target "${CMAKE_OSX_DEPLOYMENT_TARGET}"
+                --compile "$<TARGET_FILE_DIR:Playground>/../Resources/Main.storyboardc"
+                "${STORYBOARD}"
+            VERBATIM)
+    endif()
 endif()
 
 if(ANGLE_LIBEGL)

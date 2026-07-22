@@ -25,7 +25,10 @@
                     backing:NSBackingStoreBuffered
                       defer:NO];
     self.window.title = @"BabylonNative Playground";
-    self.window.contentViewController = [[ViewController alloc] initWithNibName:nil bundle:nil];
+    ViewController* viewController = [[ViewController alloc] initWithNibName:nil bundle:nil];
+    viewController.initializesBabylonRuntime = YES;
+    self.window.contentViewController = viewController;
+    [self.window setContentSize:NSMakeSize(kInitialWidth, kInitialHeight)];
     [self.window center];
     [self.window makeKeyAndOrderFront:nil];
     [NSApp activateIgnoringOtherApps:YES];

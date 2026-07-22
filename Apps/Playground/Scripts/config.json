@@ -147,10 +147,8 @@
         },
         {
             "title": "GUI3D SpherePanel",
-            "playgroundId": "#AMM2WB#0",
+            "playgroundId": "#HB4C01#9",
             "renderCount": 50,
-            "threshold": 80,
-            "errorRatio": 0.25,
             "referenceImage": "spherepanel.png"
         },
         {
@@ -1107,19 +1105,19 @@
         },
         {
             "title": "GUI Slate",
-            "playgroundId": "#UDLHJ3#0",
+            "playgroundId": "#2YZFA0#277",
             "renderCount": 60,
             "excludeFromAutomaticTesting": true,
-            "reason": "Pixel comparison fails (more than 20% pixels differ)",
+            "reason": "NativeEngine's bgfx/nanovg Canvas backend lacks the stroke and gradient semantics used by this slate; tracked by BabylonJS/BabylonNative#1782. NativeWebGPU remains enabled through includeInNativeWebGPU.",
             "includeInNativeWebGPU": true,
             "errorRatio": 0.1,
             "referenceImage": "guiSlate.png"
         },
         {
             "title": "GUI Near Menu",
-            "playgroundId": "#DZPGOB#0",
+            "playgroundId": "#2YZFA0#302",
             "renderCount": 60,
-            "reason": "OpenGL: BGFX FATAL shader compile error in GUI fragment shader ('=' : cannot convert from 'highp float' to 'bool'). Re-enabled on D3D11 post BabylonJS/BabylonNative#1695; NativeWebGPU keeps stricter comparison limits while remaining included.",
+            "reason": "OpenGL: BGFX FATAL shader compile error in GUI fragment shader ('=' : cannot convert from 'highp float' to 'bool'). Re-enabled on D3D11 post BabylonJS/BabylonNative#1695 (original 'V8 D3D11 crash' no longer reproduces under Chakra; original 'hangs on OpenGL' is now this clean shader-compile failure surfaced by the BabylonJS/BabylonNative#1688 BgfxCallback).",
             "includeInNativeWebGPU": true,
             "threshold": 35,
             "errorRatio": 0.25,
