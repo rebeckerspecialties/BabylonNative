@@ -2310,7 +2310,7 @@ fragmentOutputs.color=color;
     }
 
     engine.getInputElement = function () {
-        return 0;
+        return validationEngine.canvas;
     }
 
     const canvas = validationEngine.canvas;
@@ -2778,11 +2778,10 @@ fragmentOutputs.color=color;
                     }
 
                     if (frameIndex >= compareFrame && !readbackRequested) {
-                        // WebGPU readback waits for submitted work before
-                        // queueing the native screenshot request. Keep the
-                        // render loop alive until that request is consumed by
-                        // a subsequent native frame.
-                        if (stopFrame <= compareFrame && !stopped && !engine.isWebGPU) {
+                        // Freeze scene state at the configured comparison frame.
+                        // Native validation ticks remain active so WebGPU queue
+                        // completion and framebuffer readback can still progress.
+                        if (stopFrame <= compareFrame && !stopped) {
                             stopped = true;
                             engine.stopRenderLoop();
                         }

@@ -20,6 +20,7 @@ set(SCRIPTS
     "Scripts/gltf-roundtrip-grass.jpg"
     "Scripts/gltf-roundtrip-palm.png"
     "Scripts/gltf-roundtrip-sample_uastc.ktx2"
+    "Scripts/custom_render_target.js"
     "Scripts/depth_prepass_material_variants.js"
     "Scripts/babylon_lite_bootstrap.js"
     "Scripts/babylon_lite_validation.js"
