@@ -71,13 +71,19 @@ target_link_libraries(UnitTests
     PRIVATE AppRuntime
     PRIVATE Blob
     PRIVATE Canvas
+    PRIVATE Compression
     PRIVATE Console
+    PRIVATE Fetch
+    PRIVATE File
     PRIVATE GraphicsDevice
     PRIVATE ExternalTexture
     PRIVATE NativeEngine
     PRIVATE NativeEncoding
     PRIVATE ScriptLoader
     PRIVATE ShaderCache
+    PRIVATE Streams
+    PRIVATE TextDecoder
+    PRIVATE TextEncoder
     PRIVATE Window
     PRIVATE XMLHttpRequest
     PRIVATE gtest_main
