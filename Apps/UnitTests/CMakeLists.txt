@@ -33,9 +33,15 @@ set(UNITTEST_LIBRARIES
     AppRuntime
     Blob
     Canvas
+    Compression
     Console
+    Fetch
+    File
     GraphicsDevice
     ScriptLoader
+    Streams
+    TextDecoder
+    TextEncoder
     Window
     XMLHttpRequest
     gtest_main)

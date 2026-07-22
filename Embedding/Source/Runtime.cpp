@@ -31,10 +31,12 @@
 #endif
 
 #include <Babylon/Polyfills/Blob.h>
+#include <Babylon/Polyfills/Compression.h>
 #include <Babylon/Polyfills/Console.h>
 #include <Babylon/Polyfills/Fetch.h>
 #include <Babylon/Polyfills/File.h>
 #include <Babylon/Polyfills/Performance.h>
+#include <Babylon/Polyfills/Streams.h>
 #include <Babylon/Polyfills/TextDecoder.h>
 #include <Babylon/Polyfills/TextEncoder.h>
 #include <Babylon/Polyfills/XMLHttpRequest.h>
@@ -200,6 +202,7 @@ namespace Babylon::Embedding
             implPtr->m_device->AddToJavaScript(env);
 
             // 2. Polyfills (always-on).
+            Babylon::Polyfills::Streams::Initialize(env);
             Babylon::Polyfills::Blob::Initialize(env);
             Babylon::Polyfills::File::Initialize(env);
 
@@ -247,6 +250,7 @@ namespace Babylon::Embedding
 
             Babylon::Polyfills::TextDecoder::Initialize(env);
             Babylon::Polyfills::TextEncoder::Initialize(env);
+            Babylon::Polyfills::Compression::Initialize(env);
             Babylon::Polyfills::XMLHttpRequest::Initialize(env);
             Babylon::Polyfills::Fetch::Initialize(env);
 

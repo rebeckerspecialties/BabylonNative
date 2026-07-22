@@ -7,6 +7,12 @@
 #include <Babylon/Polyfills/Window.h>
 #include <Babylon/Polyfills/Canvas.h>
 #include <Babylon/Polyfills/Blob.h>
+#include <Babylon/Polyfills/Compression.h>
+#include <Babylon/Polyfills/Fetch.h>
+#include <Babylon/Polyfills/File.h>
+#include <Babylon/Polyfills/Streams.h>
+#include <Babylon/Polyfills/TextDecoder.h>
+#include <Babylon/Polyfills/TextEncoder.h>
 #include <Babylon/ScriptLoader.h>
 
 #if defined(BABYLON_NATIVE_UNITTESTS_WITH_NATIVEENGINE)
@@ -86,7 +92,13 @@ TEST(JavaScript, All)
             std::cout << "[" << EnumToString(logLevel) << "] " << message << std::endl;
         });
         Babylon::Polyfills::Window::Initialize(env);
+        Babylon::Polyfills::Streams::Initialize(env);
         Babylon::Polyfills::Blob::Initialize(env);
+        Babylon::Polyfills::File::Initialize(env);
+        Babylon::Polyfills::TextDecoder::Initialize(env);
+        Babylon::Polyfills::TextEncoder::Initialize(env);
+        Babylon::Polyfills::Compression::Initialize(env);
+        Babylon::Polyfills::Fetch::Initialize(env);
         nativeCanvas.emplace(Babylon::Polyfills::Canvas::Initialize(env));
 
 #if defined(BABYLON_NATIVE_UNITTESTS_WITH_NATIVEENGINE)
@@ -170,6 +182,74 @@ TEST(JavaScript, WindowDocumentCreateEvent)
             throw new Error("event.initEvent did not preserve click event metadata.");
         }
     )JS", "window.document-create-event.test.js"));
+}
+
+TEST(JavaScript, BrowserStreamResponseCompressionIntegration)
+{
+    Babylon::AppRuntime runtime{};
+    std::promise<std::string> scriptDonePromise;
+
+    runtime.Dispatch([&scriptDonePromise](Napi::Env env) {
+        Babylon::Polyfills::Streams::Initialize(env);
+        Babylon::Polyfills::Blob::Initialize(env);
+        Babylon::Polyfills::File::Initialize(env);
+        Babylon::Polyfills::TextDecoder::Initialize(env);
+        Babylon::Polyfills::TextEncoder::Initialize(env);
+        Babylon::Polyfills::Compression::Initialize(env);
+        Babylon::Polyfills::Fetch::Initialize(env);
+        env.Global().Set("__browserPolyfillTestDone", Napi::Function::New(env, [&scriptDonePromise](const Napi::CallbackInfo& info) {
+            scriptDonePromise.set_value(info.Length() > 0 && info[0].IsString() ? info[0].As<Napi::String>().Utf8Value() : std::string{});
+        }));
+    });
+
+    Babylon::ScriptLoader loader{runtime};
+    loader.Eval(R"JS(
+        (async () => {
+            const prefix = new Uint8Array([110, 97, 116, 105, 118, 101, 32]);
+            const blob = new Blob([prefix.subarray(1), "streams"], { type: "Text/Plain" });
+            if (blob.type !== "text/plain" || blob.size !== 13) {
+                throw new Error("Blob did not preserve browser-shaped type and size semantics.");
+            }
+
+            const compressedBody = blob.stream().pipeThrough(new CompressionStream("gzip"));
+            const compressedResponse = new Response(compressedBody, {
+                headers: [["X-Native-Test", " first "], ["x-native-test", "second"]]
+            });
+            if (compressedResponse.headers.get("X-NATIVE-TEST") !== "first, second") {
+                throw new Error("Headers did not normalize and combine values.");
+            }
+
+            const compressedBytes = new Uint8Array(await compressedResponse.arrayBuffer());
+            if (compressedBytes.length === 0 || !compressedResponse.bodyUsed) {
+                throw new Error("Response did not consume the compressed stream.");
+            }
+
+            let secondReadRejected = false;
+            try {
+                await compressedResponse.arrayBuffer();
+            } catch (error) {
+                secondReadRejected = error instanceof TypeError;
+            }
+            if (!secondReadRejected) {
+                throw new Error("A disturbed Response body was readable twice.");
+            }
+
+            const restoredResponse = new Response(
+                new Blob([compressedBytes]).stream().pipeThrough(new DecompressionStream("gzip"))
+            );
+            if (await restoredResponse.text() !== "ative streams") {
+                throw new Error("Compression stream round trip changed the payload.");
+            }
+
+            __browserPolyfillTestDone("");
+        })().catch((error) => {
+            __browserPolyfillTestDone(error && error.stack ? String(error.stack) : String(error));
+        });
+    )JS", "browser-polyfill.integration.test.js");
+
+    auto scriptDoneFuture = scriptDonePromise.get_future();
+    ASSERT_EQ(scriptDoneFuture.wait_for(30s), std::future_status::ready) << "Browser polyfill integration test timed out.";
+    EXPECT_TRUE(scriptDoneFuture.get().empty());
 }
 
 #if defined(BABYLON_NATIVE_UNITTESTS_WITH_WEBGPU)
