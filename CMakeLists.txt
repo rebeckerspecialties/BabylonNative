@@ -275,6 +275,10 @@ if(ENABLE_THREAD_SANITIZER)
         if(APPLE)
             # The Playground combines Rust, C++, Objective-C, and TSan
             # personalities, which exceeds Mach-O compact unwind's limit.
+            # Preserve exception handling through the DWARF fallback when the
+            # linker omits compact unwind information.
+            add_compile_options(
+                $<$<COMPILE_LANGUAGE:CXX,OBJCXX>:-femit-dwarf-unwind=always>)
             add_link_options(LINKER:-no_compact_unwind)
         endif()
     else()
