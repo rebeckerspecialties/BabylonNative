@@ -476,6 +476,101 @@ TEST(NativeWebGPUAsyncBridge, CreateRenderPipelineAsyncRejectsForInvalidDescript
     )JS");
 }
 
+TEST(NativeWebGPUAsyncBridge, SynchronousPipelineValidationErrorsThrowAndDeviceSurvives)
+{
+    RunNativeWebGpuAsyncScript(R"JS(
+        (async () => {
+            const adapter = await navigator.gpu.requestAdapter();
+            if (!adapter) {
+                throw new Error("requestAdapter returned null.");
+            }
+
+            const device = await adapter.requestDevice();
+            if (!device) {
+                throw new Error("requestDevice returned null.");
+            }
+
+            const shader = device.createShaderModule({ code: `
+                @vertex
+                fn vs(@builtin(vertex_index) vertexIndex : u32) -> @builtin(position) vec4f {
+                    var positions = array<vec2f, 3>(
+                        vec2f(-1.0, -1.0),
+                        vec2f(3.0, -1.0),
+                        vec2f(-1.0, 3.0));
+                    return vec4f(positions[vertexIndex], 0.0, 1.0);
+                }
+
+                @fragment
+                fn fs() -> @location(0) vec4f {
+                    return vec4f(0.0, 0.0, 0.0, 1.0);
+                }
+
+                @compute @workgroup_size(1)
+                fn cs() {}
+            ` });
+
+            function expectPipelineFailure(operation, create) {
+                try {
+                    create();
+                    throw new Error("Expected " + operation + " to fail.");
+                } catch (error) {
+                    if (!(error instanceof Error)) {
+                        throw new Error(operation + " did not throw an Error instance.");
+                    }
+                    if (error.nativeOperation !== operation) {
+                        throw new Error("Unexpected native operation: " + String(error.nativeOperation));
+                    }
+                    const message = String(error.message || error);
+                    if (message.indexOf("validation error") === -1 ||
+                        message.indexOf("missingEntryPoint") === -1) {
+                        throw new Error(operation + " error was not actionable: " + message);
+                    }
+                }
+            }
+
+            expectPipelineFailure("GPUDevice.createRenderPipeline", () => {
+                device.createRenderPipeline({
+                    label: "invalid render pipeline",
+                    vertex: { module: shader, entryPoint: "missingEntryPoint" },
+                    fragment: {
+                        module: shader,
+                        entryPoint: "fs",
+                        targets: [{ format: navigator.gpu.getPreferredCanvasFormat() }]
+                    }
+                });
+            });
+
+            expectPipelineFailure("GPUDevice.createComputePipeline", () => {
+                device.createComputePipeline({
+                    label: "invalid compute pipeline",
+                    compute: { module: shader, entryPoint: "missingEntryPoint" }
+                });
+            });
+
+            const renderPipeline = device.createRenderPipeline({
+                label: "valid render pipeline after validation failure",
+                vertex: { module: shader, entryPoint: "vs" },
+                fragment: {
+                    module: shader,
+                    entryPoint: "fs",
+                    targets: [{ format: navigator.gpu.getPreferredCanvasFormat() }]
+                }
+            });
+            const computePipeline = device.createComputePipeline({
+                label: "valid compute pipeline after validation failure",
+                compute: { module: shader, entryPoint: "cs" }
+            });
+            if (!renderPipeline || !computePipeline) {
+                throw new Error("Device did not recover after pipeline validation failures.");
+            }
+
+            __nativeWebGpuTestDone(true, "");
+        })().catch((error) => {
+            __nativeWebGpuTestDone(false, error && error.stack ? error.stack : String(error));
+        });
+    )JS");
+}
+
 TEST(NativeWebGPUAsyncBridge, RenderPassEncoderExposesDebugMarkerMethods)
 {
     RunNativeWebGpuAsyncScript(R"JS(

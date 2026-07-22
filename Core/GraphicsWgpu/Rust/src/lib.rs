@@ -2375,6 +2375,36 @@ mod upstream_wgpu_native {
         end.duration_since(start).as_micros()
     }
 
+    fn create_with_error_scopes<T>(
+        device: &wgpu::Device,
+        operation: &str,
+        create: impl FnOnce() -> T,
+    ) -> Result<T, String> {
+        let out_of_memory_scope = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
+        let internal_scope = device.push_error_scope(wgpu::ErrorFilter::Internal);
+        let validation_scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+
+        let value = create();
+        let errors = [
+            ("validation", pollster::block_on(validation_scope.pop())),
+            ("internal", pollster::block_on(internal_scope.pop())),
+            (
+                "out-of-memory",
+                pollster::block_on(out_of_memory_scope.pop()),
+            ),
+        ];
+        let details = errors
+            .into_iter()
+            .filter_map(|(kind, error)| error.map(|error| format!("{kind} error: {error}")))
+            .collect::<Vec<_>>();
+
+        if details.is_empty() {
+            Ok(value)
+        } else {
+            Err(format!("{operation} failed: {}", details.join("; ")))
+        }
+    }
+
     #[derive(Default)]
     struct WebGpuResourceTable {
         next_id: u64,
@@ -4382,25 +4412,31 @@ mod upstream_wgpu_native {
                         targets,
                     });
 
-            let pipeline =
-                self.runtime
-                    .device
-                    .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                        label: json_str(&descriptor, "label"),
-                        layout,
-                        vertex: wgpu::VertexState {
-                            module: &vertex_module.module,
-                            entry_point: Some(vertex_entry),
-                            compilation_options: wgpu::PipelineCompilationOptions::default(),
-                            buffers: &vertex_buffers,
-                        },
-                        primitive,
-                        depth_stencil,
-                        multisample,
-                        fragment,
-                        multiview_mask: None,
-                        cache: None,
-                    });
+            let label = json_str(&descriptor, "label").unwrap_or("unlabeled");
+            let pipeline = create_with_error_scopes(
+                &self.runtime.device,
+                &format!("GPURenderPipeline '{label}'"),
+                || {
+                    self.runtime
+                        .device
+                        .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                            label: json_str(&descriptor, "label"),
+                            layout,
+                            vertex: wgpu::VertexState {
+                                module: &vertex_module.module,
+                                entry_point: Some(vertex_entry),
+                                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                                buffers: &vertex_buffers,
+                            },
+                            primitive,
+                            depth_stencil,
+                            multisample,
+                            fragment,
+                            multiview_mask: None,
+                            cache: None,
+                        })
+                },
+            )?;
 
             let id = self.resources.next();
             self.resources.render_pipelines.insert(
@@ -4458,17 +4494,23 @@ mod upstream_wgpu_native {
                 .ok_or_else(|| format!("GPUShaderModule {module_id} was not found"))?;
             let entry = json_str(compute, "entryPoint").unwrap_or("main");
 
-            let pipeline =
-                self.runtime
-                    .device
-                    .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                        label: json_str(&descriptor, "label"),
-                        layout,
-                        module: &module.module,
-                        entry_point: Some(entry),
-                        compilation_options: wgpu::PipelineCompilationOptions::default(),
-                        cache: None,
-                    });
+            let label = json_str(&descriptor, "label").unwrap_or("unlabeled");
+            let pipeline = create_with_error_scopes(
+                &self.runtime.device,
+                &format!("GPUComputePipeline '{label}'"),
+                || {
+                    self.runtime
+                        .device
+                        .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                            label: json_str(&descriptor, "label"),
+                            layout,
+                            module: &module.module,
+                            entry_point: Some(entry),
+                            compilation_options: wgpu::PipelineCompilationOptions::default(),
+                            cache: None,
+                        })
+                },
+            )?;
 
             let id = self.resources.next();
             self.resources
