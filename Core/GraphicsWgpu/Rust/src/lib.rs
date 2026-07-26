@@ -90,6 +90,7 @@ pub struct BabylonWgpuInfo {
 pub struct BabylonWgpuFeatureInfo {
     pub shader_f16: u32,
     pub indirect_first_instance: u32,
+    pub float32_filterable: u32,
     pub subgroup: u32,
     pub subgroup_barrier: u32,
     pub multi_draw_indirect_count: u32,
@@ -2035,6 +2036,7 @@ mod upstream_wgpu_native {
             shader_f16: features.contains(wgpu::Features::SHADER_F16) as u32,
             indirect_first_instance: features.contains(wgpu::Features::INDIRECT_FIRST_INSTANCE)
                 as u32,
+            float32_filterable: features.contains(wgpu::Features::FLOAT32_FILTERABLE) as u32,
             subgroup: features.contains(wgpu::Features::SUBGROUP) as u32,
             subgroup_barrier: features.contains(wgpu::Features::SUBGROUP_BARRIER) as u32,
             multi_draw_indirect_count: features.contains(wgpu::Features::MULTI_DRAW_INDIRECT_COUNT)
@@ -8356,6 +8358,9 @@ mod upstream_wgpu_native {
             }
             if supported_features.contains(wgpu::Features::INDIRECT_FIRST_INSTANCE) {
                 required_features |= wgpu::Features::INDIRECT_FIRST_INSTANCE;
+            }
+            if supported_features.contains(wgpu::Features::FLOAT32_FILTERABLE) {
+                required_features |= wgpu::Features::FLOAT32_FILTERABLE;
             }
             if supported_features.contains(wgpu::Features::SHADER_F16) {
                 required_features |= wgpu::Features::SHADER_F16;

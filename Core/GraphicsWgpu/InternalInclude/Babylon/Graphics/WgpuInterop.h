@@ -30,6 +30,7 @@ struct BabylonWgpuFeatureInfo final
 {
     uint32_t shader_f16{};
     uint32_t indirect_first_instance{};
+    uint32_t float32_filterable{};
     uint32_t subgroup{};
     uint32_t subgroup_barrier{};
     uint32_t multi_draw_indirect_count{};

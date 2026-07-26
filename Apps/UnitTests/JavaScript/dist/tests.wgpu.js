@@ -1137,8 +1137,12 @@
             expect(adapter.info && adapter.info.architecture === "wgpu", "adapter info architecture should be wgpu");
             expect(typeof adapter.requestDevice === "function", "requestDevice missing");
 
-            var device = await adapter.requestDevice();
+            var requiredFeatures = adapter.features.has("float32-filterable") ? ["float32-filterable"] : [];
+            var device = await adapter.requestDevice({ requiredFeatures: requiredFeatures });
             expect(device, "requestDevice returned null");
+            if (requiredFeatures.length) {
+                expect(device.features.has("float32-filterable"), "requested float32-filterable feature missing from the device");
+            }
             expect(device.queue && typeof device.queue.submit === "function", "device.queue.submit missing");
             expect(typeof device.createCommandEncoder === "function", "createCommandEncoder missing");
             expect(typeof device.createRenderPipeline === "function", "createRenderPipeline missing");

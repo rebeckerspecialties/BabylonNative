@@ -1483,6 +1483,10 @@ namespace Babylon::Plugins::NativeWebGPU
                 {
                     AddSetValue(env, set, "indirect-first-instance");
                 }
+                if (featureInfo.float32_filterable)
+                {
+                    AddSetValue(env, set, "float32-filterable");
+                }
                 if (featureInfo.shader_f16)
                 {
                     AddSetValue(env, set, "shader-f16");
