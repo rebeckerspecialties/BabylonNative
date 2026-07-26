@@ -2325,11 +2325,56 @@ fragmentOutputs.color=color;
         return Number.isFinite(scalingLevel) && scalingLevel > 0 ? scalingLevel : 1;
     }
 
-    // Random replacement
+    // Deterministic random replacement. Reinstall it before every test because
+    // playground snippets can replace Math.random for the rest of the process.
     let seed = 1;
-    Math.random = function () {
+    const deterministicRandom = function () {
         const x = Math.sin(seed++) * 10000;
         return x - Math.floor(x);
+    };
+    Math.random = deterministicRandom;
+
+    const sharedObservableBaselines = [
+        BABYLON.SceneLoader && BABYLON.SceneLoader.OnPluginActivatedObservable,
+        engine.onEndFrameObservable,
+        engine.onResizeObservable,
+    ].filter(function (observable) {
+        return observable && observable.observers;
+    }).map(function (observable) {
+        return {
+            observable: observable,
+            observers: observable.observers.slice(),
+        };
+    });
+
+    function resetSharedValidationState() {
+        seed = 1;
+        Math.random = deterministicRandom;
+
+        // Playground snippets share one JS global and engine. Restore mutable
+        // state that is not owned by Scene.dispose() before loading the next one.
+        if (typeof engine.useReverseDepthBuffer !== "undefined") {
+            engine.useReverseDepthBuffer = false;
+        }
+
+        // Helpers owned by a disposed scene can leave callbacks on the shared
+        // runtime. Remove only observers added after harness initialization.
+        sharedObservableBaselines.forEach(function (baseline) {
+            baseline.observable.observers.slice().forEach(function (observer) {
+                if (baseline.observers.indexOf(observer) === -1) {
+                    observer.remove();
+                }
+            });
+        });
+
+        if (typeof engine.snapshotRendering !== "undefined") {
+            engine.snapshotRendering = false;
+        }
+        if (typeof engine.snapshotRenderingMode !== "undefined" &&
+            BABYLON.Constants &&
+            typeof BABYLON.Constants.SNAPSHOTRENDERING_STANDARD !== "undefined") {
+            engine.snapshotRenderingMode = BABYLON.Constants.SNAPSHOTRENDERING_STANDARD;
+        }
     }
 
     function downscaleRgba(renderData, sourceWidth, sourceHeight, targetWidth, targetHeight) {
@@ -3029,7 +3074,7 @@ fragmentOutputs.color=color;
         console.log(testInfo);
         TestUtils.setTitle(testInfo);
 
-        seed = 1;
+        resetSharedValidationState();
         // Async createScene implementations can start temporary render loops
         // while constructing GPU-derived data. Keep native RAF ticks flowing,
         // but do not advance the validation frame counter until readiness.
