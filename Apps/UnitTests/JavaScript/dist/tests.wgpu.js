@@ -21,6 +21,17 @@
         }
     }
 
+    function expectThrows(callback, message) {
+        var error;
+        try {
+            callback();
+        } catch (caught) {
+            error = caught;
+        }
+        expect(error, message);
+        return error;
+    }
+
     function expectPixel(actual, expected, message) {
         expect(actual && actual.length === 4, message + ": pixel readback did not return four channels");
         for (var i = 0; i < 4; i++) {
@@ -888,6 +899,79 @@
             expectPixel(mapped.slice(4, 8), [0, 255, 0, 255], "mapped texture readback row 0 pixel 1");
             expectPixel(mapped.slice(bytesPerRow, bytesPerRow + 4), [0, 0, 255, 255], "mapped texture readback row 1 pixel 0");
             readback.unmap();
+        }],
+        ["GPUBuffer mapped ranges preserve disjoint writes and detach on unmap", async function () {
+            var adapter = await navigator.gpu.requestAdapter();
+            var device = await adapter.requestDevice();
+            var source = device.createBuffer({
+                size: 32,
+                usage: GPUBufferUsage.COPY_SRC,
+                mappedAtCreation: true
+            });
+
+            expectEqual(source.mapState, "mapped", "mapped-at-creation buffer state");
+            var firstBuffer = source.getMappedRange(0, 8);
+            var secondBuffer = source.getMappedRange(8, 8);
+            var first = new Uint8Array(firstBuffer);
+            var second = new Uint8Array(secondBuffer);
+            expectEqual(first[0], 0, "mapped-at-creation ranges should be zero initialized");
+            first.set([1, 2, 3, 4, 5, 6, 7, 8]);
+            second.set([9, 10, 11, 12, 13, 14, 15, 16]);
+
+            expect(firstBuffer !== secondBuffer, "disjoint mapped ranges must return distinct ArrayBuffers");
+            expectThrows(
+                function () { source.getMappedRange(0, 4); },
+                "an overlapping mapped range should be rejected"
+            );
+            expectThrows(
+                function () { source.getMappedRange(4, 4); },
+                "a mapped range offset not aligned to 8 bytes should be rejected"
+            );
+            expectThrows(
+                function () { source.getMappedRange(16, 6); },
+                "a mapped range size not aligned to 4 bytes should be rejected"
+            );
+
+            source.unmap();
+            expectEqual(source.mapState, "unmapped", "source buffer state after unmap");
+            expectEqual(firstBuffer.byteLength, 0, "first mapped ArrayBuffer should detach on unmap");
+            expectEqual(secondBuffer.byteLength, 0, "second mapped ArrayBuffer should detach on unmap");
+            expectEqual(first.byteLength, 0, "first typed-array view should detach on unmap");
+            expectEqual(second.byteLength, 0, "second typed-array view should detach on unmap");
+            expectThrows(
+                function () { source.getMappedRange(); },
+                "getMappedRange should reject an unmapped buffer"
+            );
+
+            var readback = device.createBuffer({
+                size: 32,
+                usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ
+            });
+            var encoder = device.createCommandEncoder();
+            encoder.copyBufferToBuffer(source, 0, readback, 0, 32);
+            device.queue.submit([encoder.finish()]);
+            await readback.mapAsync(GPUMapMode.READ);
+
+            expectEqual(readback.mapState, "mapped", "readback buffer state after mapAsync");
+            var readFirstBuffer = readback.getMappedRange(0, 8);
+            var readSecondBuffer = readback.getMappedRange(8, 8);
+            expectEqual(Array.prototype.join.call(new Uint8Array(readFirstBuffer), ","), "1,2,3,4,5,6,7,8", "first mapped range writeback");
+            expectEqual(Array.prototype.join.call(new Uint8Array(readSecondBuffer), ","), "9,10,11,12,13,14,15,16", "second mapped range writeback");
+
+            readback.unmap();
+            expectEqual(readback.mapState, "unmapped", "readback buffer state after unmap");
+            expectEqual(readFirstBuffer.byteLength, 0, "first read range should detach on unmap");
+            expectEqual(readSecondBuffer.byteLength, 0, "second read range should detach on unmap");
+
+            var destroyed = device.createBuffer({
+                size: 8,
+                usage: GPUBufferUsage.COPY_SRC,
+                mappedAtCreation: true
+            });
+            var destroyedRange = destroyed.getMappedRange();
+            destroyed.destroy();
+            expectEqual(destroyed.mapState, "unmapped", "destroyed buffer state");
+            expectEqual(destroyedRange.byteLength, 0, "destroy should detach mapped ranges");
         }],
         ["GPUQueue.copyExternalImageToTexture converts CanvasWgpu alpha mode", async function () {
             var source = new _native.Canvas();

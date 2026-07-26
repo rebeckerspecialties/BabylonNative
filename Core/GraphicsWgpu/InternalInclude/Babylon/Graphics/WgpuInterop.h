@@ -37,6 +37,13 @@ struct BabylonWgpuFeatureInfo final
     uint32_t max_subgroup_size{};
 };
 
+struct BabylonWgpuMappedRangeWrite final
+{
+    uint64_t offset{};
+    const uint8_t* data{};
+    size_t data_len{};
+};
+
 extern "C"
 {
     void* babylon_wgpu_create(const BabylonWgpuConfig* config);
@@ -79,6 +86,12 @@ extern "C"
 
     uint64_t babylon_wgpu_native_create_buffer(uint64_t size, uint32_t usage, bool mapped_at_creation);
     bool babylon_wgpu_native_write_buffer(uint64_t buffer_id, uint64_t offset, const uint8_t* data, size_t data_len);
+    bool babylon_wgpu_native_write_mapped_ranges(
+        uint64_t buffer_id,
+        uint64_t mapped_offset,
+        uint64_t mapped_size,
+        const BabylonWgpuMappedRangeWrite* ranges,
+        size_t range_count);
     bool babylon_wgpu_native_read_buffer(uint64_t buffer_id, uint64_t offset, uint8_t* data, size_t data_len);
     uint64_t babylon_wgpu_native_create_texture(const char* descriptor_json);
     uint64_t babylon_wgpu_native_import_metal_texture(const void* native_texture, const char* descriptor_json);

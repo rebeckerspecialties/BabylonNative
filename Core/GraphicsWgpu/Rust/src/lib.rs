@@ -97,6 +97,14 @@ pub struct BabylonWgpuFeatureInfo {
     pub max_subgroup_size: u32,
 }
 
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct BabylonWgpuMappedRangeWrite {
+    pub offset: u64,
+    pub data: *const u8,
+    pub data_len: usize,
+}
+
 struct BackendContext {
     backend: upstream_wgpu_native::InteropBackendContext,
     info: BabylonWgpuInfo,
@@ -591,6 +599,35 @@ pub extern "C" fn babylon_wgpu_native_write_buffer(
             unsafe { std::slice::from_raw_parts(data, data_len) }
         };
         backend.write_buffer(buffer_id, offset, bytes)?;
+        Ok(true)
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn babylon_wgpu_native_write_mapped_ranges(
+    buffer_id: u64,
+    mapped_offset: u64,
+    mapped_size: u64,
+    ranges: *const BabylonWgpuMappedRangeWrite,
+    range_count: usize,
+) -> bool {
+    run_with_active_backend("GPUBuffer.unmap", false, |backend| {
+        let ranges = if range_count == 0 {
+            &[]
+        } else {
+            if ranges.is_null() {
+                return Err("GPUBuffer.unmap mapped range list was null".to_string());
+            }
+            unsafe { std::slice::from_raw_parts(ranges, range_count) }
+        };
+
+        for range in ranges {
+            if range.data_len > 0 && range.data.is_null() {
+                return Err("GPUBuffer.unmap mapped range data pointer was null".to_string());
+            }
+        }
+
+        backend.write_mapped_ranges(buffer_id, mapped_offset, mapped_size, ranges)?;
         Ok(true)
     })
 }
@@ -3567,6 +3604,89 @@ mod upstream_wgpu_native {
                 );
             }
             Ok(id)
+        }
+
+        pub fn write_mapped_ranges(
+            &mut self,
+            buffer_id: u64,
+            mapped_offset: u64,
+            mapped_size: u64,
+            ranges: &[super::BabylonWgpuMappedRangeWrite],
+        ) -> Result<(), String> {
+            let (buffer, buffer_size, was_mapped) = {
+                let resource = self
+                    .resources
+                    .buffers
+                    .get(&buffer_id)
+                    .ok_or_else(|| format!("GPUBuffer {buffer_id} was not found"))?;
+                (resource.buffer.clone(), resource.size, resource.mapped)
+            };
+
+            let mapped_end = mapped_offset
+                .checked_add(mapped_size)
+                .ok_or_else(|| "GPUBuffer mapped range overflowed".to_string())?;
+            if mapped_end > buffer_size {
+                return Err(format!(
+                    "GPUBuffer mapped range [{mapped_offset}, {mapped_end}) exceeds buffer size {buffer_size}"
+                ));
+            }
+
+            for range in ranges {
+                let range_end = range
+                    .offset
+                    .checked_add(range.data_len as u64)
+                    .ok_or_else(|| "GPUBuffer mapped write range overflowed".to_string())?;
+                if range.offset < mapped_offset || range_end > mapped_end {
+                    return Err(format!(
+                        "GPUBuffer mapped write range [{}, {}) is outside [{mapped_offset}, {mapped_end})",
+                        range.offset, range_end
+                    ));
+                }
+            }
+
+            if !was_mapped && mapped_size > 0 {
+                let slice = buffer.slice(mapped_offset..mapped_end);
+                let (tx, rx) = std::sync::mpsc::channel::<Result<(), String>>();
+                slice.map_async(wgpu::MapMode::Write, move |result| {
+                    let _ = tx.send(result.map_err(|error| error.to_string()));
+                });
+                self.runtime
+                    .device
+                    .poll(wgpu::PollType::wait_indefinitely())
+                    .map_err(|error| {
+                        format!("GPUBuffer.unmap write mapping poll failed: {error}")
+                    })?;
+                match rx.recv() {
+                    Ok(Ok(())) => {}
+                    Ok(Err(error)) => {
+                        return Err(format!("GPUBuffer.unmap write mapping failed: {error}"))
+                    }
+                    Err(error) => {
+                        return Err(format!(
+                            "GPUBuffer.unmap write mapping channel failed: {error}"
+                        ))
+                    }
+                }
+            }
+
+            for range in ranges {
+                if range.data_len == 0 {
+                    continue;
+                }
+
+                let range_end = range.offset + range.data_len as u64;
+                let source = unsafe { std::slice::from_raw_parts(range.data, range.data_len) };
+                let mut mapped = buffer.slice(range.offset..range_end).get_mapped_range_mut();
+                mapped.copy_from_slice(source);
+            }
+
+            if was_mapped || mapped_size > 0 {
+                buffer.unmap();
+            }
+            if let Some(resource) = self.resources.buffers.get_mut(&buffer_id) {
+                resource.mapped = false;
+            }
+            Ok(())
         }
 
         pub fn write_buffer(

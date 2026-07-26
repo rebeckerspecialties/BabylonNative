@@ -85,6 +85,13 @@ namespace Babylon::Plugins::NativeWebGPU
             ComputePass = 14,
         };
 
+        struct MappedRangeState final
+        {
+            size_t Offset{};
+            size_t Size{};
+            Napi::Reference<Napi::ArrayBuffer> ArrayBuffer{};
+        };
+
         struct NativeHandleState final
         {
             NativeResourceKind Kind{};
@@ -93,6 +100,9 @@ namespace Babylon::Plugins::NativeWebGPU
             uint32_t Usage{};
             bool Mapped{};
             bool MappedForWrite{};
+            size_t MappedOffset{};
+            size_t MappedSize{};
+            std::vector<MappedRangeState> MappedRanges{};
         };
 
         struct ByteSpan final
@@ -430,7 +440,14 @@ namespace Babylon::Plugins::NativeWebGPU
 
         Napi::Object AttachNativeHandle(Napi::Object object, NativeResourceKind kind, uint64_t id, size_t size = 0, uint32_t usage = 0, bool mapped = false, bool mappedForWrite = false)
         {
-            auto* state = new NativeHandleState{kind, id, size, usage, mapped, mappedForWrite};
+            auto* state = new NativeHandleState{};
+            state->Kind = kind;
+            state->Id = id;
+            state->Size = size;
+            state->Usage = usage;
+            state->Mapped = mapped;
+            state->MappedForWrite = mappedForWrite;
+            state->MappedSize = mapped ? size : 0;
             object.Set(
                 JS_NATIVE_HANDLE_NAME,
                 Napi::External<NativeHandleState>::New(object.Env(), state, &FinalizeNativeHandleState));
@@ -1124,6 +1141,143 @@ namespace Babylon::Plugins::NativeWebGPU
         void ThrowNativeWebGpuError(Napi::Env env, const char* message, const char* operationName = nullptr)
         {
             ThrowNativeOperationError(env, operationName != nullptr ? operationName : "", NativeWebGpuErrorMessage(message));
+        }
+
+        Napi::ArrayBuffer CreateJsOwnedArrayBuffer(Napi::Env env, size_t byteLength, const char* operationName)
+        {
+            const auto constructorValue = env.Global().Get("ArrayBuffer");
+            if (!constructorValue.IsFunction())
+            {
+                ThrowNativeOperationError(env, operationName, "ArrayBuffer is not available.");
+                return {};
+            }
+
+            const auto value = constructorValue.As<Napi::Function>().New({
+                Napi::Number::New(env, static_cast<double>(byteLength)),
+            });
+            if (!value.IsArrayBuffer())
+            {
+                ThrowNativeOperationError(env, operationName, "ArrayBuffer construction returned an invalid value.");
+                return {};
+            }
+
+            return value.As<Napi::ArrayBuffer>();
+        }
+
+        Napi::ArrayBuffer TransferMappedArrayBuffer(
+            Napi::Env env,
+            const Napi::ArrayBuffer& arrayBuffer,
+            const char* operationName)
+        {
+            const auto transferValue = arrayBuffer.Get("transfer");
+            if (!transferValue.IsFunction())
+            {
+                ThrowNativeOperationError(
+                    env,
+                    operationName,
+                    "ArrayBuffer transfer is required to detach a GPUBuffer mapped range.");
+                return {};
+            }
+
+            const auto transferredValue = transferValue.As<Napi::Function>().Call(arrayBuffer, {});
+            if (!transferredValue.IsArrayBuffer())
+            {
+                ThrowNativeOperationError(env, operationName, "ArrayBuffer transfer returned an invalid value.");
+                return {};
+            }
+
+            return transferredValue.As<Napi::ArrayBuffer>();
+        }
+
+        bool FinishMappedBuffer(Napi::Env env, NativeHandleState& state, bool writeBack, const char* operationName)
+        {
+            bool writeSucceeded = true;
+            bool detachSucceeded = true;
+            std::vector<BabylonWgpuMappedRangeWrite> writes;
+            std::vector<Napi::ArrayBuffer> transferredRanges;
+            transferredRanges.reserve(state.MappedRanges.size());
+            if (writeBack && state.MappedForWrite)
+            {
+                writes.reserve(state.MappedRanges.size());
+            }
+
+            for (auto& range : state.MappedRanges)
+            {
+                if (range.ArrayBuffer.IsEmpty())
+                {
+                    continue;
+                }
+
+                auto arrayBuffer = range.ArrayBuffer.Value();
+                auto transferred = TransferMappedArrayBuffer(env, arrayBuffer, operationName);
+                if (transferred.IsEmpty())
+                {
+                    detachSucceeded = false;
+                }
+                else if (writeBack && state.MappedForWrite)
+                {
+                    transferredRanges.push_back(transferred);
+                    auto& writeData = transferredRanges.back();
+                    writes.push_back(BabylonWgpuMappedRangeWrite{
+                        static_cast<uint64_t>(range.Offset),
+                        static_cast<const uint8_t*>(writeData.Data()),
+                        std::min(range.Size, writeData.ByteLength()),
+                    });
+                }
+
+                range.ArrayBuffer.Reset();
+            }
+
+            if (detachSucceeded && writeBack && state.MappedForWrite)
+            {
+                writeSucceeded = babylon_wgpu_native_write_mapped_ranges(
+                    state.Id,
+                    static_cast<uint64_t>(state.MappedOffset),
+                    static_cast<uint64_t>(state.MappedSize),
+                    writes.data(),
+                    writes.size());
+            }
+
+            state.MappedRanges.clear();
+            state.Mapped = false;
+            state.MappedForWrite = false;
+            state.MappedOffset = 0;
+            state.MappedSize = 0;
+
+            if (!writeSucceeded && detachSucceeded)
+            {
+                ThrowNativeWebGpuError(env, "NativeWebGPU failed to write GPUBuffer mapped ranges.", operationName);
+            }
+
+            return writeSucceeded && detachSucceeded;
+        }
+
+        std::optional<size_t> ReadGpuSizeArgument(
+            const Napi::CallbackInfo& info,
+            size_t index,
+            size_t fallback,
+            const char* argumentName,
+            const char* operationName)
+        {
+            if (info.Length() <= index || info[index].IsUndefined())
+            {
+                return fallback;
+            }
+
+            const auto value = info[index].ToNumber().DoubleValue();
+            const auto truncated = std::trunc(value);
+            if (!std::isfinite(value) ||
+                truncated < 0 ||
+                static_cast<long double>(truncated) > static_cast<long double>(std::numeric_limits<size_t>::max()))
+            {
+                ThrowNativeOperationError(
+                    info.Env(),
+                    operationName,
+                    std::string{argumentName} + " is outside the supported GPUSize64 range.");
+                return std::nullopt;
+            }
+
+            return static_cast<size_t>(truncated);
         }
 
 #ifdef BABYLON_NATIVE_WEBGPU_TEST_HOOKS
@@ -2234,6 +2388,8 @@ namespace Babylon::Plugins::NativeWebGPU
         {
             auto buffer = Napi::Object::New(env);
             buffer.Set("size", Napi::Number::From(env, size));
+            buffer.Set("usage", Napi::Number::From(env, usage));
+            buffer.Set("mapState", Napi::String::New(env, mappedAtCreation ? "mapped" : "unmapped"));
             g_bufferCreateCount.fetch_add(1, std::memory_order_relaxed);
             g_bufferRequestedBytes.fetch_add(static_cast<uint64_t>(size), std::memory_order_relaxed);
             const auto nativeId = babylon_wgpu_native_create_buffer(static_cast<uint64_t>(size), usage, mappedAtCreation);
@@ -2244,130 +2400,174 @@ namespace Babylon::Plugins::NativeWebGPU
             AttachNativeHandle(buffer, NativeResourceKind::Buffer, nativeId, size, usage, mappedAtCreation, mappedAtCreation);
 
             buffer.Set("mapAsync", Napi::Function::New(env, [](const Napi::CallbackInfo& info) -> Napi::Value {
-                if (auto* state = GetNativeHandleState(info.This()))
+                constexpr auto operationName = "GPUBuffer.mapAsync";
+                auto bufferObject = info.This().As<Napi::Object>();
+                auto* state = GetNativeHandleState(bufferObject);
+                if (state == nullptr || state->Id == 0)
                 {
-                    const auto mode = info.Length() > 0 ? ToUint32(info[0], 0) : 0;
-                    state->Mapped = true;
-                    state->MappedForWrite = (mode & kBufferUsageMapWrite) != 0;
+                    ThrowNativeOperationError(info.Env(), operationName, "GPUBuffer is destroyed or invalid.");
+                    return info.Env().Undefined();
                 }
+
+                if (state->Mapped)
+                {
+                    ThrowNativeOperationError(info.Env(), operationName, "GPUBuffer is already mapped.");
+                    return info.Env().Undefined();
+                }
+
+                const auto mode = info.Length() > 0 ? ToUint32(info[0], 0) : 0;
+                if (mode != kBufferUsageMapRead && mode != kBufferUsageMapWrite)
+                {
+                    ThrowNativeOperationError(info.Env(), operationName, "mode must be GPUMapMode.READ or GPUMapMode.WRITE.");
+                    return info.Env().Undefined();
+                }
+                if ((state->Usage & mode) == 0)
+                {
+                    ThrowNativeOperationError(info.Env(), operationName, "GPUBuffer usage does not include the requested map mode.");
+                    return info.Env().Undefined();
+                }
+
+                const auto offset = ReadGpuSizeArgument(info, 1, 0, "offset", operationName);
+                if (!offset.has_value())
+                {
+                    return info.Env().Undefined();
+                }
+                if (*offset > state->Size)
+                {
+                    ThrowNativeOperationError(info.Env(), operationName, "The mapped offset exceeds the GPUBuffer size.");
+                    return info.Env().Undefined();
+                }
+
+                const auto byteLength = ReadGpuSizeArgument(info, 2, state->Size - *offset, "size", operationName);
+                if (!byteLength.has_value())
+                {
+                    return info.Env().Undefined();
+                }
+                if ((*offset % 8) != 0 || (*byteLength % 4) != 0)
+                {
+                    ThrowNativeOperationError(info.Env(), operationName, "offset must be a multiple of 8 and size must be a multiple of 4.");
+                    return info.Env().Undefined();
+                }
+                if (*byteLength > state->Size - *offset)
+                {
+                    ThrowNativeOperationError(info.Env(), operationName, "The mapped range exceeds the GPUBuffer size.");
+                    return info.Env().Undefined();
+                }
+
+                state->Mapped = true;
+                state->MappedForWrite = mode == kBufferUsageMapWrite;
+                state->MappedOffset = *offset;
+                state->MappedSize = *byteLength;
+                state->MappedRanges.clear();
+                bufferObject.Set("mapState", Napi::String::New(info.Env(), "mapped"));
                 return GetCachedResolvedUndefinedPromise(info.Env());
             }));
 
-            buffer.Set("getMappedRange", Napi::Function::New(env, [size](const Napi::CallbackInfo& info) -> Napi::Value {
-                size_t offset{};
-                size_t byteLength{size};
+            buffer.Set("getMappedRange", Napi::Function::New(env, [](const Napi::CallbackInfo& info) -> Napi::Value {
+                constexpr auto operationName = "GPUBuffer.getMappedRange";
+                auto* state = GetNativeHandleState(info.This());
+                if (state == nullptr || state->Id == 0)
+                {
+                    ThrowNativeOperationError(info.Env(), operationName, "GPUBuffer is destroyed or invalid.");
+                    return info.Env().Undefined();
+                }
+                if (!state->Mapped)
+                {
+                    ThrowNativeOperationError(info.Env(), operationName, "GPUBuffer is not mapped.");
+                    return info.Env().Undefined();
+                }
 
-                if (info.Length() > 0 && info[0].IsNumber())
+                const auto offset = ReadGpuSizeArgument(info, 0, 0, "offset", operationName);
+                if (!offset.has_value())
                 {
-                    offset = static_cast<size_t>(std::max<int64_t>(0, info[0].As<Napi::Number>().Int64Value()));
+                    return info.Env().Undefined();
                 }
-                if (info.Length() > 1 && info[1].IsNumber())
+                const auto mappedEnd = state->MappedOffset + state->MappedSize;
+                const auto defaultSize = *offset <= mappedEnd ? mappedEnd - *offset : 0;
+                const auto byteLength = ReadGpuSizeArgument(info, 1, defaultSize, "size", operationName);
+                if (!byteLength.has_value())
                 {
-                    byteLength = static_cast<size_t>(std::max<int64_t>(0, info[1].As<Napi::Number>().Int64Value()));
+                    return info.Env().Undefined();
                 }
-                else if (offset < size)
+                if ((*offset % 8) != 0 || (*byteLength % 4) != 0)
                 {
-                    byteLength = size - offset;
+                    ThrowNativeOperationError(info.Env(), operationName, "offset must be a multiple of 8 and size must be a multiple of 4.");
+                    return info.Env().Undefined();
+                }
+                if (*offset < state->MappedOffset ||
+                    *offset > mappedEnd ||
+                    *byteLength > mappedEnd - *offset)
+                {
+                    ThrowNativeOperationError(info.Env(), operationName, "The requested range is outside the active mapping.");
+                    return info.Env().Undefined();
+                }
+
+                const auto rangeEnd = *offset + *byteLength;
+                const auto overlapsExistingRange = std::any_of(
+                    state->MappedRanges.begin(),
+                    state->MappedRanges.end(),
+                    [offset = *offset, rangeEnd](const MappedRangeState& range) {
+                        const auto existingEnd = range.Offset + range.Size;
+                        return offset < existingEnd && range.Offset < rangeEnd;
+                    });
+                if (overlapsExistingRange)
+                {
+                    ThrowNativeOperationError(info.Env(), operationName, "The requested range overlaps an existing mapped range.");
+                    return info.Env().Undefined();
+                }
+
+                Napi::ArrayBuffer mappedRange;
+                if (state->MappedForWrite)
+                {
+                    mappedRange = CreateJsOwnedArrayBuffer(info.Env(), *byteLength, operationName);
                 }
                 else
                 {
-                    byteLength = 0;
-                }
-
-                auto bufferObject = info.This().As<Napi::Object>();
-                auto* state = GetNativeHandleState(bufferObject);
-                Napi::ArrayBuffer mappedRange;
-                if (bufferObject.Has("__cachedMappedRange") &&
-                    bufferObject.Has("__cachedMappedRangeOffset") &&
-                    bufferObject.Has("__cachedMappedRangeLength"))
-                {
-                    const auto cachedOffsetValue = bufferObject.Get("__cachedMappedRangeOffset");
-                    const auto cachedLengthValue = bufferObject.Get("__cachedMappedRangeLength");
-                    const auto cachedRangeValue = bufferObject.Get("__cachedMappedRange");
-
-                    if (cachedOffsetValue.IsNumber() &&
-                        cachedLengthValue.IsNumber() &&
-                        cachedRangeValue.IsArrayBuffer())
+                    auto nativeBackedRange = Napi::ArrayBuffer::New(info.Env(), *byteLength);
+                    if (*byteLength > 0 &&
+                        !babylon_wgpu_native_read_buffer(
+                            state->Id,
+                            *offset,
+                            static_cast<uint8_t*>(nativeBackedRange.Data()),
+                            nativeBackedRange.ByteLength()))
                     {
-                        const auto cachedOffset = static_cast<size_t>(
-                            std::max<int64_t>(0, cachedOffsetValue.As<Napi::Number>().Int64Value()));
-                        const auto cachedLength = static_cast<size_t>(
-                            std::max<int64_t>(0, cachedLengthValue.As<Napi::Number>().Int64Value()));
-
-                        if (cachedOffset == offset && cachedLength == byteLength)
-                        {
-                            mappedRange = cachedRangeValue.As<Napi::ArrayBuffer>();
-                        }
+                        ThrowNativeWebGpuError(info.Env(), "NativeWebGPU failed to read GPUBuffer mapped range.", operationName);
+                        return info.Env().Undefined();
                     }
+                    mappedRange = TransferMappedArrayBuffer(info.Env(), nativeBackedRange, operationName);
                 }
-
                 if (mappedRange.IsEmpty())
                 {
-                    mappedRange = Napi::ArrayBuffer::New(info.Env(), byteLength);
-                    // Hot-path optimization: Babylon can query mapped ranges every frame.
-                    // Reusing the same backing ArrayBuffer for identical range requests
-                    // avoids transient JS heap churn in simulator/device loops.
-                    // Non-CTS note: this intentionally keeps stable object identity.
-                    bufferObject.Set("__cachedMappedRange", mappedRange);
-                    bufferObject.Set("__cachedMappedRangeOffset",
-                        Napi::Number::From(info.Env(), static_cast<double>(offset)));
-                    bufferObject.Set("__cachedMappedRangeLength",
-                        Napi::Number::From(info.Env(), static_cast<double>(byteLength)));
+                    return info.Env().Undefined();
                 }
 
-                if (state != nullptr &&
-                    state->Id != 0 &&
-                    (state->Usage & kBufferUsageMapRead) != 0 &&
-                    byteLength > 0 &&
-                    !babylon_wgpu_native_read_buffer(
-                        state->Id,
-                        offset,
-                        static_cast<uint8_t*>(mappedRange.Data()),
-                        mappedRange.ByteLength()))
-                {
-                    ThrowNativeWebGpuError(info.Env(), "NativeWebGPU failed to read GPUBuffer mapped range.", "GPUBuffer.getMappedRange");
-                }
-
+                state->MappedRanges.push_back(MappedRangeState{
+                    *offset,
+                    *byteLength,
+                    Napi::Persistent(mappedRange),
+                });
                 return mappedRange;
             }));
 
             buffer.Set("unmap", Napi::Function::New(env, [](const Napi::CallbackInfo& info) {
                 auto bufferObject = info.This().As<Napi::Object>();
                 auto* state = GetNativeHandleState(bufferObject);
-                if (state == nullptr || state->Id == 0)
+                if (state == nullptr || state->Id == 0 || !state->Mapped)
                 {
                     return;
                 }
-                if (state->MappedForWrite &&
-                    bufferObject.Has("__cachedMappedRange") &&
-                    bufferObject.Get("__cachedMappedRange").IsArrayBuffer())
-                {
-                    auto arrayBuffer = bufferObject.Get("__cachedMappedRange").As<Napi::ArrayBuffer>();
-                    size_t offset{};
-                    if (bufferObject.Has("__cachedMappedRangeOffset") && bufferObject.Get("__cachedMappedRangeOffset").IsNumber())
-                    {
-                        offset = static_cast<size_t>(std::max<int64_t>(
-                            0,
-                            bufferObject.Get("__cachedMappedRangeOffset").As<Napi::Number>().Int64Value()));
-                    }
-                    const auto available = offset < state->Size ? state->Size - offset : 0;
-                    const auto byteLength = std::min(arrayBuffer.ByteLength(), available);
-                    babylon_wgpu_native_write_buffer(
-                        state->Id,
-                        offset,
-                        static_cast<const uint8_t*>(arrayBuffer.Data()),
-                        byteLength);
-                }
-                else if (state->MappedForWrite)
-                {
-                    babylon_wgpu_native_write_buffer(state->Id, 0, nullptr, 0);
-                }
-                state->Mapped = false;
-                state->MappedForWrite = false;
+                FinishMappedBuffer(info.Env(), *state, true, "GPUBuffer.unmap");
+                bufferObject.Set("mapState", Napi::String::New(info.Env(), "unmapped"));
             }));
             buffer.Set("destroy", Napi::Function::New(env, [](const Napi::CallbackInfo& info) {
-                if (auto* state = GetNativeHandleState(info.This()))
+                auto bufferObject = info.This().As<Napi::Object>();
+                if (auto* state = GetNativeHandleState(bufferObject))
                 {
+                    if (state->Mapped)
+                    {
+                        FinishMappedBuffer(info.Env(), *state, false, "GPUBuffer.destroy");
+                    }
+                    bufferObject.Set("mapState", Napi::String::New(info.Env(), "unmapped"));
                     DestroyNativeHandleState(state);
                 }
             }));
