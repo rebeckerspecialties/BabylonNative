@@ -918,6 +918,28 @@
             first.set([1, 2, 3, 4, 5, 6, 7, 8]);
             second.set([9, 10, 11, 12, 13, 14, 15, 16]);
 
+            // WebGPU mappings carry a non-undefined [[ArrayBufferDetachKey]].
+            // The application-visible transfer intrinsics must therefore fail;
+            // only GPUBuffer.unmap()/destroy() may detach these buffers.
+            // https://gpuweb.github.io/gpuweb/#buffer-mapping
+            // https://tc39.es/ecma262/multipage/structured-data.html#sec-detacharraybuffer
+            expectThrows(
+                function () { firstBuffer.transfer(); },
+                "application code must not transfer a live mapped range"
+            );
+            expectThrows(
+                function () { ArrayBuffer.prototype.transfer.call(firstBuffer); },
+                "the transfer intrinsic must honor the mapped-range detach key"
+            );
+            if (typeof ArrayBuffer.prototype.transferToFixedLength === "function") {
+                expectThrows(
+                    function () { firstBuffer.transferToFixedLength(); },
+                    "transferToFixedLength must honor the mapped-range detach key"
+                );
+            }
+            expectEqual(firstBuffer.byteLength, 8, "failed application transfer must leave the mapping attached");
+            expectEqual(first[0], 1, "failed application transfer must preserve mapped bytes");
+
             expect(firstBuffer !== secondBuffer, "disjoint mapped ranges must return distinct ArrayBuffers");
             expectThrows(
                 function () { source.getMappedRange(0, 4); },

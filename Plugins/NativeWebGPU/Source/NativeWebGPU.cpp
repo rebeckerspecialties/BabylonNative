@@ -59,6 +59,7 @@ namespace Babylon::Plugins::NativeWebGPU
         constexpr auto JS_NATIVE_HANDLE_ID_NAME = "__babylonNativeWebGPUHandleId";
         constexpr auto JS_NATIVE_HANDLE_KIND_NAME = "__babylonNativeWebGPUHandleKind";
         constexpr auto JS_NATIVE_JSON_REPLACER_NAME = "__nativeWebGpuJsonReplacer";
+        constexpr auto JS_MAPPED_ARRAY_BUFFER_BRIDGE_NAME = "__babylonNativeWebGPUMappedArrayBufferBridge";
         constexpr auto JS_REQUEST_ANIMATION_FRAME_NAME = "requestAnimationFrame";
         constexpr auto JS_CANCEL_ANIMATION_FRAME_NAME = "cancelAnimationFrame";
         constexpr auto JS_ANIMATION_FRAME_STATE_NAME = "__babylonNativeWebGpuAnimationFrameState";
@@ -1164,22 +1165,125 @@ namespace Babylon::Plugins::NativeWebGPU
             return value.As<Napi::ArrayBuffer>();
         }
 
+        Napi::Object GetMappedArrayBufferBridge(Napi::Env env, const char* operationName)
+        {
+            auto global = env.Global();
+            if (global.Has(JS_MAPPED_ARRAY_BUFFER_BRIDGE_NAME))
+            {
+                const auto existing = global.Get(JS_MAPPED_ARRAY_BUFFER_BRIDGE_NAME);
+                if (existing.IsObject())
+                {
+                    return existing.As<Napi::Object>();
+                }
+            }
+
+            // JavaScriptCore's public C API cannot set [[ArrayBufferDetachKey]].
+            // Current Apple JSC does expose the ES transfer methods, so install
+            // an equivalent host-private gate: public transfer calls reject
+            // protected WebGPU mappings while this closure retains the original
+            // intrinsic for GPUBuffer.unmap()/destroy().
+            //
+            // https://tc39.es/ecma262/multipage/structured-data.html#sec-detacharraybuffer
+            constexpr auto source = R"JS(
+                (() => {
+                  const key = "__babylonNativeWebGPUMappedArrayBufferBridge";
+                  if (globalThis[key]) return globalThis[key];
+
+                  const prototype = ArrayBuffer.prototype;
+                  const protectedBuffers = new WeakSet();
+                  const originals = Object.create(null);
+
+                  function guard(name) {
+                    const descriptor = Object.getOwnPropertyDescriptor(prototype, name);
+                    if (!descriptor || typeof descriptor.value !== "function") return;
+                    const original = descriptor.value;
+                    originals[name] = original;
+                    Object.defineProperty(prototype, name, {
+                      configurable: descriptor.configurable,
+                      enumerable: descriptor.enumerable,
+                      writable: descriptor.writable,
+                      value: function(...args) {
+                        if (protectedBuffers.has(this)) {
+                          throw new TypeError(
+                            "A GPUBuffer mapped range can only be detached by GPUBuffer.unmap() or destroy()");
+                        }
+                        return Reflect.apply(original, this, args);
+                      }
+                    });
+                  }
+
+                  guard("transfer");
+                  guard("transferToFixedLength");
+                  if (typeof originals.transfer !== "function") {
+                    throw new Error("ArrayBuffer.prototype.transfer is required by NativeWebGPU");
+                  }
+
+                  const bridge = Object.freeze({
+                    protect(buffer) {
+                      protectedBuffers.add(buffer);
+                      return buffer;
+                    },
+                    detach(buffer) {
+                      protectedBuffers.delete(buffer);
+                      return Reflect.apply(originals.transfer, buffer, []);
+                    }
+                  });
+                  Object.defineProperty(globalThis, key, {
+                    configurable: false,
+                    enumerable: false,
+                    writable: false,
+                    value: bridge
+                  });
+                  return bridge;
+                })()
+            )JS";
+
+            const auto bridgeValue = Napi::Eval(env, source, "native-webgpu-arraybuffer-detach-key.js");
+            if (!bridgeValue.IsObject())
+            {
+                ThrowNativeOperationError(env, operationName, "Unable to install the mapped ArrayBuffer detach guard.");
+                return {};
+            }
+            return bridgeValue.As<Napi::Object>();
+        }
+
+        Napi::ArrayBuffer ProtectMappedArrayBuffer(
+            Napi::Env env,
+            const Napi::ArrayBuffer& arrayBuffer,
+            const char* operationName)
+        {
+            const auto bridge = GetMappedArrayBufferBridge(env, operationName);
+            if (bridge.IsEmpty())
+            {
+                return {};
+            }
+            const auto protectValue = bridge.Get("protect");
+            if (!protectValue.IsFunction())
+            {
+                ThrowNativeOperationError(env, operationName, "Mapped ArrayBuffer protect hook is unavailable.");
+                return {};
+            }
+            protectValue.As<Napi::Function>().Call(bridge, {arrayBuffer});
+            return arrayBuffer;
+        }
+
         Napi::ArrayBuffer TransferMappedArrayBuffer(
             Napi::Env env,
             const Napi::ArrayBuffer& arrayBuffer,
             const char* operationName)
         {
-            const auto transferValue = arrayBuffer.Get("transfer");
-            if (!transferValue.IsFunction())
+            const auto bridge = GetMappedArrayBufferBridge(env, operationName);
+            if (bridge.IsEmpty())
             {
-                ThrowNativeOperationError(
-                    env,
-                    operationName,
-                    "ArrayBuffer transfer is required to detach a GPUBuffer mapped range.");
                 return {};
             }
-
-            const auto transferredValue = transferValue.As<Napi::Function>().Call(arrayBuffer, {});
+            const auto detachValue = bridge.Get("detach");
+            if (!detachValue.IsFunction())
+            {
+                ThrowNativeOperationError(env, operationName, "Mapped ArrayBuffer detach hook is unavailable.");
+                return {};
+            }
+            const auto transferredValue = detachValue.As<Napi::Function>().Call(bridge, {arrayBuffer});
             if (!transferredValue.IsArrayBuffer())
             {
                 ThrowNativeOperationError(env, operationName, "ArrayBuffer transfer returned an invalid value.");
@@ -2540,6 +2644,11 @@ namespace Babylon::Plugins::NativeWebGPU
                     }
                     mappedRange = TransferMappedArrayBuffer(info.Env(), nativeBackedRange, operationName);
                 }
+                if (mappedRange.IsEmpty())
+                {
+                    return info.Env().Undefined();
+                }
+                mappedRange = ProtectMappedArrayBuffer(info.Env(), mappedRange, operationName);
                 if (mappedRange.IsEmpty())
                 {
                     return info.Env().Undefined();
