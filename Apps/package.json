@@ -6,7 +6,8 @@
     "UnitTests/JavaScript"
   ],
   "scripts": {
-    "getNightly": "node scripts/getNightly.js",
+    "getNightly": "node scripts/getNightly.js && npm run downlevel:native-scripts -- node_modules/babylonjs/babylon.max.js",
+    "downlevel:native-scripts": "node scripts/downlevelNativeScripts.mjs",
     "patch:babylonjs:check": "node scripts/applyBabylonJsPatchStack.js --check",
     "patch:babylonjs:apply": "node scripts/applyBabylonJsPatchStack.js --apply"
   },
@@ -22,6 +23,7 @@
     "v8-android": "^7.8.2"
   },
   "devDependencies": {
-    "parse5": "^7.3.0"
+    "parse5": "^7.3.0",
+    "typescript": "^5.9.3"
   }
 }
