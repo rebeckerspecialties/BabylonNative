@@ -6441,7 +6441,9 @@ mod upstream_wgpu_native {
         }
 
         pub fn destroy_resource(&mut self, kind: u32, resource_id: u64) -> bool {
-            self.submit_pending_buffer_writes("destroy_resource");
+            if kind == 1 {
+                self.submit_pending_buffer_writes("destroy_buffer");
+            }
             match kind {
                 1 => {
                     if let Some(buffer) = self.resources.buffers.remove(&resource_id) {
