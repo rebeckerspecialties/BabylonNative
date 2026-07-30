@@ -15,6 +15,14 @@
 #include <Babylon/Polyfills/TextEncoder.h>
 #include <Babylon/ScriptLoader.h>
 
+#if defined(HAS_NATIVE_DRACO)
+#include <Babylon/Plugins/NativeDraco.h>
+#endif
+
+#if defined(HAS_NATIVE_MESHOPT)
+#include <Babylon/Plugins/NativeMeshopt.h>
+#endif
+
 #if defined(BABYLON_NATIVE_UNITTESTS_WITH_NATIVEENGINE)
 #include <Babylon/Plugins/NativeEngine.h>
 #endif
@@ -107,6 +115,14 @@ TEST(JavaScript, All)
 
 #if defined(BABYLON_NATIVE_UNITTESTS_WITH_NATIVEENCODING)
         Babylon::Plugins::NativeEncoding::Initialize(env);
+#endif
+
+#if defined(HAS_NATIVE_DRACO)
+        Babylon::Plugins::NativeDraco::Initialize(env);
+#endif
+
+#if defined(HAS_NATIVE_MESHOPT)
+        Babylon::Plugins::NativeMeshopt::Initialize(env);
 #endif
 
 #if defined(BABYLON_NATIVE_UNITTESTS_WITH_WEBGPU)

@@ -1,5 +1,13 @@
+if(BABYLON_NATIVE_PLUGIN_NATIVEDRACO)
+    add_subdirectory(NativeDraco)
+endif()
+
 if(BABYLON_NATIVE_PLUGIN_NATIVEINPUT)
     add_subdirectory(NativeInput)
+endif()
+
+if(BABYLON_NATIVE_PLUGIN_NATIVEMESHOPT)
+    add_subdirectory(NativeMeshopt)
 endif()
 
 if(BABYLON_NATIVE_PLUGIN_NATIVEOPTIMIZATIONS)

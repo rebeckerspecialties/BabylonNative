@@ -284,6 +284,12 @@ namespace Babylon::Embedding
 #if BABYLON_NATIVE_PLUGIN_NATIVEENGINE
             Babylon::Plugins::NativeEngine::Initialize(env);
 #endif
+#if BABYLON_NATIVE_PLUGIN_NATIVEDRACO
+            Babylon::Plugins::NativeDraco::Initialize(env);
+#endif
+#if BABYLON_NATIVE_PLUGIN_NATIVEMESHOPT
+            Babylon::Plugins::NativeMeshopt::Initialize(env);
+#endif
 #if BABYLON_NATIVE_PLUGIN_NATIVEWEBGPU
             Babylon::Plugins::NativeWebGPU::Initialize(env);
 #endif

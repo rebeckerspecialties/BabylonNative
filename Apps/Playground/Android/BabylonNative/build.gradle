@@ -48,6 +48,14 @@ if (project.hasProperty("importHostCompilers")) {
     cmakeArguments.add("-DIMPORT_HOST_COMPILERS=${project.property('importHostCompilers')}")
 }
 
+// Keep the optional native codecs opt-in while allowing Android CI and consumers
+// to exercise them with the same CMake switches as desktop builds.
+["BABYLON_NATIVE_PLUGIN_NATIVEDRACO", "BABYLON_NATIVE_PLUGIN_NATIVEMESHOPT"].each { option ->
+    if (project.hasProperty(option)) {
+        cmakeArguments.add("-D${option}=${project.property(option)}")
+    }
+}
+
 configurations { natives }
 
 android {
