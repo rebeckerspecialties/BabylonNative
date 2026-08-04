@@ -114,6 +114,42 @@
         return navigator.gpu._testReadTexturePixel(texture, x, y);
     }
 
+    async function readTextureCopy(device, texture, origin, size, bytesPerBlock, blockWidth, blockHeight) {
+        blockWidth = blockWidth || 1;
+        blockHeight = blockHeight || 1;
+        var blocksWide = Math.ceil(size.width / blockWidth);
+        var blockRows = Math.ceil(size.height / blockHeight);
+        var unpaddedBytesPerRow = blocksWide * bytesPerBlock;
+        var bytesPerRow = Math.ceil(unpaddedBytesPerRow / 256) * 256;
+        var layerStride = bytesPerRow * blockRows;
+        var readback = device.createBuffer({
+            size: layerStride * size.depthOrArrayLayers,
+            usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ
+        });
+        var encoder = device.createCommandEncoder();
+        encoder.copyTextureToBuffer(
+            { texture: texture, origin: origin || { x: 0, y: 0, z: 0 } },
+            { buffer: readback, bytesPerRow: bytesPerRow, rowsPerImage: blockRows },
+            size
+        );
+        device.queue.submit([encoder.finish()]);
+        await readback.mapAsync(GPUMapMode.READ);
+        var bytes = new Uint8Array(readback.getMappedRange()).slice();
+        readback.unmap();
+        return {
+            bytes: bytes,
+            bytesPerRow: bytesPerRow,
+            unpaddedBytesPerRow: unpaddedBytesPerRow,
+            rowsPerImage: blockRows,
+            layerStride: layerStride
+        };
+    }
+
+    function texturePixel(copy, x, y, layer) {
+        var offset = (layer || 0) * copy.layerStride + y * copy.bytesPerRow + x * 4;
+        return copy.bytes.slice(offset, offset + 4);
+    }
+
     function getUnsupportedNativeWebGPUEffectMessage(effect, context) {
         if (!effect || !effect._engine || !effect._engine.isWebGPU || effect._shaderLanguage !== 0) {
             return "";
@@ -900,6 +936,142 @@
             expectPixel(mapped.slice(bytesPerRow, bytesPerRow + 4), [0, 0, 255, 255], "mapped texture readback row 1 pixel 0");
             readback.unmap();
         }],
+        ["GPUQueue.writeTexture updates only the requested subrectangle", async function () {
+            var adapter = await navigator.gpu.requestAdapter();
+            var device = await adapter.requestDevice();
+            var texture = device.createTexture({
+                size: [4, 4, 1],
+                format: "rgba8unorm",
+                usage: GPUTextureUsage.COPY_SRC | GPUTextureUsage.COPY_DST
+            });
+            var blue = new Uint8Array(4 * 4 * 4);
+            for (var pixel = 0; pixel < 16; pixel++) {
+                blue.set([0, 0, 255, 255], pixel * 4);
+            }
+            var green = new Uint8Array(2 * 2 * 4);
+            for (var greenPixel = 0; greenPixel < 4; greenPixel++) {
+                green.set([0, 255, 0, 255], greenPixel * 4);
+            }
+            device.queue.writeTexture(
+                { texture: texture },
+                blue,
+                { bytesPerRow: 16, rowsPerImage: 4 },
+                { width: 4, height: 4, depthOrArrayLayers: 1 }
+            );
+            device.queue.writeTexture(
+                { texture: texture, origin: { x: 1, y: 1, z: 0 } },
+                green,
+                { bytesPerRow: 8, rowsPerImage: 2 },
+                { width: 2, height: 2, depthOrArrayLayers: 1 }
+            );
+            await device.queue.onSubmittedWorkDone();
+
+            var copy = await readTextureCopy(
+                device,
+                texture,
+                { x: 0, y: 0, z: 0 },
+                { width: 4, height: 4, depthOrArrayLayers: 1 },
+                4
+            );
+            expectPixel(texturePixel(copy, 0, 0), [0, 0, 255, 255], "subrectangle write preserved the top-left pixel");
+            expectPixel(texturePixel(copy, 1, 1), [0, 255, 0, 255], "subrectangle write updated its first pixel");
+            expectPixel(texturePixel(copy, 2, 2), [0, 255, 0, 255], "subrectangle write updated its last pixel");
+            expectPixel(texturePixel(copy, 3, 3), [0, 0, 255, 255], "subrectangle write preserved the bottom-right pixel");
+        }],
+        ["GPUQueue.writeTexture addresses cube faces and array layers through origin.z", async function () {
+            var adapter = await navigator.gpu.requestAdapter();
+            var device = await adapter.requestDevice();
+            var texture = device.createTexture({
+                size: [2, 2, 12],
+                format: "rgba8unorm",
+                usage: GPUTextureUsage.COPY_SRC | GPUTextureUsage.COPY_DST | GPUTextureUsage.TEXTURE_BINDING
+            });
+            expect(texture.createView({ dimension: "cube-array", baseArrayLayer: 0, arrayLayerCount: 12 }), "cube-array view creation failed");
+
+            var faceFive = new Uint8Array(16);
+            var secondCubeFaceOne = new Uint8Array(16);
+            for (var pixel = 0; pixel < 4; pixel++) {
+                faceFive.set([255, 0, 0, 255], pixel * 4);
+                secondCubeFaceOne.set([0, 255, 0, 255], pixel * 4);
+            }
+            device.queue.writeTexture(
+                { texture: texture, origin: { x: 0, y: 0, z: 5 } },
+                faceFive,
+                { bytesPerRow: 8, rowsPerImage: 2 },
+                { width: 2, height: 2, depthOrArrayLayers: 1 }
+            );
+            device.queue.writeTexture(
+                { texture: texture, origin: { x: 0, y: 0, z: 7 } },
+                secondCubeFaceOne,
+                { bytesPerRow: 8, rowsPerImage: 2 },
+                { width: 2, height: 2, depthOrArrayLayers: 1 }
+            );
+            await device.queue.onSubmittedWorkDone();
+
+            var first = await readTextureCopy(device, texture, { x: 0, y: 0, z: 5 }, { width: 2, height: 2, depthOrArrayLayers: 1 }, 4);
+            var second = await readTextureCopy(device, texture, { x: 0, y: 0, z: 7 }, { width: 2, height: 2, depthOrArrayLayers: 1 }, 4);
+            expectPixel(texturePixel(first, 1, 1), [255, 0, 0, 255], "cube face five write/readback");
+            expectPixel(texturePixel(second, 1, 1), [0, 255, 0, 255], "second cube array layer face one write/readback");
+        }],
+        ["GPUQueue.writeTexture uploads and reads back 3D texture slices", async function () {
+            var adapter = await navigator.gpu.requestAdapter();
+            var device = await adapter.requestDevice();
+            var texture = device.createTexture({
+                size: [2, 2, 3],
+                dimension: "3d",
+                format: "rgba8unorm",
+                usage: GPUTextureUsage.COPY_SRC | GPUTextureUsage.COPY_DST | GPUTextureUsage.TEXTURE_BINDING
+            });
+            var slice = new Uint8Array(16);
+            for (var pixel = 0; pixel < 4; pixel++) {
+                slice.set([32, 64, 192, 255], pixel * 4);
+            }
+            device.queue.writeTexture(
+                { texture: texture, origin: { x: 0, y: 0, z: 2 } },
+                slice,
+                { bytesPerRow: 8, rowsPerImage: 2 },
+                { width: 2, height: 2, depthOrArrayLayers: 1 }
+            );
+            await device.queue.onSubmittedWorkDone();
+
+            var copy = await readTextureCopy(device, texture, { x: 0, y: 0, z: 2 }, { width: 2, height: 2, depthOrArrayLayers: 1 }, 4);
+            expectPixel(texturePixel(copy, 0, 0), [32, 64, 192, 255], "3D texture slice first pixel");
+            expectPixel(texturePixel(copy, 1, 1), [32, 64, 192, 255], "3D texture slice last pixel");
+        }],
+        ["compressed texture copies use format block dimensions", async function () {
+            var adapter = await navigator.gpu.requestAdapter();
+            var candidates = [
+                { feature: "texture-compression-bc", format: "bc1-rgba-unorm", blockBytes: 8 },
+                { feature: "texture-compression-etc2", format: "etc2-rgb8unorm", blockBytes: 8 },
+                { feature: "texture-compression-astc", format: "astc-4x4-unorm", blockBytes: 16 }
+            ];
+            var candidate = candidates.find(function (entry) { return adapter.features.has(entry.feature); });
+            expect(candidate, "adapter should expose at least one standard compressed texture family");
+            var device = await adapter.requestDevice({ requiredFeatures: [candidate.feature] });
+            var texture = device.createTexture({
+                size: [8, 8, 1],
+                format: candidate.format,
+                usage: GPUTextureUsage.COPY_SRC | GPUTextureUsage.COPY_DST | GPUTextureUsage.TEXTURE_BINDING
+            });
+            var blocksPerRow = 2;
+            var blockRows = 2;
+            var bytesPerRow = blocksPerRow * candidate.blockBytes;
+            var payload = new Uint8Array(bytesPerRow * blockRows);
+            for (var index = 0; index < payload.length; index++) {
+                payload[index] = index + 1;
+            }
+            device.queue.writeTexture(
+                { texture: texture },
+                payload,
+                { bytesPerRow: bytesPerRow, rowsPerImage: blockRows },
+                { width: 8, height: 8, depthOrArrayLayers: 1 }
+            );
+            await device.queue.onSubmittedWorkDone();
+
+            var copy = await readTextureCopy(device, texture, { x: 0, y: 0, z: 0 }, { width: 8, height: 8, depthOrArrayLayers: 1 }, candidate.blockBytes, 4, 4);
+            expectEqual(Array.prototype.join.call(copy.bytes.slice(0, bytesPerRow), ","), Array.prototype.join.call(payload.slice(0, bytesPerRow), ","), "compressed row zero bytes");
+            expectEqual(Array.prototype.join.call(copy.bytes.slice(copy.bytesPerRow, copy.bytesPerRow + bytesPerRow), ","), Array.prototype.join.call(payload.slice(bytesPerRow), ","), "compressed row one bytes");
+        }],
         ["GPUBuffer mapped ranges preserve disjoint writes and detach on unmap", async function () {
             var adapter = await navigator.gpu.requestAdapter();
             var device = await adapter.requestDevice();
@@ -1168,6 +1340,16 @@
             expect(device.queue && typeof device.queue.submit === "function", "device.queue.submit missing");
             expect(typeof device.createCommandEncoder === "function", "createCommandEncoder missing");
             expect(typeof device.createRenderPipeline === "function", "createRenderPipeline missing");
+        }],
+        ["GPUAdapter.requestDevice rejects unsupported required features", async function () {
+            var adapter = await navigator.gpu.requestAdapter();
+            var rejected = false;
+            try {
+                await adapter.requestDevice({ requiredFeatures: ["native-webgpu-test-unsupported-feature"] });
+            } catch (error) {
+                rejected = true;
+            }
+            expect(rejected, "requestDevice resolved despite an unsupported required feature");
         }],
         ["GPUCanvasContext shim can produce a current texture view", async function () {
             var adapter = await navigator.gpu.requestAdapter();

@@ -8436,6 +8436,50 @@ mod upstream_wgpu_native {
     mod enabled;
 
     pub use enabled::{dispatch_compute_global, version};
+
+    #[cfg(test)]
+    mod tests {
+        use super::map_texture_format;
+
+        #[test]
+        fn maps_standard_compressed_texture_formats_with_their_block_layouts() {
+            let formats = [
+                ("bc1-rgba-unorm", (4, 4), 8),
+                ("bc1-rgba-unorm-srgb", (4, 4), 8),
+                ("bc2-rgba-unorm", (4, 4), 16),
+                ("bc2-rgba-unorm-srgb", (4, 4), 16),
+                ("bc3-rgba-unorm", (4, 4), 16),
+                ("bc3-rgba-unorm-srgb", (4, 4), 16),
+                ("bc4-r-unorm", (4, 4), 8),
+                ("bc4-r-snorm", (4, 4), 8),
+                ("bc5-rg-unorm", (4, 4), 16),
+                ("bc5-rg-snorm", (4, 4), 16),
+                ("bc6h-rgb-ufloat", (4, 4), 16),
+                ("bc6h-rgb-float", (4, 4), 16),
+                ("bc7-rgba-unorm", (4, 4), 16),
+                ("bc7-rgba-unorm-srgb", (4, 4), 16),
+                ("etc2-rgb8unorm", (4, 4), 8),
+                ("etc2-rgb8unorm-srgb", (4, 4), 8),
+                ("etc2-rgb8a1unorm", (4, 4), 8),
+                ("etc2-rgb8a1unorm-srgb", (4, 4), 8),
+                ("etc2-rgba8unorm", (4, 4), 16),
+                ("etc2-rgba8unorm-srgb", (4, 4), 16),
+                ("eac-r11unorm", (4, 4), 8),
+                ("eac-r11snorm", (4, 4), 8),
+                ("eac-rg11unorm", (4, 4), 16),
+                ("eac-rg11snorm", (4, 4), 16),
+                ("astc-4x4-unorm", (4, 4), 16),
+                ("astc-12x12-unorm-srgb", (12, 12), 16),
+            ];
+
+            for (name, dimensions, bytes) in formats {
+                let format = map_texture_format(name)
+                    .unwrap_or_else(|| panic!("missing WebGPU texture format mapping for {name}"));
+                assert_eq!(format.block_dimensions(), dimensions, "{name}");
+                assert_eq!(format.block_copy_size(None), Some(bytes), "{name}");
+            }
+        }
+    }
 }
 
 // Consolidate Rust backend code into a single staticlib so the native binary
