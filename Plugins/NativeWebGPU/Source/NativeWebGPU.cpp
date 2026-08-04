@@ -1574,15 +1574,61 @@ namespace Babylon::Plugins::NativeWebGPU
             }
         }
 
+        bool SupportsFeature(const BabylonWgpuFeatureInfo& featureInfo, std::string_view feature)
+        {
+            if (feature == "bgra8unorm-storage")
+            {
+                return featureInfo.bgra8unorm_storage != 0;
+            }
+            if (feature == "float32-filterable")
+            {
+                return featureInfo.float32_filterable != 0;
+            }
+            if (feature == "indirect-first-instance")
+            {
+                return featureInfo.indirect_first_instance != 0;
+            }
+            if (feature == "shader-f16")
+            {
+                return featureInfo.shader_f16 != 0;
+            }
+            if (feature == "subgroups")
+            {
+                return featureInfo.subgroup != 0;
+            }
+            if (feature == "texture-compression-bc")
+            {
+                return featureInfo.texture_compression_bc != 0;
+            }
+            if (feature == "texture-compression-bc-sliced-3d")
+            {
+                return featureInfo.texture_compression_bc_sliced_3d != 0;
+            }
+            if (feature == "texture-compression-etc2")
+            {
+                return featureInfo.texture_compression_etc2 != 0;
+            }
+            if (feature == "texture-compression-astc")
+            {
+                return featureInfo.texture_compression_astc != 0;
+            }
+            if (feature == "texture-compression-astc-sliced-3d")
+            {
+                return featureInfo.texture_compression_astc_sliced_3d != 0;
+            }
+            return false;
+        }
+
         Napi::Object CreateFeatureSet(Napi::Env env)
         {
             auto set = CreateSet(env);
-#if defined(__APPLE__)
             BabylonWgpuFeatureInfo featureInfo{};
             if (babylon_wgpu_get_feature_info(&featureInfo))
             {
-                AddSetValue(env, set, "bgra8unorm-storage");
-                AddSetValue(env, set, "texture-compression-astc");
+                if (featureInfo.bgra8unorm_storage)
+                {
+                    AddSetValue(env, set, "bgra8unorm-storage");
+                }
                 if (featureInfo.indirect_first_instance)
                 {
                     AddSetValue(env, set, "indirect-first-instance");
@@ -1599,16 +1645,77 @@ namespace Babylon::Plugins::NativeWebGPU
                 {
                     AddSetValue(env, set, "subgroups");
                 }
+                if (featureInfo.texture_compression_bc)
+                {
+                    AddSetValue(env, set, "texture-compression-bc");
+                }
+                if (featureInfo.texture_compression_bc_sliced_3d)
+                {
+                    AddSetValue(env, set, "texture-compression-bc-sliced-3d");
+                }
+                if (featureInfo.texture_compression_etc2)
+                {
+                    AddSetValue(env, set, "texture-compression-etc2");
+                }
+                if (featureInfo.texture_compression_astc)
+                {
+                    AddSetValue(env, set, "texture-compression-astc");
+                }
+                if (featureInfo.texture_compression_astc_sliced_3d)
+                {
+                    AddSetValue(env, set, "texture-compression-astc-sliced-3d");
+                }
             }
-            else
-            {
-                AddSetValue(env, set, "bgra8unorm-storage");
-                AddSetValue(env, set, "indirect-first-instance");
-                AddSetValue(env, set, "shader-f16");
-                AddSetValue(env, set, "texture-compression-astc");
-            }
-#endif
             return set;
+        }
+
+        std::optional<std::string> FindUnsupportedRequiredFeature(const Napi::CallbackInfo& info)
+        {
+            if (info.Length() == 0 || info[0].IsUndefined() || info[0].IsNull())
+            {
+                return std::nullopt;
+            }
+            if (!info[0].IsObject())
+            {
+                throw Napi::TypeError::New(info.Env(), "GPUAdapter.requestDevice descriptor must be an object.");
+            }
+
+            auto requiredFeaturesValue = info[0].As<Napi::Object>().Get("requiredFeatures");
+            if (requiredFeaturesValue.IsUndefined())
+            {
+                return std::nullopt;
+            }
+
+            auto arrayConstructorValue = info.Env().Global().Get("Array");
+            if (!arrayConstructorValue.IsFunction())
+            {
+                throw Napi::TypeError::New(info.Env(), "GPUAdapter.requestDevice cannot convert requiredFeatures.");
+            }
+            auto arrayConstructor = arrayConstructorValue.As<Napi::Function>();
+            auto fromValue = arrayConstructor.Get("from");
+            if (!fromValue.IsFunction())
+            {
+                throw Napi::TypeError::New(info.Env(), "GPUAdapter.requestDevice cannot convert requiredFeatures.");
+            }
+            auto requiredFeaturesArrayValue = fromValue.As<Napi::Function>().Call(arrayConstructor, {requiredFeaturesValue});
+            if (!requiredFeaturesArrayValue.IsArray())
+            {
+                throw Napi::TypeError::New(info.Env(), "GPUAdapter.requestDevice requiredFeatures must be iterable.");
+            }
+
+            BabylonWgpuFeatureInfo featureInfo{};
+            const bool hasFeatureInfo = babylon_wgpu_get_feature_info(&featureInfo);
+            auto requiredFeatures = requiredFeaturesArrayValue.As<Napi::Array>();
+            for (uint32_t index = 0; index < requiredFeatures.Length(); ++index)
+            {
+                auto feature = requiredFeatures.Get(index).ToString().Utf8Value();
+                if (!hasFeatureInfo || !SupportsFeature(featureInfo, feature))
+                {
+                    return feature;
+                }
+            }
+
+            return std::nullopt;
         }
 
         Napi::Object CreateNativeFeatureSet(Napi::Env env)
@@ -3255,7 +3362,26 @@ namespace Babylon::Plugins::NativeWebGPU
 
             adapter.Set("requestDevice", Napi::Function::New(env, [](const Napi::CallbackInfo& info) -> Napi::Value {
                 auto deferred = Napi::Promise::Deferred::New(info.Env());
-                deferred.Resolve(CreateGpuDevice(info.Env()));
+                try
+                {
+                    if (auto unsupportedFeature = FindUnsupportedRequiredFeature(info))
+                    {
+                        deferred.Reject(Napi::TypeError::New(
+                            info.Env(),
+                            "GPUAdapter.requestDevice: required feature '" + *unsupportedFeature + "' is not supported.")
+                                .Value());
+                        return deferred.Promise();
+                    }
+                    deferred.Resolve(CreateGpuDevice(info.Env()));
+                }
+                catch (const Napi::Error& error)
+                {
+                    deferred.Reject(error.Value());
+                }
+                catch (const std::exception& error)
+                {
+                    deferred.Reject(Napi::Error::New(info.Env(), error.what()).Value());
+                }
                 return deferred.Promise();
             }));
 

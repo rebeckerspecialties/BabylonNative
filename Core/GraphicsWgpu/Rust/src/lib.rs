@@ -91,6 +91,12 @@ pub struct BabylonWgpuFeatureInfo {
     pub shader_f16: u32,
     pub indirect_first_instance: u32,
     pub float32_filterable: u32,
+    pub bgra8unorm_storage: u32,
+    pub texture_compression_bc: u32,
+    pub texture_compression_bc_sliced_3d: u32,
+    pub texture_compression_etc2: u32,
+    pub texture_compression_astc: u32,
+    pub texture_compression_astc_sliced_3d: u32,
     pub subgroup: u32,
     pub subgroup_barrier: u32,
     pub multi_draw_indirect_count: u32,
@@ -2037,6 +2043,19 @@ mod upstream_wgpu_native {
             indirect_first_instance: features.contains(wgpu::Features::INDIRECT_FIRST_INSTANCE)
                 as u32,
             float32_filterable: features.contains(wgpu::Features::FLOAT32_FILTERABLE) as u32,
+            bgra8unorm_storage: features.contains(wgpu::Features::BGRA8UNORM_STORAGE) as u32,
+            texture_compression_bc: features.contains(wgpu::Features::TEXTURE_COMPRESSION_BC)
+                as u32,
+            texture_compression_bc_sliced_3d: features
+                .contains(wgpu::Features::TEXTURE_COMPRESSION_BC_SLICED_3D)
+                as u32,
+            texture_compression_etc2: features.contains(wgpu::Features::TEXTURE_COMPRESSION_ETC2)
+                as u32,
+            texture_compression_astc: features.contains(wgpu::Features::TEXTURE_COMPRESSION_ASTC)
+                as u32,
+            texture_compression_astc_sliced_3d: features
+                .contains(wgpu::Features::TEXTURE_COMPRESSION_ASTC_SLICED_3D)
+                as u32,
             subgroup: features.contains(wgpu::Features::SUBGROUP) as u32,
             subgroup_barrier: features.contains(wgpu::Features::SUBGROUP_BARRIER) as u32,
             multi_draw_indirect_count: features.contains(wgpu::Features::MULTI_DRAW_INDIRECT_COUNT)
@@ -2642,6 +2661,30 @@ mod upstream_wgpu_native {
         }
 
         Some(match format {
+            "bc1-rgba-unorm" => wgpu::TextureFormat::Bc1RgbaUnorm,
+            "bc1-rgba-unorm-srgb" => wgpu::TextureFormat::Bc1RgbaUnormSrgb,
+            "bc2-rgba-unorm" => wgpu::TextureFormat::Bc2RgbaUnorm,
+            "bc2-rgba-unorm-srgb" => wgpu::TextureFormat::Bc2RgbaUnormSrgb,
+            "bc3-rgba-unorm" => wgpu::TextureFormat::Bc3RgbaUnorm,
+            "bc3-rgba-unorm-srgb" => wgpu::TextureFormat::Bc3RgbaUnormSrgb,
+            "bc4-r-unorm" => wgpu::TextureFormat::Bc4RUnorm,
+            "bc4-r-snorm" => wgpu::TextureFormat::Bc4RSnorm,
+            "bc5-rg-unorm" => wgpu::TextureFormat::Bc5RgUnorm,
+            "bc5-rg-snorm" => wgpu::TextureFormat::Bc5RgSnorm,
+            "bc6h-rgb-ufloat" => wgpu::TextureFormat::Bc6hRgbUfloat,
+            "bc6h-rgb-float" => wgpu::TextureFormat::Bc6hRgbFloat,
+            "bc7-rgba-unorm" => wgpu::TextureFormat::Bc7RgbaUnorm,
+            "bc7-rgba-unorm-srgb" => wgpu::TextureFormat::Bc7RgbaUnormSrgb,
+            "etc2-rgb8unorm" => wgpu::TextureFormat::Etc2Rgb8Unorm,
+            "etc2-rgb8unorm-srgb" => wgpu::TextureFormat::Etc2Rgb8UnormSrgb,
+            "etc2-rgb8a1unorm" => wgpu::TextureFormat::Etc2Rgb8A1Unorm,
+            "etc2-rgb8a1unorm-srgb" => wgpu::TextureFormat::Etc2Rgb8A1UnormSrgb,
+            "etc2-rgba8unorm" => wgpu::TextureFormat::Etc2Rgba8Unorm,
+            "etc2-rgba8unorm-srgb" => wgpu::TextureFormat::Etc2Rgba8UnormSrgb,
+            "eac-r11unorm" => wgpu::TextureFormat::EacR11Unorm,
+            "eac-r11snorm" => wgpu::TextureFormat::EacR11Snorm,
+            "eac-rg11unorm" => wgpu::TextureFormat::EacRg11Unorm,
+            "eac-rg11snorm" => wgpu::TextureFormat::EacRg11Snorm,
             "r8unorm" => wgpu::TextureFormat::R8Unorm,
             "r8snorm" => wgpu::TextureFormat::R8Snorm,
             "r8uint" => wgpu::TextureFormat::R8Uint,
@@ -8373,8 +8416,20 @@ mod upstream_wgpu_native {
             if supported_features.contains(wgpu::Features::SUBGROUP_BARRIER) {
                 required_features |= wgpu::Features::SUBGROUP_BARRIER;
             }
+            if supported_features.contains(wgpu::Features::TEXTURE_COMPRESSION_BC) {
+                required_features |= wgpu::Features::TEXTURE_COMPRESSION_BC;
+            }
+            if supported_features.contains(wgpu::Features::TEXTURE_COMPRESSION_BC_SLICED_3D) {
+                required_features |= wgpu::Features::TEXTURE_COMPRESSION_BC_SLICED_3D;
+            }
+            if supported_features.contains(wgpu::Features::TEXTURE_COMPRESSION_ETC2) {
+                required_features |= wgpu::Features::TEXTURE_COMPRESSION_ETC2;
+            }
             if supported_features.contains(wgpu::Features::TEXTURE_COMPRESSION_ASTC) {
                 required_features |= wgpu::Features::TEXTURE_COMPRESSION_ASTC;
+            }
+            if supported_features.contains(wgpu::Features::TEXTURE_COMPRESSION_ASTC_SLICED_3D) {
+                required_features |= wgpu::Features::TEXTURE_COMPRESSION_ASTC_SLICED_3D;
             }
 
             let descriptor = wgpu::DeviceDescriptor {

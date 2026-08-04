@@ -1343,13 +1343,17 @@
         }],
         ["GPUAdapter.requestDevice rejects unsupported required features", async function () {
             var adapter = await navigator.gpu.requestAdapter();
-            var rejected = false;
+            var rejection;
             try {
-                await adapter.requestDevice({ requiredFeatures: ["native-webgpu-test-unsupported-feature"] });
+                await adapter.requestDevice({ requiredFeatures: new Set(["native-webgpu-test-unsupported-feature"]) });
             } catch (error) {
-                rejected = true;
+                rejection = error;
             }
-            expect(rejected, "requestDevice resolved despite an unsupported required feature");
+            expect(rejection instanceof TypeError, "requestDevice should reject unsupported features with TypeError");
+            expect(
+                String(rejection).indexOf("native-webgpu-test-unsupported-feature") !== -1,
+                "requestDevice rejection should identify the unsupported feature"
+            );
         }],
         ["GPUCanvasContext shim can produce a current texture view", async function () {
             var adapter = await navigator.gpu.requestAdapter();

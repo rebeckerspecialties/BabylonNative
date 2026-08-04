@@ -31,6 +31,12 @@ struct BabylonWgpuFeatureInfo final
     uint32_t shader_f16{};
     uint32_t indirect_first_instance{};
     uint32_t float32_filterable{};
+    uint32_t bgra8unorm_storage{};
+    uint32_t texture_compression_bc{};
+    uint32_t texture_compression_bc_sliced_3d{};
+    uint32_t texture_compression_etc2{};
+    uint32_t texture_compression_astc{};
+    uint32_t texture_compression_astc_sliced_3d{};
     uint32_t subgroup{};
     uint32_t subgroup_barrier{};
     uint32_t multi_draw_indirect_count{};
