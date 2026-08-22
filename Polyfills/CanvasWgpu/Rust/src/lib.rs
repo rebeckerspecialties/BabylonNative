@@ -268,6 +268,7 @@ fn create_device() -> Result<(wgpu::Device, wgpu::Queue), String> {
         power_preference: wgpu::PowerPreference::HighPerformance,
         force_fallback_adapter: false,
         compatible_surface: None,
+        apply_limit_buckets: false,
     }))
     .map_err(|err| format!("request_adapter failed: {err}"))?;
 
@@ -797,7 +798,9 @@ impl Backend {
             }
         }
 
-        let mapped = slice.get_mapped_range();
+        let mapped = slice
+            .get_mapped_range()
+            .map_err(|error| format!("mapped range unavailable: {error}"))?;
         let destination_x = (copy_left - requested_left) as usize;
         let destination_y = (copy_top - requested_top) as usize;
         let destination_bytes_per_row = width as usize * 4;

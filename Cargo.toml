@@ -5,15 +5,19 @@ members = [
 resolver = "2"
 
 [workspace.dependencies]
+ash = "=0.38.0"
 bytemuck = { version = "=1.25.0", features = ["derive"] }
-femtovg = { version = "=0.25.1", default-features = false, features = ["wgpu", "textlayout"] }
+femtovg = { version = "=0.26.0", default-features = false, features = ["wgpu", "textlayout"] }
 image = { version = "=0.25.10", default-features = false, features = ["png", "jpeg", "gif", "bmp", "webp"] }
 imgref = "=1.12.1"
 pollster = "=0.4.0"
 raw-window-handle = "=0.6.2"
 rgb = "=0.8.53"
 serde_json = "=1.0.145"
-wgpu = { version = "=29.0.4", default-features = false }
+wgpu = { git = "https://github.com/gfx-rs/wgpu.git", rev = "1a3a4cc27d8082dfd07beaf76dcf3dfb78dda321", default-features = false }
 
 [patch.crates-io]
-femtovg = { git = "https://github.com/rebeckerspecialties/femtovg.git", branch = "show-multiple-guis-stack" }
+femtovg = { git = "https://github.com/rebeckerspecialties/femtovg.git", branch = "show-multiple-guis-stack-0.26" }
+# femtovg 0.26 asks crates.io for wgpu 30; resolve it to the same wgpu checkout the
+# workspace and wgpu-native use so there is exactly one wgpu in the graph.
+wgpu = { git = "https://github.com/gfx-rs/wgpu.git", rev = "1a3a4cc27d8082dfd07beaf76dcf3dfb78dda321" }

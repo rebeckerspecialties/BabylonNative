@@ -74,10 +74,11 @@ FetchContent_Declare(webgpu_headers
     URL https://github.com/webgpu-native/webgpu-headers/archive/673658bc2bd70ec39fc55ebe6bb0173cf6d0a603.tar.gz
     URL_HASH SHA256=6754c6c2465c79a954f7c04c7890c9f00b7ecce8addbe01b5056e860ba3933e6
     EXCLUDE_FROM_ALL)
+# wgpu-native tracking wgpu 30 (gfx-rs/wgpu-native#617 parity work with review
+# fixes; see inner-daemons/wgpu-native#1). Pinned by commit, so no shallow clone.
 FetchContent_Declare(wgpu_native
-    GIT_REPOSITORY https://github.com/gfx-rs/wgpu-native.git
-    GIT_TAG v29.0.1.1
-    GIT_SHALLOW TRUE
+    GIT_REPOSITORY https://github.com/rebeckerspecialties/wgpu-native.git
+    GIT_TAG c8df6cb99795a4cab585355582ce53e8111c9c0d
     EXCLUDE_FROM_ALL)
 FetchContent_Declare(metal-cpp
     GIT_REPOSITORY https://github.com/bkaradzic/metal-cpp.git
@@ -362,13 +363,18 @@ if(BABYLON_NATIVE_WGPU_USE_UPSTREAM_NATIVE)
         file(REMOVE_RECURSE "${wgpu_native_rlib_SOURCE_DIR}")
         file(COPY "${wgpu_native_SOURCE_DIR}/" DESTINATION "${wgpu_native_rlib_SOURCE_DIR}")
         file(READ "${wgpu_native_rlib_SOURCE_DIR}/Cargo.toml" _wgpu_native_cargo_toml)
-        string(REPLACE
-            "crate-type = [\"cdylib\", \"staticlib\"]"
-            "crate-type = [\"rlib\"]"
-            _wgpu_native_cargo_toml_patched
-            "${_wgpu_native_cargo_toml}")
-        if(_wgpu_native_cargo_toml_patched STREQUAL _wgpu_native_cargo_toml)
-            message(FATAL_ERROR "Failed to patch wgpu-native Cargo.toml to expose rlib.")
+        if(_wgpu_native_cargo_toml MATCHES "crate-type = \\[[^]]*\"rlib\"")
+            # This wgpu-native already exposes an rlib; nothing to patch.
+            set(_wgpu_native_cargo_toml_patched "${_wgpu_native_cargo_toml}")
+        else()
+            string(REPLACE
+                "crate-type = [\"cdylib\", \"staticlib\"]"
+                "crate-type = [\"rlib\"]"
+                _wgpu_native_cargo_toml_patched
+                "${_wgpu_native_cargo_toml}")
+            if(_wgpu_native_cargo_toml_patched STREQUAL _wgpu_native_cargo_toml)
+                message(FATAL_ERROR "Failed to patch wgpu-native Cargo.toml to expose rlib.")
+            endif()
         endif()
         set(_wgpu_native_cargo_toml_after_crate_type "${_wgpu_native_cargo_toml_patched}")
         string(REPLACE

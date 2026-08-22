@@ -3593,7 +3593,7 @@ mod upstream_wgpu_native {
                                 },
                             );
                             self.runtime.queue.submit(Some(encoder.finish()));
-                            frame.present();
+                            self.runtime.queue.present(frame);
                         }
                         wgpu::CurrentSurfaceTexture::Lost
                         | wgpu::CurrentSurfaceTexture::Outdated
@@ -3721,7 +3721,10 @@ mod upstream_wgpu_native {
 
                 let range_end = range.offset + range.data_len as u64;
                 let source = unsafe { std::slice::from_raw_parts(range.data, range.data_len) };
-                let mut mapped = buffer.slice(range.offset..range_end).get_mapped_range_mut();
+                let mut mapped = buffer
+                    .slice(range.offset..range_end)
+                    .get_mapped_range_mut()
+                    .map_err(|error| format!("mapped range unavailable: {error}"))?;
                 mapped.copy_from_slice(source);
             }
 
@@ -3754,7 +3757,11 @@ mod upstream_wgpu_native {
                     let copy_len = (data.len() as u64).min(available) as usize;
                     if copy_len > 0 {
                         let end = start + copy_len as u64;
-                        let mut mapped = buffer.buffer.slice(start..end).get_mapped_range_mut();
+                        let mut mapped = buffer
+                            .buffer
+                            .slice(start..end)
+                            .get_mapped_range_mut()
+                            .map_err(|error| format!("mapped range unavailable: {error}"))?;
                         mapped.copy_from_slice(&data[..copy_len]);
                         drop(mapped);
                     }
@@ -3835,7 +3842,9 @@ mod upstream_wgpu_native {
                 }
             }
 
-            let mapped = slice.get_mapped_range();
+            let mapped = slice
+                .get_mapped_range()
+                .map_err(|error| format!("mapped range unavailable: {error}"))?;
             output[..copy_len].copy_from_slice(&mapped[..copy_len]);
             drop(mapped);
             buffer_resource.buffer.unmap();
@@ -3861,6 +3870,31 @@ mod upstream_wgpu_native {
             let sample_count = json_u32(&descriptor, "sampleCount", 1).max(1);
             let label = json_str(&descriptor, "label").map(str::to_owned);
             let dimension = map_texture_dimension(json_str(&descriptor, "dimension"));
+            let transient = json_bool(&descriptor, "transient", false);
+            // wgpu maps TRANSIENT_ATTACHMENT to memoryless storage where the backend
+            // has it (MTLStorageModeMemoryless on Apple GPUs), and validates that
+            // such an attachment is only ever cleared and discarded. It is only
+            // legal together with RENDER_ATTACHMENT, so any other usage mix keeps
+            // an ordinary allocation.
+            let usage = if transient && usage == wgpu::TextureUsages::RENDER_ATTACHMENT {
+                eprintln!(
+                    "NativeWebGPU transient texture: '{}' {}x{}x{} {:?} (memoryless where supported)",
+                    label.as_deref().unwrap_or("<unlabeled>"),
+                    size.width,
+                    size.height,
+                    size.depth_or_array_layers,
+                    format
+                );
+                usage | wgpu::TextureUsages::TRANSIENT_ATTACHMENT
+            } else {
+                if transient {
+                    eprintln!(
+                        "NativeWebGPU transient texture: '{}' requested with usage {usage:?}; kept ordinary storage",
+                        label.as_deref().unwrap_or("<unlabeled>")
+                    );
+                }
+                usage
+            };
             let texture = self
                 .runtime
                 .device
@@ -3975,7 +4009,17 @@ mod upstream_wgpu_native {
                     size.depth_or_array_layers,
                     mip_level_count,
                     copy_size,
+                    None,
                 )
+            };
+            // The imported texture already holds content produced outside wgpu
+            // (the XR compositor's camera image for color). Metal needs no layout
+            // transitions, so this only seeds wgpu's usage tracker; describe the
+            // texture as what it is rather than as uninitialized.
+            let initial_state = if format.is_depth_stencil_format() {
+                wgpu::TextureUses::DEPTH_STENCIL_WRITE
+            } else {
+                wgpu::TextureUses::COLOR_TARGET
             };
             let texture = unsafe {
                 self.runtime
@@ -3992,6 +4036,7 @@ mod upstream_wgpu_native {
                             usage,
                             view_formats: &view_formats,
                         },
+                        initial_state,
                     )
             };
 
@@ -4479,6 +4524,9 @@ mod upstream_wgpu_native {
                     },
                 )
                 .collect();
+            // wgpu 30 models unused vertex slots as `None`; every layout here is bound.
+            let vertex_buffer_slots: Vec<Option<wgpu::VertexBufferLayout>> =
+                vertex_buffers.iter().cloned().map(Some).collect();
 
             let fragment_state = if let Some(fragment) = descriptor
                 .get("fragment")
@@ -4591,7 +4639,7 @@ mod upstream_wgpu_native {
                                 module: &vertex_module.module,
                                 entry_point: Some(vertex_entry),
                                 compilation_options: wgpu::PipelineCompilationOptions::default(),
-                                buffers: &vertex_buffers,
+                                buffers: &vertex_buffer_slots,
                             },
                             primitive,
                             depth_stencil,
@@ -6861,7 +6909,9 @@ mod upstream_wgpu_native {
             Err(error) => return Err(format!("screenshot map_async channel failed: {error}")),
         }
 
-        let mapped = slice.get_mapped_range();
+        let mapped = slice
+            .get_mapped_range()
+            .map_err(|error| format!("mapped range unavailable: {error}"))?;
         let expected_len = (width as usize)
             .saturating_mul(height as usize)
             .saturating_mul(4);
@@ -7071,7 +7121,9 @@ mod upstream_wgpu_native {
             Err(error) => return Err(format!("native texture map_async channel failed: {error}")),
         }
 
-        let mapped = slice.get_mapped_range();
+        let mapped = slice
+            .get_mapped_range()
+            .map_err(|error| format!("mapped range unavailable: {error}"))?;
         let expected_len = (width as usize)
             .saturating_mul(height as usize)
             .saturating_mul(4);
@@ -7516,11 +7568,11 @@ mod upstream_wgpu_native {
                             module: &shader,
                             entry_point: Some("vs_main"),
                             compilation_options: wgpu::PipelineCompilationOptions::default(),
-                            buffers: &[wgpu::VertexBufferLayout {
+                            buffers: &[Some(wgpu::VertexBufferLayout {
                                 array_stride: vertex_stride,
                                 step_mode: wgpu::VertexStepMode::Vertex,
                                 attributes: &vertex_attributes,
-                            }],
+                            })],
                         },
                         primitive: wgpu::PrimitiveState {
                             topology: wgpu::PrimitiveTopology::TriangleList,
@@ -7832,7 +7884,7 @@ mod upstream_wgpu_native {
             } else {
                 runtime.queue.submit(Some(command_buffer));
                 if let Some(frame) = surface_frame {
-                    frame.present();
+                    runtime.queue.present(frame);
                 }
             }
 
@@ -8218,7 +8270,7 @@ mod upstream_wgpu_native {
     ) {
         queue.submit(Some(command_buffer));
         if let Some(frame) = surface_frame {
-            frame.present();
+            queue.present(frame);
         }
 
         // Keep backend housekeeping progressing so completed submissions are
@@ -8329,6 +8381,9 @@ mod upstream_wgpu_native {
                 power_preference,
                 force_fallback_adapter,
                 compatible_surface: surface,
+                // Keep the adapter's real limits; the WebGPU bucket rounding is a
+                // browser-facing convention that would only hide capacity here.
+                apply_limit_buckets: false,
             };
             match pollster::block_on(instance.request_adapter(&options)) {
                 Ok(adapter) => Some((adapter, force_fallback_adapter)),

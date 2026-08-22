@@ -10,6 +10,7 @@
 #include <os/log.h>
 
 #include <cstdint>
+#include <cstdio>
 #include <memory>
 
 namespace
@@ -85,6 +86,12 @@ namespace
             os_log_with_type(BabylonNativeLogger(), ToOSLogType(level),
                              "%{public}.*s",
                              static_cast<int>(message.size()), message.data());
+            // Mirror to stderr as well: os_log is invisible to a host that drives
+            // the app from the command line (`devicectl device process launch
+            // --console`, CI runners), which only sees the process' stdio.
+            std::fwrite(message.data(), 1, message.size(), stderr);
+            std::fputc('\n', stderr);
+            std::fflush(stderr);
         };
         if (runtimeOptions.shaderCachePath != nil)
         {
