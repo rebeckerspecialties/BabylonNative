@@ -5,6 +5,12 @@
 #if BABYLON_NATIVE_PLUGIN_NATIVEENGINE
 #include <Babylon/Plugins/NativeEngine.h>
 #endif
+#if BABYLON_NATIVE_PLUGIN_NATIVEDRACO
+#include <Babylon/Plugins/NativeDraco.h>
+#endif
+#if BABYLON_NATIVE_PLUGIN_NATIVEMESHOPT
+#include <Babylon/Plugins/NativeMeshopt.h>
+#endif
 #if BABYLON_NATIVE_PLUGIN_NATIVECAMERA
 #include <Babylon/Plugins/NativeCamera.h>
 #endif

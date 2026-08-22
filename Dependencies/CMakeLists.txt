@@ -54,9 +54,7 @@ target_compile_definitions(bgfx PRIVATE BGFX_CONFIG_DEBUG_ANNOTATION=0)
 target_compile_definitions(bgfx PRIVATE BGFX_CONFIG_DEFAULT_MAX_ENCODERS=2)
 target_compile_definitions(bgfx PRIVATE BGFX_CONFIG_MAX_VERTEX_STREAMS=18)
 target_compile_definitions(bgfx PRIVATE BGFX_CONFIG_MIN_RESOURCE_COMMAND_BUFFER_SIZE=16)
-target_compile_definitions(bgfx PRIVATE BGFX_CONFIG_MIN_UNIFORM_BUFFER_SIZE=4096)
-target_compile_definitions(bgfx PRIVATE BGFX_CONFIG_UNIFORM_BUFFER_RESIZE_THRESHOLD_SIZE=256)
-target_compile_definitions(bgfx PRIVATE BGFX_CONFIG_UNIFORM_BUFFER_RESIZE_INCREMENT_SIZE=1024)
+
 target_compile_definitions(bgfx PUBLIC BGFX_PLATFORM_SUPPORTS_WGSL=0)
 
 # bgfx bundles the Khronos GLES headers but adds them as a PRIVATE include
@@ -64,14 +62,11 @@ target_compile_definitions(bgfx PUBLIC BGFX_PLATFORM_SUPPORTS_WGSL=0)
 # Expose the path so the OpenGL backends of our own targets can use it.
 set(BGFX_KHRONOS_INCLUDE_DIR "${bgfx.cmake_SOURCE_DIR}/bgfx/3rdparty/khronos" CACHE INTERNAL "")
 
-# Canvas plugin allocates one bgfx framebuffer per JS Canvas object and per
-# text-rendering operation; combined with V8 GC pacing this can exceed the
-# default 128 limit during long playground sweeps. We enforce a floor of 512:
-# CI workflows pass -DBGFX_CONFIG_MAX_FRAME_BUFFERS, and any value below 512
-# (including a smaller CI override) is clamped up so the pool never regresses
-# below the size the Canvas sweeps need.
-if(NOT BGFX_CONFIG_MAX_FRAME_BUFFERS OR BGFX_CONFIG_MAX_FRAME_BUFFERS LESS 512)
-    set(BGFX_CONFIG_MAX_FRAME_BUFFERS 512)
+# The Canvas polyfill holds a bgfx framebuffer per JS Canvas object and per
+# text-rendering operation, releasing them only on GC finalize, so a long
+# playground sweep exceeds bgfx's default of 128.
+if(NOT BGFX_CONFIG_MAX_FRAME_BUFFERS)
+    set(BGFX_CONFIG_MAX_FRAME_BUFFERS 2048)
 endif()
 target_compile_definitions(bgfx PRIVATE BGFX_CONFIG_MAX_FRAME_BUFFERS=${BGFX_CONFIG_MAX_FRAME_BUFFERS})
 
@@ -109,10 +104,6 @@ set_property(TARGET bimg PROPERTY FOLDER Dependencies/bgfx)
 set_property(TARGET bx PROPERTY FOLDER Dependencies/bgfx)
 target_compile_definitions(bx PRIVATE _CRT_SECURE_NO_WARNINGS)
 
-# The updated tinyexr (vendored by bimg) uses fopen in its file I/O helpers,
-# which MSVC flags as C4996 and fails the warnings-as-errors UWP build. Mirror
-# the bx workaround above and silence the deprecation for the bimg targets that
-# compile the tinyexr implementation.
 foreach(_bimg_target IN ITEMS bimg_decode bimg_encode tinyexr)
     if(TARGET ${_bimg_target})
         target_compile_definitions(${_bimg_target} PRIVATE _CRT_SECURE_NO_WARNINGS)
@@ -181,11 +172,14 @@ if(BABYLON_NATIVE_PLUGIN_SHADERCOMPILER)
     endif()
 endif()
 
-# Assign an IDE folder to every target declared by a dependency, including
-# targets in nested directories whose names may change between releases.
+# Assigns an IDE folder to every target a dependency declares, including those in
+# nested directories. draco alone contributes ~25 internal object libraries; listing
+# them by name would silently go stale whenever the dependency reorganizes its build,
+# leaving targets ungrouped at the solution root.
 function(group_directory_targets DIR FOLDER_NAME)
     get_property(_targets DIRECTORY "${DIR}" PROPERTY BUILDSYSTEM_TARGETS)
     foreach(_target IN LISTS _targets)
+        # INTERFACE libraries have no build output and cannot carry a FOLDER.
         get_target_property(_type ${_target} TYPE)
         if(NOT _type STREQUAL "INTERFACE_LIBRARY")
             set_property(TARGET ${_target} PROPERTY FOLDER "${FOLDER_NAME}")
@@ -206,22 +200,37 @@ if(BABYLON_NATIVE_PLUGIN_NATIVEDRACO AND NOT TARGET draco AND NOT TARGET draco_s
     set(DRACO_INSTALL OFF CACHE BOOL "" FORCE)
     set(DRACO_BUILD_EXECUTABLES OFF CACHE BOOL "" FORCE)
     set(DRACO_JS_GLUE OFF CACHE BOOL "" FORCE)
+
+    # Build only the features in the Draco glTF bitstream spec: mesh compression, normal
+    # encoding and the standard edgebreaker. This is the same subset Babylon.js decodes
+    # with, since its default configuration loads draco_decoder_gltf.wasm rather than the
+    # full decoder, so it costs no capability the JavaScript path has. It drops point cloud
+    # compression, the predictive edgebreaker and pre-glTF backwards compatibility.
     set(DRACO_GLTF_BITSTREAM ON CACHE BOOL "" FORCE)
 
     FetchContent_MakeAvailable_With_Message(draco)
 
+    # The combined draco library target is named `draco` for MSVC and
+    # `draco_static` for other toolchains (static build); `draco::draco` aliases
+    # whichever exists.
     if(TARGET draco)
         set(_draco_lib draco)
     else()
         set(_draco_lib draco_static)
     endif()
 
+    # draco adds its include paths as PRIVATE (see cmake/draco_targets.cmake
+    # draco_add_library), so linking draco::draco does not expose the draco/*
+    # headers to consumers. Re-export them as PUBLIC on the combined target.
+    # The generated draco/draco_features.h is emitted under CMAKE_BINARY_DIR
+    # (draco uses ${CMAKE_BINARY_DIR} as its generated-sources root).
     target_include_directories(${_draco_lib} SYSTEM PUBLIC
         "${draco_SOURCE_DIR}"
         "${draco_SOURCE_DIR}/src"
         "${draco_BINARY_DIR}"
         "${CMAKE_BINARY_DIR}")
 
+    # Assign IDE folders for every draco target, not just the combined library.
     group_directory_targets("${draco_SOURCE_DIR}" Dependencies/draco)
 endif()
 
@@ -255,20 +264,25 @@ endif()
 
 FetchContent_MakeAvailable_With_Message(JsRuntimeHost)
 
-if(DEFINED _BABYLON_NATIVE_ENABLE_SANITIZERS_SAVED)
-    set(ENABLE_SANITIZERS "${_BABYLON_NATIVE_ENABLE_SANITIZERS_SAVED}" CACHE BOOL "" FORCE)
-    unset(_BABYLON_NATIVE_ENABLE_SANITIZERS_SAVED)
+# Two JsRuntimeHost targets cannot be built without RTTI:
+#   v8inspector - includes asio, whose headers use typeid() unconditionally
+#                 (any_executor.hpp, service_registry.hpp, handler_work.hpp).
+#                 Clang and GCC reject this outright; MSVC only warns.
+#                 Only defined for V8 with the inspector enabled
+#                 (JsRuntimeHost Core/AppRuntime/CMakeLists.txt).
+#   jsi         - Hermes (fetched by JsRuntimeHost) builds its API/hermes
+#                 targets with RTTI, and their vtables reference "typeinfo for
+#                 facebook::jsi::*" which only jsi.cpp emits. Compiling jsi
+#                 without RTTI drops those definitions and the link fails.
+#                 The same target name is used by Node-API-JSI for V8JSI.
+# Each call is gated on the engine that defines the target, so a target that
+# stops existing upstream fails configuration instead of silently going by.
+if(NAPI_JAVASCRIPT_ENGINE STREQUAL "V8" AND JSRUNTIMEHOST_CORE_APPRUNTIME AND JSRUNTIMEHOST_CORE_APPRUNTIME_V8_INSPECTOR)
+    babylon_native_force_rtti(v8inspector)
 endif()
 
-# UrlLib enables ARC only through an Xcode target attribute in its own CMake.
-# Add explicit ARC flags so Unix Makefiles/Ninja builds on Apple also work.
-if(APPLE AND TARGET UrlLib)
-    target_compile_options(UrlLib PRIVATE -fobjc-arc)
-endif()
-
-set_property(TARGET JsRuntime PROPERTY UNITY_BUILD false)
-if(TARGET AppRuntime)
-    set_property(TARGET AppRuntime PROPERTY UNITY_BUILD false)
+if(NAPI_JAVASCRIPT_ENGINE STREQUAL "JSI" OR NAPI_JAVASCRIPT_ENGINE STREQUAL "Hermes")
+    babylon_native_force_rtti(jsi)
 endif()
 
 # --------------------------------------------------

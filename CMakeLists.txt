@@ -38,7 +38,7 @@ FetchContent_Declare(base-n
     EXCLUDE_FROM_ALL)
 FetchContent_Declare(bgfx.cmake
     GIT_REPOSITORY https://github.com/BabylonJS/bgfx.cmake.git
-    GIT_TAG 5c98749de48e8609a62e5c1fd2cfffbbd970588e
+    GIT_TAG 9e56bab41272eda16460539465f97724eec94a23
     EXCLUDE_FROM_ALL)
 FetchContent_Declare(CMakeExtensions
     GIT_REPOSITORY https://github.com/BabylonJS/CMakeExtensions.git
@@ -222,10 +222,22 @@ if(ENABLE_SANITIZERS AND ENABLE_THREAD_SANITIZER)
     message(FATAL_ERROR "ENABLE_SANITIZERS and ENABLE_THREAD_SANITIZER are mutually exclusive.")
 endif()
 
+# RTTI
+# Babylon Native does not use dynamic_cast or typeid anywhere in Core, Plugins,
+# Polyfills, Embedding or Apps, but compilers emit RTTI records for every
+# polymorphic class by default. Disabling it is a pure size win. UBSan's vptr
+# check is the only thing that needs RTTI, so it is derived from the sanitizer
+# switch rather than exposed as an option of its own.
+#
+# Deliberately a plain variable and not a cache entry: a cached ENABLE_RTTI
+# would persist ON in any build directory that was configured with
+# -DENABLE_SANITIZERS=ON even once, so re-configuring that directory without
+# sanitizers would silently keep emitting RTTI and lose the size win.
+set(ENABLE_RTTI ${ENABLE_SANITIZERS})
+
 if(ENABLE_SANITIZERS)
     include(CheckCCompilerFlag)
     include(CheckCXXCompilerFlag)
-    set(ENABLE_RTTI ON CACHE BOOL "" FORCE)
     if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
         # Android app processes require explicit sanitizer runtime packaging.
         # Prefer ASan there for actionable heap safety checks with manageable
@@ -468,8 +480,9 @@ if(BABYLON_NATIVE_OPENGLES_FROM_BROWSER)
         message(FATAL_ERROR "OpenGLWindowsDevOnly requires ANGLE libraries (libEGL.dll, libGLESv2.dll) from Edge or Chrome, but none were found.")
     endif()
 
-    # Browser distributions ship ANGLE DLLs without import libraries. bgfx
-    # resolves GL entry points dynamically, but direct GL calls need one.
+    # The browser ships ANGLE as DLLs with no import libraries. bgfx resolves its GL entry
+    # points dynamically, but code that calls GL ES directly needs something to link against,
+    # so synthesize an import library from the DLL's export table.
     get_filename_component(_msvc_bin_dir "${CMAKE_CXX_COMPILER}" DIRECTORY)
     find_program(ANGLE_DUMPBIN_EXECUTABLE NAMES dumpbin dumpbin.exe HINTS "${_msvc_bin_dir}")
     find_program(ANGLE_LIB_EXECUTABLE NAMES lib lib.exe HINTS "${_msvc_bin_dir}")
@@ -491,6 +504,7 @@ if(BABYLON_NATIVE_OPENGLES_FROM_BROWSER)
             message(FATAL_ERROR "Failed to read the exports of ${ANGLE_LIBGLESV2}: ${_angle_exports_error}")
         endif()
 
+        # Export table rows look like "  1422   58D 00023330 glIsTexture"; keep the names.
         string(REGEX MATCHALL "[0-9A-F]+ +gl[A-Za-z0-9_]+" _angle_export_rows "${_angle_exports}")
         set(_angle_def_exports "")
         foreach(_angle_row IN LISTS _angle_export_rows)
@@ -545,7 +559,44 @@ if(MSVC)
 
     # Enable multiprocessor compilation for faster builds
     add_compile_options(/MP)
+
+    # Strip unreferenced code from RelWithDebInfo binaries.
+    #
+    # MSVC turns /OPT:REF and /OPT:ICF off whenever /DEBUG is passed, and CMake's
+    # default RelWithDebInfo link flags are "/debug /INCREMENTAL". The effect is that
+    # RelWithDebInfo keeps every unreferenced COMDAT that made it into the static
+    # libraries.
+    #
+    # /OPT:REF alone captures the entire win (/OPT:ICF measured zero additional
+    # bytes), so identical functions are left unfolded and stack traces stay
+    # unambiguous. Incremental linking must be off because it is incompatible with
+    # /OPT:REF. Debug is left untouched, and Release/MinSizeRel already get /OPT:REF
+    # implicitly because they do not link with /DEBUG.
+    add_link_options($<$<CONFIG:RelWithDebInfo>:/INCREMENTAL:NO> $<$<CONFIG:RelWithDebInfo>:/OPT:REF>)
 endif()
+
+if(NOT ENABLE_RTTI)
+    # Applied to C++ only: /GR- and -fno-rtti are not valid for C sources.
+    # OBJCXX is listed explicitly so Objective-C++ (.mm) sources are covered on
+    # Apple regardless of whether CMake classifies them as CXX or OBJCXX.
+    if(MSVC)
+        add_compile_options($<$<COMPILE_LANGUAGE:CXX,OBJCXX>:/GR->)
+    else()
+        add_compile_options($<$<COMPILE_LANGUAGE:CXX,OBJCXX>:-fno-rtti>)
+    endif()
+endif()
+
+# Re-enables RTTI for a single target. Needed by dependencies that genuinely
+# require it; see the call sites for the specific reason in each case.
+# Call sites gate on the configuration that provides the target, so an
+# unresolved name is a mistake and target_compile_options reports it.
+function(babylon_native_force_rtti target)
+    if(MSVC)
+        target_compile_options(${target} PRIVATE $<$<COMPILE_LANGUAGE:CXX,OBJCXX>:/GR>)
+    else()
+        target_compile_options(${target} PRIVATE $<$<COMPILE_LANGUAGE:CXX,OBJCXX>:-frtti>)
+    endif()
+endfunction()
 
 if(APPLE)
     set(ENABLE_ARC ON CACHE STRING "Enables or disables ARC support." FORCE)

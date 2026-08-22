@@ -6,19 +6,21 @@
     "UnitTests/JavaScript"
   ],
   "scripts": {
-    "getNightly": "node scripts/getNightly.js && npm run downlevel:native-scripts -- node_modules/babylonjs/babylon.max.js",
+    "getNightly": "node scripts/getNightly.js",
     "downlevel:native-scripts": "node scripts/downlevelNativeScripts.mjs",
     "patch:babylonjs:check": "node scripts/applyBabylonJsPatchStack.js --check",
     "patch:babylonjs:apply": "node scripts/applyBabylonJsPatchStack.js --apply"
   },
   "dependencies": {
-    "babylonjs": "9.17.1",
-    "babylonjs-addons": "9.17.1",
-    "babylonjs-gltf2interface": "9.17.1",
-    "babylonjs-gui": "9.17.1",
-    "babylonjs-loaders": "9.17.1",
-    "babylonjs-materials": "9.17.1",
-    "babylonjs-serializers": "9.17.1",
+    "babylonjs": "9.22.1",
+    "babylonjs-addons": "9.22.1",
+    "babylonjs-gltf2interface": "9.22.1",
+    "babylonjs-gui": "9.22.1",
+    "babylonjs-loaders": "9.22.1",
+    "babylonjs-materials": "9.22.1",
+    "babylonjs-procedural-textures": "9.22.1",
+    "babylonjs-serializers": "9.22.1",
+    "earcut": "^2.2.4",
     "jsc-android": "^241213.1.0",
     "v8-android": "^7.8.2"
   },

@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <exception>
 #include <string>
 
 #define BN_STRINGIFY_IMPL(value) #value
@@ -118,6 +119,33 @@ namespace
 #endif
     }
 
+    // Recover the message of the exception that is currently propagating, if
+    // any. Returns an empty string when no exception is in flight. Valid inside
+    // a terminate handler, and inside the MSVC SIGABRT handler that terminate()
+    // ends up calling, because the exception stays current until the handler
+    // returns. Allocates, so it must not be called from a signal handler that
+    // can fire asynchronously (see OnSignalAbort on non-MSVC).
+    std::string DescribeCurrentException()
+    {
+        if (std::current_exception() == nullptr)
+        {
+            return {};
+        }
+
+        try
+        {
+            std::rethrow_exception(std::current_exception());
+        }
+        catch (const std::exception& e)
+        {
+            return std::string{"uncaught std::exception: "} + e.what();
+        }
+        catch (...)
+        {
+            return "uncaught non-std exception.";
+        }
+    }
+
 #if defined(_MSC_VER)
     void __cdecl OnInvalidParameter(
         const wchar_t* expression,
@@ -149,7 +177,13 @@ namespace
 
     void OnSignalAbort(int /*signal*/)
     {
-        Diagnostics::DumpFailure("ABORT", nullptr, 0, 1, "SIGABRT raised.");
+        // abort() is where std::terminate() ends up, among other paths. On MSVC
+        // std::set_terminate() is per-thread, so a terminate on a worker thread
+        // never reaches OnTerminate below and lands here instead; recover the
+        // exception message either way.
+        const std::string detail = DescribeCurrentException();
+        Diagnostics::DumpFailure("ABORT", nullptr, 0, 1, "SIGABRT raised.%s%s",
+            detail.empty() ? "" : "\n", detail.c_str());
         if (::IsDebuggerPresent())
         {
             __debugbreak();
@@ -183,12 +217,46 @@ namespace
 #else
     void OnSignalAbort(int /*signal*/)
     {
+        // Deliberately does not call DescribeCurrentException(). Outside the
+        // Microsoft CRT std::set_terminate() is global, and OnTerminate() below
+        // ends in std::_Exit(), so an uncaught exception is fully reported there
+        // and never reaches abort(). Everything that does land here -- a direct
+        // abort(), a libc assertion, raise(SIGABRT), kill -ABRT -- has no C++
+        // exception in flight, so recovering one would return an empty string
+        // anyway.
+        //
+        // That matters because this is a real signal handler: std::current_exception()
+        // and std::string allocate, and abort() is frequently raised from inside
+        // the allocator (heap corruption, a glibc malloc assertion). Allocating
+        // here would deadlock against the allocator's own lock in exactly the
+        // cases where the diagnostic is most needed.
         Diagnostics::DumpFailure("ABORT", nullptr, 0, 1, "SIGABRT raised.");
         Diagnostics::SetExitCode(3);
         Diagnostics::PrintFinishLine();
         std::_Exit(3);
     }
 #endif
+
+    void OnTerminate()
+    {
+        // An uncaught C++ exception otherwise reaches abort() with nothing but
+        // "SIGABRT raised.", which says nothing about what actually went wrong.
+        //
+        // This only covers the thread that installed it on Windows: the standard
+        // says the terminate handler is global, but the Microsoft CRT keeps it
+        // per-thread. OnSignalAbort() above repeats the same reporting so
+        // worker-thread terminations stay diagnosable there.
+        std::string detail = DescribeCurrentException();
+        if (detail.empty())
+        {
+            detail = "terminate called without an active exception.";
+        }
+
+        Diagnostics::DumpFailure("TERMINATE", nullptr, 0, 1, "%s", detail.c_str());
+        Diagnostics::SetExitCode(3);
+        Diagnostics::PrintFinishLine();
+        std::_Exit(3);
+    }
 }
 
 namespace Diagnostics
@@ -200,6 +268,10 @@ namespace Diagnostics
         {
             return;
         }
+
+
+        // Report the message of an uncaught exception before abort() swallows it.
+        std::set_terminate(&OnTerminate);
 
 #if defined(_MSC_VER)
         // Route assert() to stderr instead of UCRT's modal dialog. Covers the
