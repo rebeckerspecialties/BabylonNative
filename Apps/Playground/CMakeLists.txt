@@ -392,6 +392,8 @@ if(APPLE)
             MACOSX_BUNDLE true
             MACOSX_BUNDLE_INFO_PLIST "${PLIST_FILE}"
             RESOURCE "${RESOURCE_FILES}"
+            MACOSX_BUNDLE_GUI_IDENTIFIER "com.BabylonNative.Playground"
+            MACOSX_BUNDLE_BUNDLE_NAME "Playground"
             FOLDER "Playground")
     endif()
     enable_objc_arc(Playground)
