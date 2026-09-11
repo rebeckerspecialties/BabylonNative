@@ -10,6 +10,7 @@
 #include <memory>
 #include <string>
 #include <type_traits>
+#include <utility>
 
 using namespace std::chrono_literals;
 
@@ -26,10 +27,10 @@ namespace
         return view.data ? std::string{view.data, view.length == WGPU_STRLEN ? std::strlen(view.data) : view.length} : std::string{};
     }
 
-    template<typename Handle>
+    template<typename Handle, auto Release>
     struct RequestResult
     {
-        Handle handle{};
+        std::unique_ptr<std::remove_pointer_t<Handle>, decltype(Release)> handle{nullptr, Release};
         std::string error;
     };
 }
@@ -41,19 +42,25 @@ TEST(NativeWebGPUCAPI, AdapterInfoAndGpuBufferRoundTrip)
 
     // Callback ownership lasts until completion, including if a timeout ends
     // the test while a spontaneous callback is still pending.
-    auto* adapterPromise = new std::promise<RequestResult<WGPUAdapter>>{};
+    using AdapterResult = RequestResult<WGPUAdapter, wgpuAdapterRelease>;
+    auto* adapterPromise = new std::promise<AdapterResult>{};
     auto adapterFuture = adapterPromise->get_future();
     WGPURequestAdapterCallbackInfo adapterCallback = WGPU_REQUEST_ADAPTER_CALLBACK_INFO_INIT;
     adapterCallback.mode = WGPUCallbackMode_AllowSpontaneous;
     adapterCallback.userdata1 = adapterPromise;
     adapterCallback.callback = [](WGPURequestAdapterStatus status, WGPUAdapter adapter, WGPUStringView message, void* data, void*) {
-        std::unique_ptr<std::promise<RequestResult<WGPUAdapter>>> completion{static_cast<std::promise<RequestResult<WGPUAdapter>>*>(data)};
-        completion->set_value({status == WGPURequestAdapterStatus_Success ? adapter : nullptr, Message(message)});
+        std::unique_ptr<std::promise<AdapterResult>> completion{static_cast<std::promise<AdapterResult>*>(data)};
+        auto ownedAdapter = Own<wgpuAdapterRelease>(adapter);
+        if (status != WGPURequestAdapterStatus_Success)
+        {
+            ownedAdapter.reset();
+        }
+        completion->set_value({std::move(ownedAdapter), Message(message)});
     };
     wgpuInstanceRequestAdapter(instance.get(), nullptr, adapterCallback);
     ASSERT_EQ(adapterFuture.wait_for(5s), std::future_status::ready);
-    const auto adapterResult = adapterFuture.get();
-    auto adapter = Own<wgpuAdapterRelease>(adapterResult.handle);
+    auto adapterResult = adapterFuture.get();
+    auto adapter = std::move(adapterResult.handle);
     ASSERT_NE(adapter, nullptr) << adapterResult.error;
 
     WGPUAdapterInfo info = WGPU_ADAPTER_INFO_INIT;
@@ -63,19 +70,25 @@ TEST(NativeWebGPUCAPI, AdapterInfoAndGpuBufferRoundTrip)
     EXPECT_NE(info.adapterType, WGPUAdapterType_CPU);
     wgpuAdapterInfoFreeMembers(info);
 
-    auto* devicePromise = new std::promise<RequestResult<WGPUDevice>>{};
+    using DeviceResult = RequestResult<WGPUDevice, wgpuDeviceRelease>;
+    auto* devicePromise = new std::promise<DeviceResult>{};
     auto deviceFuture = devicePromise->get_future();
     WGPURequestDeviceCallbackInfo deviceCallback = WGPU_REQUEST_DEVICE_CALLBACK_INFO_INIT;
     deviceCallback.mode = WGPUCallbackMode_AllowSpontaneous;
     deviceCallback.userdata1 = devicePromise;
     deviceCallback.callback = [](WGPURequestDeviceStatus status, WGPUDevice device, WGPUStringView message, void* data, void*) {
-        std::unique_ptr<std::promise<RequestResult<WGPUDevice>>> completion{static_cast<std::promise<RequestResult<WGPUDevice>>*>(data)};
-        completion->set_value({status == WGPURequestDeviceStatus_Success ? device : nullptr, Message(message)});
+        std::unique_ptr<std::promise<DeviceResult>> completion{static_cast<std::promise<DeviceResult>*>(data)};
+        auto ownedDevice = Own<wgpuDeviceRelease>(device);
+        if (status != WGPURequestDeviceStatus_Success)
+        {
+            ownedDevice.reset();
+        }
+        completion->set_value({std::move(ownedDevice), Message(message)});
     };
     wgpuAdapterRequestDevice(adapter.get(), nullptr, deviceCallback);
     ASSERT_EQ(deviceFuture.wait_for(5s), std::future_status::ready);
-    const auto deviceResult = deviceFuture.get();
-    auto device = Own<wgpuDeviceRelease>(deviceResult.handle);
+    auto deviceResult = deviceFuture.get();
+    auto device = std::move(deviceResult.handle);
     ASSERT_NE(device, nullptr) << deviceResult.error;
     info = WGPU_ADAPTER_INFO_INIT;
     ASSERT_EQ(wgpuDeviceGetAdapterInfo(device.get(), &info), WGPUStatus_Success);

@@ -36,6 +36,25 @@ wgpu-native checkout, but no visual result is accepted: the execution
 environment exposed no Metal adapter to the test binaries, and Playground
 aborted during macOS application registration before the scripts ran.
 
+The macOS bundle template now uses CMake substitutions, so Ninja bundles no
+longer ship unresolved Xcode executable or bundle-identifier placeholders.
+The application-registration failure persists in the restricted execution
+environment after this packaging correction.
+
+Before claiming an integrated runtime build, verify that changes in the
+wgpu-native checkout trigger the Rust build and match the staged rlib source.
+CMake now tracks these inputs and uses a Cargo `[patch]`, not a graph-changing
+`paths` override. A dependency input timestamp change was verified to trigger
+configuration, snapshot refresh, and the Cargo command.
+
+The rendering bridge currently uses Rust wgpu APIs. Linking wgpu-native and
+calling its version function alone is not C API behavioral coverage. Run
+`NativeWebGPUAsyncTests --gtest_filter=NativeWebGPUCAPI.*` as well: this direct
+C API integration test requires an adapter, uploads/copies/reads back a GPU
+buffer, and checks adapter-info and buffer map-state APIs. Missing hardware
+is a failure, not a skip. The broader upstream C-backend suite is still needed
+for the remaining native API additions.
+
 For a normal import from a fully fetched Dawn checkout:
 
 ```sh
