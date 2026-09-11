@@ -359,9 +359,22 @@ if(BABYLON_NATIVE_WGPU_USE_UPSTREAM_NATIVE)
     set(webgpu_headers_SOURCE_DIR "${wgpu_native_SOURCE_DIR}/ffi/webgpu-headers" CACHE PATH "webgpu-headers bundled with wgpu-native" FORCE)
 
     if(BABYLON_NATIVE_WGPU_NATIVE_RLIB)
+        file(GLOB_RECURSE WGPU_NATIVE_RUNTIME_INPUTS CONFIGURE_DEPENDS
+            "${wgpu_native_SOURCE_DIR}/src/*.rs"
+            "${wgpu_native_SOURCE_DIR}/ffi/*.h")
+        list(APPEND WGPU_NATIVE_RUNTIME_INPUTS
+            "${wgpu_native_SOURCE_DIR}/Cargo.toml"
+            "${wgpu_native_SOURCE_DIR}/Cargo.lock"
+            "${wgpu_native_SOURCE_DIR}/build.rs")
+        # The patched rlib is a configure-time snapshot. Refresh it when its
+        # inputs change, including edits in a local dependency checkout.
+        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${WGPU_NATIVE_RUNTIME_INPUTS})
         set(wgpu_native_rlib_SOURCE_DIR "${CMAKE_BINARY_DIR}/_deps/wgpu_native-rlib-src" CACHE PATH "build-local wgpu-native source patched to expose rlib" FORCE)
         file(REMOVE_RECURSE "${wgpu_native_rlib_SOURCE_DIR}")
-        file(COPY "${wgpu_native_SOURCE_DIR}/" DESTINATION "${wgpu_native_rlib_SOURCE_DIR}")
+        file(COPY "${wgpu_native_SOURCE_DIR}/" DESTINATION "${wgpu_native_rlib_SOURCE_DIR}"
+            PATTERN ".git" EXCLUDE
+            PATTERN "target" EXCLUDE
+            PATTERN ".local-wgpu" EXCLUDE)
         file(READ "${wgpu_native_rlib_SOURCE_DIR}/Cargo.toml" _wgpu_native_cargo_toml)
         if(_wgpu_native_cargo_toml MATCHES "crate-type = \\[[^]]*\"rlib\"")
             # This wgpu-native already exposes an rlib; nothing to patch.

@@ -375,7 +375,6 @@ dependencies = [
  "log",
  "presser",
  "thiserror",
- "windows",
 ]
 
 [[package]]
@@ -851,12 +850,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "range-alloc"
-version = "0.1.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ca45419789ae5a7899559e9512e58ca889e41f04f1f2445e9f4b290ceccd1d08"
-
-[[package]]
 name = "raw-window-handle"
 version = "0.6.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1322,7 +1315,6 @@ dependencies = [
  "android_system_properties",
  "arrayvec",
  "ash",
- "bit-set",
  "bitflags",
  "block2",
  "bytemuck",
@@ -1341,13 +1333,11 @@ dependencies = [
  "objc2-foundation",
  "objc2-metal",
  "objc2-quartz-core",
- "once_cell",
  "ordered-float",
  "parking_lot",
  "portable-atomic",
  "portable-atomic-util",
  "profiling",
- "range-alloc",
  "raw-window-handle",
  "raw-window-metal",
  "renderdoc-sys",
@@ -1372,7 +1362,6 @@ dependencies = [
 [[package]]
 name = "wgpu-native"
 version = "0.0.0"
-source = "git+https://github.com/rebeckerspecialties/wgpu-native.git?rev=c8df6cb99795a4cab585355582ce53e8111c9c0d#c8df6cb99795a4cab585355582ce53e8111c9c0d"
 dependencies = [
  "bindgen",
  "bitflags",

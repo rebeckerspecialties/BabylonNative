@@ -314,7 +314,7 @@ if(BABYLON_NATIVE_WGPU_USE_UPSTREAM_NATIVE)
         endif()
         set(WGPU_NATIVE_CARGO_PATCH_CONFIG
             "--config"
-            "paths=[\"${wgpu_native_rlib_SOURCE_DIR}\"]")
+            "patch.\"https://github.com/rebeckerspecialties/wgpu-native.git\".wgpu-native.path=\"${wgpu_native_rlib_SOURCE_DIR}\"")
         set(WGPU_NATIVE_CARGO_FEATURES "--features" "wgpu-native-rlib")
     endif()
 endif()
@@ -360,6 +360,7 @@ if(BABYLON_NATIVE_MULTI_CONFIG)
             "${RUST_CRATE_DIR}/src/lib.rs"
             "${RUST_CRATE_DIR}/src/upstream_wgpu_native/compute.rs"
             "${BABYLON_NATIVE_REPO_ROOT}/Polyfills/CanvasWgpu/Rust/src/lib.rs"
+            ${WGPU_NATIVE_RUNTIME_INPUTS}
         COMMENT "Building Rust WebGPU backend (debug + release)"
         VERBATIM)
 else()
@@ -389,6 +390,7 @@ else()
             "${RUST_CRATE_DIR}/src/lib.rs"
             "${RUST_CRATE_DIR}/src/upstream_wgpu_native/compute.rs"
             "${BABYLON_NATIVE_REPO_ROOT}/Polyfills/CanvasWgpu/Rust/src/lib.rs"
+            ${WGPU_NATIVE_RUNTIME_INPUTS}
         COMMENT "Building Rust WebGPU backend"
         VERBATIM)
 endif()
