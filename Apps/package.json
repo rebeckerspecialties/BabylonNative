@@ -8,6 +8,7 @@
   "scripts": {
     "getNightly": "node scripts/getNightly.js",
     "downlevel:native-scripts": "node scripts/downlevelNativeScripts.mjs",
+    "postinstall": "node scripts/downlevelNativeScripts.mjs node_modules",
     "patch:babylonjs:check": "node scripts/applyBabylonJsPatchStack.js --check",
     "patch:babylonjs:apply": "node scripts/applyBabylonJsPatchStack.js --apply"
   },

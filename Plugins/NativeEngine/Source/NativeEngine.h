@@ -112,6 +112,7 @@ namespace Babylon
         void LoadCubeTextureWithMips(const Napi::CallbackInfo& info);
         Napi::Value GetTextureWidth(const Napi::CallbackInfo& info);
         Napi::Value GetTextureHeight(const Napi::CallbackInfo& info);
+        Napi::Value GetTextureLayerCount(const Napi::CallbackInfo& info);
         void SetTextureSampling(NativeDataStream::Reader& data);
         void SetTextureWrapMode(NativeDataStream::Reader& data);
         void SetTextureAnisotropicLevel(NativeDataStream::Reader& data);
@@ -126,6 +127,7 @@ namespace Babylon
         void DeleteFrameBuffer(NativeDataStream::Reader& data);
         void BindFrameBuffer(NativeDataStream::Reader& data);
         void UnbindFrameBuffer(NativeDataStream::Reader& data);
+        VertexBuffer::InstanceDataLayout GetInstanceDataLayout() const;
         void DrawIndexed(NativeDataStream::Reader& data);
         void DrawIndexedInstanced(NativeDataStream::Reader& data);
         void Draw(NativeDataStream::Reader& data);
@@ -147,7 +149,7 @@ namespace Babylon
         void PopulateFrameStats(const Napi::CallbackInfo& info);
         void BeginFrame(const Napi::CallbackInfo&);
         void EndFrame(const Napi::CallbackInfo&);
-        void DrawInternal(bgfx::Encoder* encoder, uint32_t fillMode);
+        void DrawInternal(bgfx::Encoder* encoder, uint32_t fillMode, const VertexBuffer::InstanceDataLayout& instanceDataLayout);
 
         bgfx::Encoder* GetEncoder();
         Graphics::FrameBuffer& GetBoundFrameBuffer();

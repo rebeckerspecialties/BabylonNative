@@ -50,19 +50,25 @@ set(UNITTEST_LIBRARIES
 if(TARGET NativeEngine)
     list(APPEND TEST_ASSETS
         "JavaScript/dist/tests.externalTexture.deviceLoss.js"
+        "JavaScript/dist/tests.externalTexture.layerCount.js"
         "JavaScript/dist/tests.externalTexture.msaa.js"
+        "JavaScript/dist/tests.externalTexture.render.js"
         "JavaScript/dist/tests.javaScript.all.js"
         "JavaScript/dist/tests.shaderCache.basicScene.js"
         "JavaScript/dist/tests.shaderCompilation.comprehensiveGLSL.js")
     list(APPEND SOURCES
         "Source/Tests.Device.FrameEncoder.cpp"
         "Source/Tests.ExternalTexture.cpp"
+        "Source/Tests.ExternalTexture.Lifecycle.cpp"
+        "Source/Tests.ExternalTexture.LayerCount.cpp"
         "Source/Tests.ExternalTexture.DeviceLoss.cpp"
         "Source/Tests.ExternalTexture.Msaa.cpp"
         "Source/Tests.ExternalTexture.Render.cpp"
         "Source/Tests.NativeEngine.Teardown.cpp"
+        "Source/Tests.NativeEngine.InstanceData.cpp"
         "Source/Tests.ShaderCache.cpp"
         "Source/Tests.ShaderCompilation.cpp"
+        "Source/Tests.ShaderCompilation.FragCoord.cpp"
         "Source/Tests.UniformPadding.cpp"
         "Source/Helpers.h"
         "Source/Helpers.${GRAPHICS_API}.${BABYLON_NATIVE_PLATFORM_IMPL_EXT}")
@@ -116,6 +122,7 @@ elseif(WIN32)
 endif()
 
 add_executable(UnitTests ${BABYLONJS_ASSETS} ${BABYLONJS_MATERIALS_ASSETS} ${TEST_ASSETS} ${TEST_SCRIPTS} ${SOURCES})
+target_include_directories(UnitTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../../Plugins/NativeEngine/Source")
 target_link_libraries(UnitTests
     PRIVATE ${UNITTEST_LIBRARIES}
     ${ADDITIONAL_LIBRARIES})
@@ -136,6 +143,10 @@ endif()
 
 if(GRAPHICS_API STREQUAL "D3D12")
     target_compile_definitions(UnitTests PRIVATE SKIP_RENDER_TESTS)
+endif()
+
+if(GRAPHICS_API STREQUAL "Vulkan")
+    target_compile_definitions(UnitTests PRIVATE BABYLON_NATIVE_GRAPHICS_API_VULKAN)
 endif()
 
 if(GRAPHICS_API STREQUAL "OpenGL")
