@@ -1,0 +1,595 @@
+{
+    "repository": "https://github.com/CedricGuillemet/BabylonNative",
+    "configRevision": "3263c363a4b86d56ce02a74ec140352bd3a8bced",
+    "referenceRevision": "abcfa98d35363303c51f1ffa5d371cb60dc524b3",
+    "configSha256": "cff1ab15b5964349b1c44c11de528825857674f9200335f7955f939e4fed2777",
+    "importedTests": 139,
+    "enabledForWebGPU": 80,
+    "references": [
+        {
+            "filename": "dawn-gsplat-splat-gltf.png",
+            "source": "Apps/Playground/ReferenceImages/gsplat-splat-gltf.png",
+            "sha256": "29dab880780405bb31bb91fb8437b8c83661b3162366a4fb3f39588912ef5972"
+        },
+        {
+            "filename": "dawn-gsplat-lod.png",
+            "source": "Apps/Playground/ReferenceImages/gsplat-lod.png",
+            "sha256": "e0e19c57a6cb2972b96abc15afa29d0177d61523693ad82fe63e872f1201e873"
+        },
+        {
+            "filename": "dawn-msaa-rtt-samples4-magnified.png",
+            "source": "Apps/Playground/ReferenceImages/msaa-rtt-samples4-magnified.png",
+            "sha256": "0920d6476eba87eccdb128a7bb04291c05e1d4ab79c6334bc7b09dd614ff03eb"
+        },
+        {
+            "filename": "dawn-gsplat-gpu-picking.png",
+            "source": "Apps/Playground/ReferenceImages/gsplat-gpu-picking.png",
+            "sha256": "5cd3d38fcff0b211b576435fe9c3c6f542bca80f3e62495a7cb2696f83bfd9b5"
+        },
+        {
+            "filename": "dawn-gsplat-spz-sh.png",
+            "source": "Apps/Playground/ReferenceImages/gsplat-spz-sh.png",
+            "sha256": "c918dc2b88428e4e33700627e529960c251715c4a9c7e020cfff779b7f6afb6a"
+        },
+        {
+            "filename": "dawn-gsplat-spz-extensions.png",
+            "source": "Apps/Playground/ReferenceImages/gsplat-spz-extensions.png",
+            "sha256": "2874851889a702a5576f3cd9bedda5fe68ee4115a238f39bbf244ee05c8e6b2d"
+        },
+        {
+            "filename": "dawn-gsplat-spz-v4-extensions.png",
+            "source": "Apps/Playground/ReferenceImages/gsplat-spz-v4-extensions.png",
+            "sha256": "0b948575e21c66f21f49722fc82ea1adc98627aac9a90f0ea9999b03f3da2c8b"
+        },
+        {
+            "filename": "dawn-gsplat-spz-sh-order-4.png",
+            "source": "Apps/Playground/ReferenceImages/gsplat-spz-sh-order-4.png",
+            "sha256": "787e8a0184b677e62cefbdd22da3fef78552bca5d8db1af553f1f03b9a01c255"
+        },
+        {
+            "filename": "dawn-gsplat-spz-detailed-splat.png",
+            "source": "Apps/Playground/ReferenceImages/gsplat-spz-detailed-splat.png",
+            "sha256": "576e918cb9c9039532524b630acec0ba3c5d62b9b958d5d126946c772e22575c"
+        },
+        {
+            "filename": "dawn-gsplat-ply-sh-order-4.png",
+            "source": "Apps/Playground/ReferenceImages/gsplat-ply-sh-order-4.png",
+            "sha256": "cd4221e5a94c1e451f1387c8961b8364af25701a83b08fbb00f80533672aaa7d"
+        },
+        {
+            "filename": "dawn-gsplat-debug-opacity-scale.png",
+            "source": "Apps/Playground/ReferenceImages/gsplat-debug-opacity-scale.png",
+            "sha256": "c507887ab79d4af217e544e71d71bf2d9414cbb1d479ded16ec641afced022ff"
+        },
+        {
+            "filename": "dawn-gsplat-debug-opacity-saturate.png",
+            "source": "Apps/Playground/ReferenceImages/gsplat-debug-opacity-saturate.png",
+            "sha256": "bb8360aecef8fe58263b7708813988c6d701d588d15248e9fa75cf88b327204f"
+        },
+        {
+            "filename": "dawn-gsplat-debug-size-culling.png",
+            "source": "Apps/Playground/ReferenceImages/gsplat-debug-size-culling.png",
+            "sha256": "08f5d88eaf595fea4b0f247540188c5768dd50a8ea5567df238d2570a13693c3"
+        },
+        {
+            "filename": "dawn-gsplat-debug-opacity-culling.png",
+            "source": "Apps/Playground/ReferenceImages/gsplat-debug-opacity-culling.png",
+            "sha256": "b58893fc47bf05bf6b2569a1860c809fe83d81c8de64146e860a1d8e69963ca4"
+        },
+        {
+            "filename": "dawn-gsplat-debug-clipping-box.png",
+            "source": "Apps/Playground/ReferenceImages/gsplat-debug-clipping-box.png",
+            "sha256": "f638f4fac45de4ec8b8baa96a6f968747aa72428ff4a5c0bcc4480f9751934f9"
+        },
+        {
+            "filename": "dawn-gsplat-debug-diffuse-only.png",
+            "source": "Apps/Playground/ReferenceImages/gsplat-debug-diffuse-only.png",
+            "sha256": "908b91d6dd4895a39c5075a695bf4870ee6975e64258296253cd9e9154bf4861"
+        },
+        {
+            "filename": "dawn-gsplat-debug-sh4-only.png",
+            "source": "Apps/Playground/ReferenceImages/gsplat-debug-sh4-only.png",
+            "sha256": "3b5a0572ec099b9b2c30ffd6d70ffe5f68f9495c83c0696f0ac5603636124757"
+        },
+        {
+            "filename": "dawn-gsplat-compound-incremental-update.png",
+            "source": "Apps/Playground/ReferenceImages/gsplat-compound-incremental-update.png",
+            "sha256": "fb28b37a350b4f176ee98c22e69f4e8d00026f0bcc554bd4e92b46ee8bb45834"
+        },
+        {
+            "filename": "dawn-gsplat-compound-no-sh-then-full-sh.png",
+            "source": "Apps/Playground/ReferenceImages/gsplat-compound-no-sh-then-full-sh.png",
+            "sha256": "fb28b37a350b4f176ee98c22e69f4e8d00026f0bcc554bd4e92b46ee8bb45834"
+        },
+        {
+            "filename": "dawn-gsplat-ibl-shadows.png",
+            "source": "Apps/Playground/ReferenceImages/gsplat-ibl-shadows.png",
+            "sha256": "dcd0dde4e38cb6c90442964746b8e17b120249576ed0f94d784e7b85d19c0b99"
+        },
+        {
+            "filename": "dawn-gsplat-ibl-shadows-camera-switch.png",
+            "source": "Apps/Playground/ReferenceImages/gsplat-ibl-shadows-camera-switch.png",
+            "sha256": "dcd0dde4e38cb6c90442964746b8e17b120249576ed0f94d784e7b85d19c0b99"
+        },
+        {
+            "filename": "dawn-gsplat-compound-ibl-shadows-single-part.png",
+            "source": "Apps/Playground/ReferenceImages/gsplat-compound-ibl-shadows-single-part.png",
+            "sha256": "ed8da06a8e309f89c9df77ec1a7994466e609b812d45616118aae0dc443060a4"
+        },
+        {
+            "filename": "dawn-gsplat-compound-ibl-shadows-multiple-parts.png",
+            "source": "Apps/Playground/ReferenceImages/gsplat-compound-ibl-shadows-multiple-parts.png",
+            "sha256": "95efc540de7245707c7b2b31e4bd9bffccc350428d20143722019e3f38e830e2"
+        },
+        {
+            "filename": "dawn-gsplat-compound-ibl-shadows-multiple-parts-mixed-visibility.png",
+            "source": "Apps/Playground/ReferenceImages/gsplat-compound-ibl-shadows-multiple-parts-mixed-visibility.png",
+            "sha256": "ccdae6c85c3f2bdc18e5346dd99affd004b885bc9fe12b8dd841b9ef9baeab1b"
+        },
+        {
+            "filename": "dawn-gsplat-sogs-sh-nolookup.png",
+            "source": "Apps/Playground/ReferenceImages/gsplat-sogs-sh-nolookup.png",
+            "sha256": "4ccb6e538661615f67abf15561bc61b0ec135976982bd8f532447b7ed06cd9de"
+        },
+        {
+            "filename": "dawn-gsplat-debug-part-test.png",
+            "source": "Apps/Playground/ReferenceImages/gsplat-debug-part-test.png",
+            "sha256": "a5dac301839af9814c91c83a2f5718c1fee54fb27c838134298275110940aebd"
+        },
+        {
+            "filename": "dawn-gsplat-debug-part-auto-tracking-test.png",
+            "source": "Apps/Playground/ReferenceImages/gsplat-debug-part-auto-tracking-test.png",
+            "sha256": "b2b9ce357557ab1406626be7665002aa8afff8bccfb195c078cc949e2b4c6b57"
+        },
+        {
+            "filename": "dawn-gsplat-part-test.png",
+            "source": "Apps/Playground/ReferenceImages/gsplat-part-test.png",
+            "sha256": "9281043f020921d2973f43e852aa979edd569146d1456c01a3ff557b680e3919"
+        },
+        {
+            "filename": "dawn-gsplat-loading-rh.png",
+            "source": "Apps/Playground/ReferenceImages/gsplat-loading-rh.png",
+            "sha256": "765ac06f91ce90b5dae3bbe007dcd00404279320c890d3f5583605979277e72f"
+        },
+        {
+            "filename": "dawn-needDepthPrePassMaterialPluginVariants.png",
+            "source": "Apps/Playground/ReferenceImages/needDepthPrePassMaterialPluginVariants.png",
+            "sha256": "bd0d964feff0729bfc914a5f72544af95ea4c5e259e396ceb3f6727a6a9b936b"
+        },
+        {
+            "filename": "dawn-needDepthPrePassExtendedMaterialFamilies.png",
+            "source": "Apps/Playground/ReferenceImages/needDepthPrePassExtendedMaterialFamilies.png",
+            "sha256": "4cc94c7923e93aff496418c4d7e56e56c14099ca62fcd524ccc8f8f65f98f585"
+        },
+        {
+            "filename": "dawn-gpuPickerDepthPointNormal.png",
+            "source": "Apps/Playground/ReferenceImages/gpuPickerDepthPointNormal.png",
+            "sha256": "7240b41455a6e85a35a4328b07e30a45526a53526c043a24b2732659fb99941c"
+        },
+        {
+            "filename": "dawn-procedural-textures-3d.png",
+            "source": "Apps/Playground/ReferenceImages/procedural-textures-3d.png",
+            "sha256": "e54e5675f5682ce5f2511899ae1613e051b644c5c402bd517bc995e7c814c67a"
+        },
+        {
+            "filename": "dawn-iridescence-nme.png",
+            "source": "Apps/Playground/ReferenceImages/iridescence-nme.png",
+            "sha256": "875fd9504580e22d7b7bf629bf6b3b68e29ace59f001885ddb52a509133db9d7"
+        },
+        {
+            "filename": "dawn-sprite-maps.png",
+            "source": "Apps/Playground/ReferenceImages/sprite-maps.png",
+            "sha256": "3f8662deb4425bbba5faabcc5662b6e1ef26e5b80a188735770115b287a85c72"
+        },
+        {
+            "filename": "dawn-point-light-shadows.png",
+            "source": "Apps/Playground/ReferenceImages/point-light-shadows.png",
+            "sha256": "7a567de603f7535723eff9bf0a41b480590877cca684ce48869b4010fb9f7b64"
+        },
+        {
+            "filename": "dawn-Sliders.png",
+            "source": "Apps/Playground/ReferenceImages/Sliders.png",
+            "sha256": "7659c88588603220fb5a3401bedef355e41d2ee5856a18edfb82f41cca068165"
+        },
+        {
+            "filename": "dawn-pointers.png",
+            "source": "Apps/Playground/ReferenceImages/pointers.png",
+            "sha256": "5e592664a1206bdcbe6157307f209bfb12d91eff836e8a6d3be6879635553bb9"
+        },
+        {
+            "filename": "dawn-Sponza.png",
+            "source": "Apps/Playground/ReferenceImages/Sponza.png",
+            "sha256": "574bff1bbd15cbbadfcbfaa2b8d4cd1e9ffd4c736bc1a382b444d470bc2a0baa"
+        },
+        {
+            "filename": "dawn-WCafe.png",
+            "source": "Apps/Playground/ReferenceImages/WCafe.png",
+            "sha256": "211125c54e6cd69d21a8d0fc4ab324cde7383af0d7a68859f69eba63b92e4988"
+        },
+        {
+            "filename": "dawn-Espilit.png",
+            "source": "Apps/Playground/ReferenceImages/Espilit.png",
+            "sha256": "acb2a1d3b3f15a87bec94a1a30170b2779ac3070538f4d960dfa7834f1f9e842"
+        },
+        {
+            "filename": "dawn-TheCar.png",
+            "source": "Apps/Playground/ReferenceImages/TheCar.png",
+            "sha256": "2468b6c284b95f84fda21b84564683b1a02fb304637eab03d1fc8558b14e245b"
+        },
+        {
+            "filename": "dawn-Viper.png",
+            "source": "Apps/Playground/ReferenceImages/Viper.png",
+            "sha256": "32809955940b444df3cd98d9891f37a21862fd451ef74bfc7824b5c322bbe8e2"
+        },
+        {
+            "filename": "dawn-retail.png",
+            "source": "Apps/Playground/ReferenceImages/retail.png",
+            "sha256": "cbc6de7e2127318b69a6f705c767d4c3330b1048468b1e681e1b22a044186ab7"
+        },
+        {
+            "filename": "dawn-Hillvalley.png",
+            "source": "Apps/Playground/ReferenceImages/Hillvalley.png",
+            "sha256": "6381f5acd4991c65d7ed89c4f63eefccb06ecea1df5ea3eefcb3078a2561b63c"
+        },
+        {
+            "filename": "dawn-Heart.png",
+            "source": "Apps/Playground/ReferenceImages/Heart.png",
+            "sha256": "10fc36f53ac7af5f3eed5df75c9c208af4a472bab29d0c8659f27751bc1fd8e5"
+        },
+        {
+            "filename": "dawn-mansion.png",
+            "source": "Apps/Playground/ReferenceImages/mansion.png",
+            "sha256": "796d90d848696250bf96c24fed5438484a598dfc0331009d38574144b1e4e840"
+        },
+        {
+            "filename": "dawn-SpaceDeK.png",
+            "source": "Apps/Playground/ReferenceImages/SpaceDeK.png",
+            "sha256": "4bf9d301841c075e5292782da7f2800a9232e442683ef97cf8e62c50645a57d9"
+        },
+        {
+            "filename": "dawn-Flat2009.png",
+            "source": "Apps/Playground/ReferenceImages/Flat2009.png",
+            "sha256": "2cf28342aa67111d69ccbe501109020714065293b550db5781183446e4313d31"
+        },
+        {
+            "filename": "dawn-charting.png",
+            "source": "Apps/Playground/ReferenceImages/charting.png",
+            "sha256": "bf3ccc26d4d3815a6c05fbe01f73ba25100d08f7d62db3d894e8653def8d0db0"
+        },
+        {
+            "filename": "dawn-fog.png",
+            "source": "Apps/Playground/ReferenceImages/fog.png",
+            "sha256": "19f42377f809517e0d934d48c34584ae006b48e8afdadfc96447dc26632d8eea"
+        },
+        {
+            "filename": "dawn-polygon.png",
+            "source": "Apps/Playground/ReferenceImages/polygon.png",
+            "sha256": "15f41d6a45d836686d4337890bbe5a1fe806d3cc393676472befc7936d983561"
+        },
+        {
+            "filename": "dawn-lines.png",
+            "source": "Apps/Playground/ReferenceImages/lines.png",
+            "sha256": "514e322134b28e43c9112647f7b606f2d4908f7bace79440f99a6fe0aa0206ff"
+        },
+        {
+            "filename": "dawn-lens.png",
+            "source": "Apps/Playground/ReferenceImages/lens.png",
+            "sha256": "175674b1bebdd252fb6035d84d7952a613a199ca020352ec779bdf674dd19c11"
+        },
+        {
+            "filename": "dawn-selfShadowing.png",
+            "source": "Apps/Playground/ReferenceImages/selfShadowing.png",
+            "sha256": "4a85a1bbc309b6339a6e3bd4dfbc593f659afe07ca407c0f79310e0e2d43f48f"
+        },
+        {
+            "filename": "dawn-refprobe.png",
+            "source": "Apps/Playground/ReferenceImages/refprobe.png",
+            "sha256": "c0b4efcb7c3535d2b6e7b140749199978b44c238a5459e34720222c6f74cf364"
+        },
+        {
+            "filename": "dawn-GUI.png",
+            "source": "Apps/Playground/ReferenceImages/GUI.png",
+            "sha256": "2af532a90ffe1cde3df6a8fc24c1620cb5191ed21210e62770fbbe636f7fffce"
+        },
+        {
+            "filename": "dawn-procedural.png",
+            "source": "Apps/Playground/ReferenceImages/procedural.png",
+            "sha256": "482157a4298be67b64746361dce22f8efd15388d23acef080de4b4a37ffb4de8"
+        },
+        {
+            "filename": "dawn-ssao2.png",
+            "source": "Apps/Playground/ReferenceImages/ssao2.png",
+            "sha256": "59291868bb627fa81604ec0222f50c6264afef6a4df062ebde16245fb2b22a8a"
+        },
+        {
+            "filename": "dawn-objEmptyNormal.png",
+            "source": "Apps/Playground/ReferenceImages/objEmptyNormal.png",
+            "sha256": "d667135bf77da0fb0b002ac5800362ae8f7831b6a471796177c8f1ff730de1d5"
+        },
+        {
+            "filename": "dawn-ktx2decoder.png",
+            "source": "Apps/Playground/ReferenceImages/ktx2decoder.png",
+            "sha256": "d5017253024c8cf5eabe7a3bbb6447a2ad0b656dbd7b1d0dd8f3c95b9bc3d2a5"
+        },
+        {
+            "filename": "dawn-ssr.png",
+            "source": "Apps/Playground/ReferenceImages/ssr.png",
+            "sha256": "f5b80bb3f8c652fb15f4b869415b3ca2eb75cfd97778134b7eee6069bf224d8a"
+        },
+        {
+            "filename": "dawn-geometrybufferrenderer.png",
+            "source": "Apps/Playground/ReferenceImages/geometrybufferrenderer.png",
+            "sha256": "b6a07264f64dfad7d8c2662f1c9f1376ce178e4a60444421ff82e850aeeef4d4"
+        },
+        {
+            "filename": "dawn-gpuparticle-basic.png",
+            "source": "Apps/Playground/ReferenceImages/gpuparticle-basic.png",
+            "sha256": "531e5675c61303d822c21e714d4fee65303e1ef9c83b3ca1208399ebe4a338ef"
+        },
+        {
+            "filename": "dawn-allProcTextures.png",
+            "source": "Apps/Playground/ReferenceImages/allProcTextures.png",
+            "sha256": "270ed78b01560fab3a96cd65f63478498fe678b6378c2b7976015c5f8ebf84da"
+        },
+        {
+            "filename": "dawn-grid-material.png",
+            "source": "Apps/Playground/ReferenceImages/grid-material.png",
+            "sha256": "5eb5f600a88246cb7373059ac500ec9df273c33ab07215cebb0f464067c286c4"
+        },
+        {
+            "filename": "dawn-multi-scale-grid-material.png",
+            "source": "Apps/Playground/ReferenceImages/multi-scale-grid-material.png",
+            "sha256": "935d661531eecc205ee9f53d96549f518d364bab5ba81c24ee10e8b59498c5d0"
+        },
+        {
+            "filename": "dawn-selectionOutlineInstanceLOD.png",
+            "source": "Apps/Playground/ReferenceImages/selectionOutlineInstanceLOD.png",
+            "sha256": "960063c4e9143c476a6923d017ff45a7efe2f03aa1908e5eb2597b2ffe5aedc8"
+        },
+        {
+            "filename": "dawn-gpu-particles-change-color-gradient-with-color2.png",
+            "source": "Apps/Playground/ReferenceImages/gpu-particles-change-color-gradient-with-color2.png",
+            "sha256": "be2a4cf330d2c56ce005b8695daf3a1ced37e3d82d23a6deb7226af2d3a5f7be"
+        },
+        {
+            "filename": "dawn-gpu-particles-change-speed-range.png",
+            "source": "Apps/Playground/ReferenceImages/gpu-particles-change-speed-range.png",
+            "sha256": "d8eecfa0cc03bd07392ae10625d0ee7bd3e511d4687de0a41de960aded0ad3ca"
+        },
+        {
+            "filename": "dawn-gpu-particles-change-speed-limit-range.png",
+            "source": "Apps/Playground/ReferenceImages/gpu-particles-change-speed-limit-range.png",
+            "sha256": "4dfbabd83211eaaab9995fc6de4ba8c12713faa61c541138394814b770713553"
+        },
+        {
+            "filename": "dawn-gpu-particles-change-angular-speed-range.png",
+            "source": "Apps/Playground/ReferenceImages/gpu-particles-change-angular-speed-range.png",
+            "sha256": "6d5687ada9a5bd7f2d93ed883ef818bd4e88ceed0d236d864546df9d10efa677"
+        },
+        {
+            "filename": "dawn-gpu-particles-change-drag-range.png",
+            "source": "Apps/Playground/ReferenceImages/gpu-particles-change-drag-range.png",
+            "sha256": "74f77e0b4a78a0fae242758af6aecddf36b7c9ac4871da097b86b785f87d2ce4"
+        },
+        {
+            "filename": "dawn-gpu-particles-change-emit-rate-gradient.png",
+            "source": "Apps/Playground/ReferenceImages/gpu-particles-change-emit-rate-gradient.png",
+            "sha256": "807e7958ea821a60c09f64a754cdbe032cef16ab994d78596a7bd6696638c95d"
+        },
+        {
+            "filename": "dawn-gpu-particles-change-emit-rate-gradient-2.png",
+            "source": "Apps/Playground/ReferenceImages/gpu-particles-change-emit-rate-gradient-2.png",
+            "sha256": "c43f02bd42306477afbebc53cf760e6bd03bd791ae32106ba4c1f4852655d754"
+        },
+        {
+            "filename": "dawn-gpu-particles-change-emit-rate-gradient-range.png",
+            "source": "Apps/Playground/ReferenceImages/gpu-particles-change-emit-rate-gradient-range.png",
+            "sha256": "6810d959c1b9fbffa9ff093ca62efdd264610e2c940bcc83eddd9783a0a8ade4"
+        },
+        {
+            "filename": "dawn-gpu-particles-change-start-size-gradient.png",
+            "source": "Apps/Playground/ReferenceImages/gpu-particles-change-start-size-gradient.png",
+            "sha256": "6391e89b25beec34755820237480363c7dc75714c4b1b6af72020fb534dc9c2c"
+        },
+        {
+            "filename": "dawn-gpu-particles-change-start-size-gradient-range.png",
+            "source": "Apps/Playground/ReferenceImages/gpu-particles-change-start-size-gradient-range.png",
+            "sha256": "c65bfd409041ef2270fe19463c4df73409a03c0a9649da7a99c0dd14939f292a"
+        },
+        {
+            "filename": "dawn-gpu-particles-change-lifetime-gradient.png",
+            "source": "Apps/Playground/ReferenceImages/gpu-particles-change-lifetime-gradient.png",
+            "sha256": "de404e1891705c589b7c2dae999e3d258cdd3c37be7042cd816ec173a35fcb07"
+        },
+        {
+            "filename": "dawn-gpu-particles-change-lifetime-gradient-2.png",
+            "source": "Apps/Playground/ReferenceImages/gpu-particles-change-lifetime-gradient-2.png",
+            "sha256": "50638db1ec9e329b7f8ccb09d21f1da2ee36c95ce75827ae404054286039d4df"
+        },
+        {
+            "filename": "dawn-gpu-particles-change-lifetime-gradient-range.png",
+            "source": "Apps/Playground/ReferenceImages/gpu-particles-change-lifetime-gradient-range.png",
+            "sha256": "5d9d9b3b6da0871566c06de16648a4e04eae509a2d76c7c8ef5bba7b00fb97b4"
+        },
+        {
+            "filename": "dawn-gpu-particles-emitters-mesh.png",
+            "source": "Apps/Playground/ReferenceImages/gpu-particles-emitters-mesh.png",
+            "sha256": "bc2918ae3c43d984d79c03479f7d11c66b6e9f495ddc8099e1a3724f465ecbdb"
+        },
+        {
+            "filename": "dawn-gpu-particles-billboard-stretched-local.png",
+            "source": "Apps/Playground/ReferenceImages/gpu-particles-billboard-stretched-local.png",
+            "sha256": "512e5e484041a7ce72001ac4c63cc8d01f40f41eb7ca0e8a94bae5eb6656c6b5"
+        },
+        {
+            "filename": "dawn-gpu-particles-attractors-single.png",
+            "source": "Apps/Playground/ReferenceImages/gpu-particles-attractors-single.png",
+            "sha256": "2fa6ed79c147075c9e606d74e81c10c4fb208b763ab92d38a5c427ecda5fdfbd"
+        },
+        {
+            "filename": "dawn-gpu-particles-attractors-multiple.png",
+            "source": "Apps/Playground/ReferenceImages/gpu-particles-attractors-multiple.png",
+            "sha256": "579badeeab12525012c042d513ebd85d1bbeb65bedbc1d75e0de852c84ded8e6"
+        },
+        {
+            "filename": "dawn-gpu-particles-attractors-ring.png",
+            "source": "Apps/Playground/ReferenceImages/gpu-particles-attractors-ring.png",
+            "sha256": "b3ce6d8297646b4c7ca69ae06113df810f4e48999281eb265c02a94dbe8a419d"
+        },
+        {
+            "filename": "dawn-gpu-particles-attractors-local.png",
+            "source": "Apps/Playground/ReferenceImages/gpu-particles-attractors-local.png",
+            "sha256": "2f4dfa7ae2727f21239c2264114f7858950307f16991906a04eedbd33edab2f1"
+        },
+        {
+            "filename": "dawn-gpu-particles-from-particle-system.png",
+            "source": "Apps/Playground/ReferenceImages/gpu-particles-from-particle-system.png",
+            "sha256": "83c1b663a9bb6a438695b3425414fc6e7918d451eb2cff96db1b967895de7927"
+        },
+        {
+            "filename": "dawn-gpu-particles-from-particle-system-flow-map.png",
+            "source": "Apps/Playground/ReferenceImages/gpu-particles-from-particle-system-flow-map.png",
+            "sha256": "2e538bfe18f502869ed47ac99984069c1f52c02ac3aaa5444045b58e51ec9df2"
+        },
+        {
+            "filename": "dawn-arc-legacy-inertia-comparison.png",
+            "source": "Apps/Playground/ReferenceImages/arc-legacy-inertia-comparison.png",
+            "sha256": "cfaec16ec2d8bee692204b7661bd206165b8a1ed3c324a5f6d6a7cf28e2ee149"
+        },
+        {
+            "filename": "dawn-arc-legacy-panning-inertia.png",
+            "source": "Apps/Playground/ReferenceImages/arc-legacy-panning-inertia.png",
+            "sha256": "345e0074e97e0bdbd68a4342945c917380c4a8d2f9f0f3bfd1d82eacbd12737a"
+        },
+        {
+            "filename": "dawn-arc-legacy-radius-glide.png",
+            "source": "Apps/Playground/ReferenceImages/arc-legacy-radius-glide.png",
+            "sha256": "dc3bdb1d727dcb673120e5304f6dc44843b2604fd145c7571fbc2e21258367cb"
+        },
+        {
+            "filename": "dawn-arc-legacy-beta-limits.png",
+            "source": "Apps/Playground/ReferenceImages/arc-legacy-beta-limits.png",
+            "sha256": "ca5be0cbe7f2faaedda7b6802bb24e9922dedbd5ecf8189c225a203e15bd18fb"
+        },
+        {
+            "filename": "dawn-arc-legacy-radius-limits.png",
+            "source": "Apps/Playground/ReferenceImages/arc-legacy-radius-limits.png",
+            "sha256": "d062655f5f0bd8861d5bdfee1126c9f2fcd08815033f72ed7943dc6ded180641"
+        },
+        {
+            "filename": "dawn-arc-legacy-combined-glide.png",
+            "source": "Apps/Playground/ReferenceImages/arc-legacy-combined-glide.png",
+            "sha256": "ed896a47104a06ab7ae8202c0955f22c72305e44e34fd44d15cd1ce9f28c60fd"
+        },
+        {
+            "filename": "dawn-texture-repetition-openpbr-material.png",
+            "source": "Apps/Playground/ReferenceImages/texture-repetition-openpbr-material.png",
+            "sha256": "1b5ac26fdaaad9d31af8fa72510c4be11cbb49f0a1f292cb04d9558d722eeb8a"
+        },
+        {
+            "filename": "dawn-fbx-m01-cube-phong.png",
+            "source": "Apps/Playground/ReferenceImages/fbx-m01-cube-phong.png",
+            "sha256": "0d84b46d5c6f16d3b594dbccc3fc060fb65b04e39ec1696282d0c35202bc2a56"
+        },
+        {
+            "filename": "dawn-fbx-m02-ngons.png",
+            "source": "Apps/Playground/ReferenceImages/fbx-m02-ngons.png",
+            "sha256": "53f585dc489ee13250a0d617a78a72367a0aa9be614090ab8ae6e24c3427e5ad"
+        },
+        {
+            "filename": "dawn-fbx-m03-normals.png",
+            "source": "Apps/Playground/ReferenceImages/fbx-m03-normals.png",
+            "sha256": "b7cdd8c02c9e54b27b0762430c7cf89cbcc839a99b5db48f3eae6b968b12b5ae"
+        },
+        {
+            "filename": "dawn-fbx-m04-materials.png",
+            "source": "Apps/Playground/ReferenceImages/fbx-m04-materials.png",
+            "sha256": "20a2d873169283d89f99c36c0332218b21486ad6d71cb519c72421e151c010fa"
+        },
+        {
+            "filename": "dawn-fbx-m05-textures.png",
+            "source": "Apps/Playground/ReferenceImages/fbx-m05-textures.png",
+            "sha256": "e7d5a4fb321159fa652a9fb2f769f5051d7086906a8c52a79583c85e643b7c36"
+        },
+        {
+            "filename": "dawn-fbx-m06-uv-transform.png",
+            "source": "Apps/Playground/ReferenceImages/fbx-m06-uv-transform.png",
+            "sha256": "68c23690f9081cca9ce66e8d04242742eed377d511ff54e0e52e0ffee8999f18"
+        },
+        {
+            "filename": "dawn-fbx-m07-multimaterial.png",
+            "source": "Apps/Playground/ReferenceImages/fbx-m07-multimaterial.png",
+            "sha256": "b2d607aa36765e5c8e9b2199f599ff1b87af9b23d81e13c4de56d87cc419b2eb"
+        },
+        {
+            "filename": "dawn-fbx-m08-transforms.png",
+            "source": "Apps/Playground/ReferenceImages/fbx-m08-transforms.png",
+            "sha256": "90c1496074540bc82ceb2aff828651c35fe22792a7b754d6ac7616ff1c51aee6"
+        },
+        {
+            "filename": "dawn-fbx-m09-skinning.png",
+            "source": "Apps/Playground/ReferenceImages/fbx-m09-skinning.png",
+            "sha256": "d5b266f9b015d5feaadba8882375cb9388e36116c00e125a83ad2b27df9adbdd"
+        },
+        {
+            "filename": "dawn-fbx-m10-morph.png",
+            "source": "Apps/Playground/ReferenceImages/fbx-m10-morph.png",
+            "sha256": "9ba56f4fd01001862073a2e5dc6ba8a208bfc33b786cf576fc13b2f3e1aa5b80"
+        },
+        {
+            "filename": "dawn-fbx-m11-node-anim.png",
+            "source": "Apps/Playground/ReferenceImages/fbx-m11-node-anim.png",
+            "sha256": "2debc2dcf9db02173d8af256a3a94da0add67239336a90b14acdbdca49e91077"
+        },
+        {
+            "filename": "dawn-fbx-m12-skeletal-anim.png",
+            "source": "Apps/Playground/ReferenceImages/fbx-m12-skeletal-anim.png",
+            "sha256": "6e1d491938343417b453bd06962c1885cd6dd5f2b47011936775fc827ed31f59"
+        },
+        {
+            "filename": "dawn-fbx-m13-morph-anim.png",
+            "source": "Apps/Playground/ReferenceImages/fbx-m13-morph-anim.png",
+            "sha256": "9da2c2fdd4190027ddcca55ca18136002e7940de3f216cbe7745830cfbaa561e"
+        },
+        {
+            "filename": "dawn-fbx-m14-multiclip.png",
+            "source": "Apps/Playground/ReferenceImages/fbx-m14-multiclip.png",
+            "sha256": "97df331246326acf0899a870b96f895ef77935205f849a02276efcf4b7835f5f"
+        },
+        {
+            "filename": "dawn-fbx-m15-camera-lights.png",
+            "source": "Apps/Playground/ReferenceImages/fbx-m15-camera-lights.png",
+            "sha256": "692973d021caa035a3b58378e1371d8394ca652dfb67e9609ee3dcd1c70ee55b"
+        },
+        {
+            "filename": "dawn-fbx-m16-axis-yup.png",
+            "source": "Apps/Playground/ReferenceImages/fbx-m16-axis-yup.png",
+            "sha256": "799c57020cb20b313d0501967a67c0a09e68156d5755650c111690bb4d4b3867"
+        },
+        {
+            "filename": "dawn-fbx-m16-axis-zup.png",
+            "source": "Apps/Playground/ReferenceImages/fbx-m16-axis-zup.png",
+            "sha256": "799c57020cb20b313d0501967a67c0a09e68156d5755650c111690bb4d4b3867"
+        },
+        {
+            "filename": "dawn-fbx-m16-units.png",
+            "source": "Apps/Playground/ReferenceImages/fbx-m16-units.png",
+            "sha256": "799c57020cb20b313d0501967a67c0a09e68156d5755650c111690bb4d4b3867"
+        },
+        {
+            "filename": "dawn-csg2-righthanded-gltf-winding.png",
+            "source": "Apps/Playground/ReferenceImages/csg2-righthanded-gltf-winding.png",
+            "sha256": "a365620d241bfcd4ce59a8cb9258b2091b858a465f51fc57f89a92cdf57d5e13"
+        },
+        {
+            "filename": "dawn-freecamera-framerate-independent-movement.png",
+            "source": "Apps/Playground/ReferenceImages/freecamera-framerate-independent-movement.png",
+            "sha256": "4c233d55180c11885629bd91a0bc2a966423f9da9f07ca4af7faaa7f89606d67"
+        },
+        {
+            "filename": "dawn-flycamera-framerate-independent-movement.png",
+            "source": "Apps/Playground/ReferenceImages/flycamera-framerate-independent-movement.png",
+            "sha256": "86ed5e5209adb8f34bb800d3430eb7b2b2817316e2bab29c2f91ffeb166b01a8"
+        }
+    ]
+}

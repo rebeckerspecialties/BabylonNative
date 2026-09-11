@@ -30,6 +30,7 @@ set(SCRIPTS
     "Scripts/playground_runner.js"
     "Scripts/validation_native.js"
     "Scripts/validation_webgpu_native.js"
+    "Scripts/validation_dawn_webgpu.js"
     "Scripts/native_xr_babylon_portal_demo.js"
     "Scripts/native_xr_portal_fallback_command_stream_validation.js"
     "Scripts/native_xr_portal_fallback_validation.js"
@@ -41,6 +42,8 @@ set(SCRIPTS
     "Scripts/webgpu_smoke.js"
     "Scripts/RobotoSlab.ttf"
     "Scripts/config.json"
+    "Scripts/config.dawn-webgpu.json"
+    "Scripts/config.dawn-webgpu.provenance.json"
     ${NATIVE_XR_PORTAL_ASSETS})
 
 set(SOURCES

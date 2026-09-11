@@ -417,8 +417,9 @@
         if (t.excludeFromAutomaticTesting && !includeInNativeWebGPU) {
             return "excludeFromAutomaticTesting" + (t.reason ? ": " + t.reason : "");
         }
-        if (t.excludedGraphicsApis && t.excludedGraphicsApis.includes(TestUtils.getGraphicsApiName())) {
-            return "excludedGraphicsApis: " + TestUtils.getGraphicsApiName();
+        const validationApi = isNativeWebGPU ? "WebGPU" : TestUtils.getGraphicsApiName();
+        if (t.excludedGraphicsApis && t.excludedGraphicsApis.includes(validationApi)) {
+            return "excludedGraphicsApis: " + validationApi;
         }
         return null;
     }
@@ -3244,7 +3245,7 @@ fragmentOutputs.color=color;
     }
 
     const xhr = new XMLHttpRequest();
-    xhr.open("GET", "app:///Scripts/config.json", true);
+    xhr.open("GET", globalThis.__babylonNativeValidationConfigUrl || "app:///Scripts/config.json", true);
 
     xhr.addEventListener("readystatechange", function () {
         if (xhr.status === 200) {
