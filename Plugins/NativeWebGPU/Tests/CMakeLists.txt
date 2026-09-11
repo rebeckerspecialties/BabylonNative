@@ -11,6 +11,12 @@ set(SOURCES
     "Source/Tests.AsyncBridge.cpp")
 
 add_executable(NativeWebGPUAsyncTests ${SOURCES})
+if(BABYLON_NATIVE_WGPU_NATIVE_RLIB)
+    target_sources(NativeWebGPUAsyncTests PRIVATE "Source/Tests.NativeCAPI.cpp")
+    target_include_directories(NativeWebGPUAsyncTests PRIVATE
+        "${wgpu_native_SOURCE_DIR}/ffi"
+        "${webgpu_headers_SOURCE_DIR}")
+endif()
 set_property(TARGET NativeWebGPUAsyncTests PROPERTY UNITY_BUILD false)
 warnings_as_errors(NativeWebGPUAsyncTests)
 target_include_directories(NativeWebGPUAsyncTests
