@@ -25,7 +25,55 @@ When Babylon.js source changes are needed for WebGPU correctness:
 
 Those bundle files are local validation inputs and may be ignored by git; the durable fixes should live in the Babylon.js branch/PR.
 
-## Current Screenshot Test State
+## Isolated PR Stack Integration (September 2026)
+
+This checkout is the isolated `integration/wgpu-native-parity` branch under
+`/Users/matt/src/BabylonNative/build_wgpu_pr_stack/BabylonNative`, not the
+canonical `wgpu` checkout. Continue this PR-stack task here. The canonical
+checkout has concurrent Android/OpenXR changes; do not overwrite them.
+The sibling `README.md`, `verify-stack.mjs`, and `validate-m4.mjs` record the
+runtime-first/test-second branches, attribution, current upstream pins, and
+validation commands. Those sibling repositories are durable work, not build
+artifacts to clean away.
+
+The local M4 Max exposes Metal and runs real WebGPU workloads with full
+execution access. A missing-adapter result in a restricted process does not
+establish a hardware limitation. Keep GPU screenshots, direct C API behavior,
+CPU checks, and physical-device/performance evidence separate.
+
+Use titles when selecting native tests: upstream catalog merges changed
+indices. At this integration revision GUI Slate is 177, GUI Near Menu 178,
+PBR refraction 250, local refraction STD/PBR 315/316, MeshDebugPluginMaterial
+378, and texture repetition STD/PBR 606/607. The imported Dawn catalog has
+its own indices. The older baseline below does not describe this integration:
+GUI Slate now matches pixel-for-pixel and PBR texture repetition passes its
+unchanged 1% threshold. See `Apps/Playground/Scripts/DAWN_VALIDATION.md` for
+current evidence and exact revision boundaries.
+
+Validation harness lessons:
+
+- Pair every WebGPU readiness render with `beginFrame`/`endFrame`, including
+  exception cleanup. Omitting submission boundaries caused real device loss.
+- `ignoreAnimations` does not suppress render observers or GPU particles.
+  Keep the explicit no-pump policy for state-sensitive fixtures; do not add
+  frames or relax image thresholds to compensate for asset-load timing.
+- Keep one validation-owned readiness deadline. Babylon's internal timer can
+  already be running when scene loading completes; shortening it can silently
+  remove ready callbacks before the validation deadline.
+- Never assign pending scene promises to `currentScene`. Dispose late results
+  and check both test identity and run lifetime, including repeated tests.
+- Run the eight focused Node tests documented in `DAWN_VALIDATION.md` when
+  editing readiness or scene-lifetime handling.
+- Large exact-byte assets may need a recorded SHA-256-verified local URL cache
+  to fit the 30-second load deadline. The suite is not fully offline.
+- Keep the lid open during GPU tests. Idle-sleep assertions do not prevent
+  clamshell sleep; retain such interrupted attempts separately from results.
+
+No new Babylon.js source experiment was needed for these integration fixes.
+Do not create replacement upstream PRs before integration acceptance, and
+preserve author/email/date plus source-commit provenance when reshaping tests.
+
+## Earlier Screenshot Baseline
 
 - GUI3D now compiles through real Babylon.js WGSL paths, not the old validation shim:
   - `26` GUI3D SpherePanel

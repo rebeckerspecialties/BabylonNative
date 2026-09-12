@@ -15,9 +15,9 @@ Source: CedricGuillemet/BabylonNative `nativeDawn`, commit
 The source catalog and reference image bytes come directly from that fetched
 revision. Per-image SHA-256 values are recorded in
 `config.dawn-webgpu.provenance.json`. No generated renderer output was used as
-a reference. GPU particle additions disable native readiness renders, matching
-the source harness: even rendering with animations disabled advances GPU
-particles and changes the simulation state before the requested capture frame.
+a reference. GPU particle additions and SpaceDeK disable native readiness
+renders, matching the source harness: even rendering with animations disabled
+advances particles and changes simulation state before the requested frame.
 
 Run the catalog with both scripts, in this order:
 
@@ -30,23 +30,63 @@ this catalog differ from the primary catalog. These upstream tests still
 fetch scene scripts and assets; packaging the reference images does not make
 the suite network-independent.
 
-The full-access M4 Max run on macOS 27 successfully acquires Metal and runs
-Playground, the JavaScript unit suite, and all 15 native async/C API tests.
-The first imported catalog sweep accepted 74 of 80 tests. Focused follow-ups
-accepted the remaining six without relaxing thresholds: three particle tests
-with readiness rendering disabled, Mansion and Geometry buffer renderer on
-rerun, and Gaussian Splatting PLY SH Order 4 with the identical asset cached.
-Those follow-ups do not replace a clean final-revision sweep.
+## M4 validation and harness fixes
+
+The full-access M4 Max run on macOS 27.0 (26A428), Xcode 27.0 (27A266a)
+successfully acquires Metal. The build uses Debug, JavaScriptCore, and
+Babylon.js 9.22.1; these are correctness results, not performance evidence.
+All 15 native async/direct C API tests and the five JavaScript unit tests pass.
+
+The final complete sweep at integration code commit `551b76ed` accepted
+80/80 eligible Dawn additions and 10/10 native smoke cases with no threshold
+relaxation, regenerated references, device-loss markers, or render panics.
+It is recorded under
+`build_wgpu_pr_stack/m4-validation/2026-09-12T01-27-05.931Z/` in the canonical
+workspace, including source/binary/bundle hashes and all 90 result images.
+The runtime head is `4032856` and the dependent test head is `61432ec`.
+Subsequent documentation-only changes do not alter this tested code.
+
+The preceding sweep at `da6b12cb` accepted 80/80 Dawn additions and 9/10 native
+cases. Its Simple refraction failure was traced to readiness renders advancing
+the snippet's `registerBeforeRender` rotation callback. Commit `551b76ed`
+disables the pump for that fixture; the final image is pixel-exact.
+
+Earlier failed sweeps and diagnostic logs remain in that workspace. Three
+harness defects found during this validation are now covered by tests:
+
+- Readiness renders must call WebGPU `beginFrame` and `endFrame`. Otherwise
+  reflection-probe passes and uploads accumulate until the first validation
+  submit, causing Metal device loss. Unexpected device loss now logs at its
+  origin, and the driver rejects such a run even if it reports a screenshot.
+- The validation harness owns the readiness deadline. Changing Babylon's
+  already-running readiness timeout to 30 seconds could clear its callbacks
+  early; the harness now disables that competing timer while retaining its
+  own unchanged 30-second limit.
+- Pending scene promises stay separate from the active scene. Late results
+  are disposed instead of replacing a subsequent test, including repeated
+  runs of the same entry. Failure cleanup never calls `dispose` on a promise.
+
+Run all eight focused regressions from the repository root:
+
+```sh
+node --test Apps/scripts/testReadinessFrameBoundaries.mjs Apps/scripts/testValidationSceneLifetime.mjs
+```
+
+These fixes require no Babylon.js source patch. Animation-ignore flags do not
+suppress render observers or particles, so state-sensitive fixtures must
+explicitly opt out of readiness rendering. Do not globally disable the pump:
+some material paths need renders to finish effect preparation.
 
 The 24 MB splat PLY took 82 seconds to download, beyond the 30-second scene
 load limit. A local cached copy with SHA-256
 `7b8902ef5787ffaa40586176ad7db64a4dd8429cf0e50447241302e59106d363`
 produced a 32-pixel difference (0.013%). Record any local URL substitution and
 asset hash with the run; do not extend timeouts to conceal renderer stalls.
-Mansion initially stalled with one material pending, then passed with 173
-pixels different (0.072%). Geometry buffer renderer initially exited without
-a validation result, then passed with zero differing pixels. Preserve these
-intermittent failures and require an explicit validation result, not exit zero.
+Mansion, Sponza, Flat2009, and Espilit also use exact-byte scene caches in the
+local sweep. The URL/hash manifests accompany each run; other assets still
+use the network. Preserve failed runs and require an explicit validation
+result plus a successful exit, not exit zero alone. A clamshell-sleep timeout
+is not a renderer result; keep the host awake and the lid open during a sweep.
 
 The macOS bundle template now uses CMake substitutions, so Ninja bundles no
 longer ship unresolved Xcode executable or bundle-identifier placeholders.
@@ -64,8 +104,13 @@ calling its version function alone is not C API behavioral coverage. Run
 `NativeWebGPUAsyncTests --gtest_filter=NativeWebGPUCAPI.*` as well: this direct
 C API integration test requires an adapter, uploads/copies/reads back a GPU
 buffer, and checks adapter-info and buffer map-state APIs. Missing hardware
-is a failure, not a skip. The broader upstream C-backend suite is still needed
-for the remaining native API additions.
+is a failure, not a skip. The broader upstream C-backend suite separately
+exercises the feature-only wgpu-native checkout. On this host its current-head
+run passed 1002/1003 tests with eight documented exclusions. The remaining
+written-timestamp test failed intermittently through both C dispatch and
+direct Rust wgpu at the same pin (4/10 repetitions in each), so this is not
+an unconditional passing suite. A nextest process/pipe-lifetime LEAK warning
+also remains for investigation. Neither issue is hidden by the screenshots.
 
 For a normal import from a fully fetched Dawn checkout:
 
