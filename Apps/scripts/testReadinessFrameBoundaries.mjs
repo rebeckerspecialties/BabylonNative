@@ -44,3 +44,12 @@ test('WebGPU frame cleanup runs even when readiness rendering throws', () => {
 test('legacy readiness rendering is unchanged', () => {
     assert.deepEqual(runPump(false), ['render']);
 });
+
+test('Simple refraction preserves its render-observer animation frame', () => {
+    const config = JSON.parse(readFileSync(new URL('../Playground/Scripts/config.json', import.meta.url), 'utf8'));
+    const fixture = config.tests.find(({ title }) => title === 'Simple refraction');
+    // #22KZUW#652 rotates both spheres in registerBeforeRender, even when
+    // scene.render ignores animations. Extra readiness frames change the image.
+    assert.equal(fixture.playgroundId, '#22KZUW#652');
+    assert.equal(fixture.renderReadinessPump, false);
+});

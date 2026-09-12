@@ -815,6 +815,7 @@
             "title": "Simple refraction",
             "playgroundId": "#22KZUW#652",
             "referenceImage": "simple-refraction.png",
+            "renderReadinessPump": false,
             "includeInNativeWebGPU": true
         },
         {

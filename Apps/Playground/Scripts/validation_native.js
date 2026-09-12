@@ -1966,8 +1966,9 @@
 
             try {
                 if (scene.activeCamera && typeof scene.render === "function") {
-                    // Readiness renders are only for material/effect compilation.
-                    // Preserve the screenshot test's animation frame count.
+                    // Compile materials without advancing Babylon animations.
+                    // Render observers and particles still run; fixtures that
+                    // depend on their frame count must disable this pump.
                     const readinessEngine = scene.getEngine();
                     if (readinessEngine.isWebGPU) {
                         // WebGPU submits queued passes and uploads at endFrame.
