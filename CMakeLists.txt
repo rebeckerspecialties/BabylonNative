@@ -74,11 +74,14 @@ FetchContent_Declare(webgpu_headers
     URL https://github.com/webgpu-native/webgpu-headers/archive/673658bc2bd70ec39fc55ebe6bb0173cf6d0a603.tar.gz
     URL_HASH SHA256=6754c6c2465c79a954f7c04c7890c9f00b7ecce8addbe01b5056e860ba3933e6
     EXCLUDE_FROM_ALL)
-# wgpu-native tracking wgpu 30 (gfx-rs/wgpu-native#617 parity work with review
-# fixes; see inner-daemons/wgpu-native#1). Pinned by commit, so no shallow clone.
+# Keep the public wgpu 30 pin while the runtime/test PR split is validated.
+# The reviewed runtime-only delta is packaged locally; see Patches/wgpu-native.
 FetchContent_Declare(wgpu_native
     GIT_REPOSITORY https://github.com/rebeckerspecialties/wgpu-native.git
     GIT_TAG c8df6cb99795a4cab585355582ce53e8111c9c0d
+    PATCH_COMMAND ${CMAKE_COMMAND}
+        "-DPATCH_FILE=${CMAKE_CURRENT_LIST_DIR}/Patches/wgpu-native/0001-reviewed-parity-runtime.patch"
+        -P "${CMAKE_CURRENT_LIST_DIR}/Patches/apply_patch_if_needed.cmake"
     EXCLUDE_FROM_ALL)
 FetchContent_Declare(metal-cpp
     GIT_REPOSITORY https://github.com/bkaradzic/metal-cpp.git

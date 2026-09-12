@@ -25,16 +25,20 @@ When Babylon.js source changes are needed for WebGPU correctness:
 
 Those bundle files are local validation inputs and may be ignored by git; the durable fixes should live in the Babylon.js branch/PR.
 
-## Isolated PR Stack Integration (September 2026)
+## PR Stack Integration (September 2026)
 
-This checkout is the isolated `integration/wgpu-native-parity` branch under
-`/Users/matt/src/BabylonNative/build_wgpu_pr_stack/BabylonNative`, not the
-canonical `wgpu` checkout. Continue this PR-stack task here. The canonical
-checkout has concurrent Android/OpenXR changes; do not overwrite them.
-The sibling `README.md`, `verify-stack.mjs`, and `validate-m4.mjs` record the
+The `integration/wgpu-native-parity` work was merged into canonical `wgpu`.
+An isolated integration checkout remains under
+`/Users/matt/src/BabylonNative/build_wgpu_pr_stack/BabylonNative` for controlled
+comparisons. The canonical checkout has concurrent Android/OpenXR/visionOS
+changes; preserve them. `build_wgpu_pr_stack/README.md`, `verify-stack.mjs`,
+and `validate-m4.mjs` record the
 runtime-first/test-second branches, attribution, current upstream pins, and
 validation commands. Those sibling repositories are durable work, not build
-artifacts to clean away.
+artifacts to clean away. Use `configure-integration.mjs --canonical` and
+`validate-m4.mjs --canonical --run` to target the merged checkout. Ordinary
+builds apply `Patches/wgpu-native/0001-reviewed-parity-runtime.patch` to the
+public dependency pin; a source override must already contain those fixes.
 
 The local M4 Max exposes Metal and runs real WebGPU workloads with full
 execution access. A missing-adapter result in a restricted process does not
