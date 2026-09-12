@@ -1,7 +1,7 @@
 {
     "repository": "https://github.com/CedricGuillemet/BabylonNative",
     "configRevision": "3263c363a4b86d56ce02a74ec140352bd3a8bced",
-    "referenceRevision": "abcfa98d35363303c51f1ffa5d371cb60dc524b3",
+    "referenceRevision": "3263c363a4b86d56ce02a74ec140352bd3a8bced",
     "configSha256": "cff1ab15b5964349b1c44c11de528825857674f9200335f7955f939e4fed2777",
     "importedTests": 139,
     "enabledForWebGPU": 80,

@@ -38,7 +38,11 @@ const prepared = additions.map(test => {
         const bytes = git('show', `${referenceRevision}:${source}`);
         references.set(filename, { bytes, source, sha256: createHash('sha256').update(bytes).digest('hex') });
     }
-    return { ...test, referenceImage: filename };
+    // Dawn captures particle simulations without pre-rendering the scene.
+    // Native readiness renders can advance GPU particles even with animations
+    // disabled, changing the captured state before validation starts.
+    const readinessPolicy = test.title.startsWith('GPU Particles -') ? { renderReadinessPump: false } : {};
+    return { ...test, ...readinessPolicy, referenceImage: filename };
 });
 // Resolve every source before writing any fixture; never replace a reference with renderer output.
 for (const [filename, reference] of references) {

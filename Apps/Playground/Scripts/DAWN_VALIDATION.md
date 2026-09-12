@@ -12,12 +12,12 @@ Source: CedricGuillemet/BabylonNative `nativeDawn`, commit
 - 20 upstream-excluded entries have no reference image and remain excluded.
 - Source thresholds and exclusions are retained without relaxation.
 
-The source catalog was retrieved at that revision. Reference image bytes came
-from the locally available commit `abcfa98d35363303c51f1ffa5d371cb60dc524b3`;
-the upstream comparison through the source revision showed no changes to any
-of these images. Per-image SHA-256 values and both revisions are recorded in
+The source catalog and reference image bytes come directly from that fetched
+revision. Per-image SHA-256 values are recorded in
 `config.dawn-webgpu.provenance.json`. No generated renderer output was used as
-a reference.
+a reference. GPU particle additions disable native readiness renders, matching
+the source harness: even rendering with animations disabled advances GPU
+particles and changes the simulation state before the requested capture frame.
 
 Run the catalog with both scripts, in this order:
 
@@ -30,16 +30,28 @@ this catalog differ from the primary catalog. These upstream tests still
 fetch scene scripts and assets; packaging the reference images does not make
 the suite network-independent.
 
-The import was syntax-checked and the references hash-verified. Playground,
-UnitTests, and NativeWebGPUAsyncTests built against the feature-only
-wgpu-native checkout, but no visual result is accepted: the execution
-environment exposed no Metal adapter to the test binaries, and Playground
-aborted during macOS application registration before the scripts ran.
+The full-access M4 Max run on macOS 27 successfully acquires Metal and runs
+Playground, the JavaScript unit suite, and all 15 native async/C API tests.
+The first imported catalog sweep accepted 74 of 80 tests. Focused follow-ups
+accepted the remaining six without relaxing thresholds: three particle tests
+with readiness rendering disabled, Mansion and Geometry buffer renderer on
+rerun, and Gaussian Splatting PLY SH Order 4 with the identical asset cached.
+Those follow-ups do not replace a clean final-revision sweep.
+
+The 24 MB splat PLY took 82 seconds to download, beyond the 30-second scene
+load limit. A local cached copy with SHA-256
+`7b8902ef5787ffaa40586176ad7db64a4dd8429cf0e50447241302e59106d363`
+produced a 32-pixel difference (0.013%). Record any local URL substitution and
+asset hash with the run; do not extend timeouts to conceal renderer stalls.
+Mansion initially stalled with one material pending, then passed with 173
+pixels different (0.072%). Geometry buffer renderer initially exited without
+a validation result, then passed with zero differing pixels. Preserve these
+intermittent failures and require an explicit validation result, not exit zero.
 
 The macOS bundle template now uses CMake substitutions, so Ninja bundles no
 longer ship unresolved Xcode executable or bundle-identifier placeholders.
-The application-registration failure persists in the restricted execution
-environment after this packaging correction.
+The previous application-registration and zero-adapter failures were limited
+to the restricted execution environment, not this machine's GPU capability.
 
 Before claiming an integrated runtime build, verify that changes in the
 wgpu-native checkout trigger the Rust build and match the staged rlib source.
