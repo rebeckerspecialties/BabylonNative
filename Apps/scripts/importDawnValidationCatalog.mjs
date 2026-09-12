@@ -41,7 +41,9 @@ const prepared = additions.map(test => {
     // Dawn captures particle simulations without pre-rendering the scene.
     // Native readiness renders can advance GPU particles even with animations
     // disabled, changing the captured state before validation starts.
-    const readinessPolicy = test.title.startsWith('GPU Particles -') ? { renderReadinessPump: false } : {};
+    const readinessPolicy = test.title.startsWith('GPU Particles -') || test.title === 'SpaceDeK'
+        ? { renderReadinessPump: false }
+        : {};
     return { ...test, ...readinessPolicy, referenceImage: filename };
 });
 // Resolve every source before writing any fixture; never replace a reference with renderer output.

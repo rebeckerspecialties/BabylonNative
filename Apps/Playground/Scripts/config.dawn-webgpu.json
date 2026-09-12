@@ -701,7 +701,8 @@
                 "OpenGL",
                 "Vulkan",
                 "Metal"
-            ]
+            ],
+            "renderReadinessPump": false
         },
         {
             "title": "Flat2009",
