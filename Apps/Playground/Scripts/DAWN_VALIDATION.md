@@ -37,14 +37,24 @@ successfully acquires Metal. The build uses Debug, JavaScriptCore, and
 Babylon.js 9.22.1; these are correctness results, not performance evidence.
 All 15 native async/direct C API tests and the five JavaScript unit tests pass.
 
-The final complete sweep at integration code commit `551b76ed` accepted
+The canonical `wgpu` sweep at commit `369e8b7e` accepted 80/80 eligible Dawn
+additions and 10/10 native smoke cases. The run includes the preserved local
+Android/OpenXR/visionOS changes, identified by the recorded dirty-source hash.
+It also passed 15 native tests, five JavaScript tests, and eight harness tests.
+Runtime `01a4f43` and dependent tests `a105c5a` were used. Evidence, source and
+binary hashes, cached-input hashes and all 90 result images are under
+`build_wgpu_pr_stack/m4-validation/2026-09-12T02-20-49.394Z/`.
+No thresholds or reference images were changed.
+
+The earlier isolated sweep at integration code commit `551b76ed` accepted
 80/80 eligible Dawn additions and 10/10 native smoke cases with no threshold
 relaxation, regenerated references, device-loss markers, or render panics.
 It is recorded under
 `build_wgpu_pr_stack/m4-validation/2026-09-12T01-27-05.931Z/` in the canonical
 workspace, including source/binary/bundle hashes and all 90 result images.
 The runtime head is `4032856` and the dependent test head is `61432ec`.
-Subsequent documentation-only changes do not alter this tested code.
+The surface lifetime fix and canonical integration were subsequently validated
+in the newer sweep above.
 
 The preceding sweep at `da6b12cb` accepted 80/80 Dawn additions and 9/10 native
 cases. Its Simple refraction failure was traced to readiness renders advancing
@@ -109,8 +119,21 @@ exercises the feature-only wgpu-native checkout. On this host its current-head
 run passed 1002/1003 tests with eight documented exclusions. The remaining
 written-timestamp test failed intermittently through both C dispatch and
 direct Rust wgpu at the same pin (4/10 repetitions in each), so this is not
-an unconditional passing suite. A nextest process/pipe-lifetime LEAK warning
-also remains for investigation. Neither issue is hidden by the screenshots.
+an unconditional passing suite. Two further full sweeps at runtime `01a4f43`
+again passed 1002/1003, with only the written-timestamp failure. A raw Metal
+reproducer now isolates GPU counter resolution returning zero even when CPU
+resolution after completion reads valid samples; no CPU-wait workaround was
+added. The earlier nextest process/pipe-lifetime LEAK warning did not recur in
+those sweeps or 40 focused C/direct-Rust repetitions, but its cause is not
+established. Neither issue is hidden by the screenshots.
+
+These results are not WebGPU conformance certification. The test total includes
+CPU tests, unsupported features and expected failures; the last C-backend sweep
+has 325 cases labeled `Executed` on Metal, of which 324 passed. Noop-only Rust
+validation tests fall back to wgpu-core. Separately, 12 public C API surface
+tests pass against the feature-only runtime. See
+`Patches/wgpu-native/API_COVERAGE.md` for the remaining standard C API contracts
+and the distinction between this stack's feature scope and full API parity.
 
 For a normal import from a fully fetched Dawn checkout:
 
