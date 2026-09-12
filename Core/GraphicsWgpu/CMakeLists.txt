@@ -358,6 +358,7 @@ if(BABYLON_NATIVE_MULTI_CONFIG)
             "${RUST_CRATE_DIR}/Cargo.toml"
             "${RUST_CRATE_DIR}/build.rs"
             "${RUST_CRATE_DIR}/src/lib.rs"
+            "${RUST_CRATE_DIR}/src/error_bridge.rs"
             "${RUST_CRATE_DIR}/src/upstream_wgpu_native/compute.rs"
             "${BABYLON_NATIVE_REPO_ROOT}/Polyfills/CanvasWgpu/Rust/src/lib.rs"
             ${WGPU_NATIVE_RUNTIME_INPUTS}
@@ -388,6 +389,7 @@ else()
             "${RUST_CRATE_DIR}/Cargo.toml"
             "${RUST_CRATE_DIR}/build.rs"
             "${RUST_CRATE_DIR}/src/lib.rs"
+            "${RUST_CRATE_DIR}/src/error_bridge.rs"
             "${RUST_CRATE_DIR}/src/upstream_wgpu_native/compute.rs"
             "${BABYLON_NATIVE_REPO_ROOT}/Polyfills/CanvasWgpu/Rust/src/lib.rs"
             ${WGPU_NATIVE_RUNTIME_INPUTS}

@@ -72,6 +72,18 @@ namespace Babylon::Polyfills::Internal
         }
 
         Scheduling::Initialize(env);
+        Napi::Eval(env, R"JS(
+            if (!globalThis.queueMicrotask) {
+                const resolved = Promise.resolve();
+                globalThis.queueMicrotask = function queueMicrotask(callback) {
+                    if (typeof callback !== 'function') throw new TypeError('Expected a callback');
+                    resolved.then(() => {
+                        try { callback(); }
+                        catch (error) { setTimeout(() => { throw error; }, 0); }
+                    });
+                };
+            }
+        )JS", "window-microtasks.js");
 
         if (global.Get(JS_A_TO_B_NAME).IsUndefined())
         {

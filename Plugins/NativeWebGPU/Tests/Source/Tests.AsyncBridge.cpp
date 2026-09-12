@@ -476,7 +476,7 @@ TEST(NativeWebGPUAsyncBridge, CreateRenderPipelineAsyncRejectsForInvalidDescript
     )JS");
 }
 
-TEST(NativeWebGPUAsyncBridge, SynchronousPipelineValidationErrorsThrowAndDeviceSurvives)
+TEST(NativeWebGPUAsyncBridge, SynchronousPipelineValidationErrorsAreScopedAndDeviceSurvives)
 {
     RunNativeWebGpuAsyncScript(R"JS(
         (async () => {
@@ -509,26 +509,21 @@ TEST(NativeWebGPUAsyncBridge, SynchronousPipelineValidationErrorsThrowAndDeviceS
                 fn cs() {}
             ` });
 
-            function expectPipelineFailure(operation, create) {
-                try {
+            async function expectPipelineFailure(operation, create) {
+                    device.pushErrorScope("validation");
                     create();
-                    throw new Error("Expected " + operation + " to fail.");
-                } catch (error) {
-                    if (!(error instanceof Error)) {
-                        throw new Error(operation + " did not throw an Error instance.");
-                    }
-                    if (error.nativeOperation !== operation) {
-                        throw new Error("Unexpected native operation: " + String(error.nativeOperation));
+                    const error = await device.popErrorScope();
+                    if (!(error instanceof GPUValidationError)) {
+                        throw new Error(operation + " did not produce GPUValidationError.");
                     }
                     const message = String(error.message || error);
-                    if (message.indexOf("validation error") === -1 ||
+                    if (message.toLowerCase().indexOf("validation error") === -1 ||
                         message.indexOf("missingEntryPoint") === -1) {
                         throw new Error(operation + " error was not actionable: " + message);
                     }
-                }
             }
 
-            expectPipelineFailure("GPUDevice.createRenderPipeline", () => {
+            await expectPipelineFailure("GPUDevice.createRenderPipeline", () => {
                 device.createRenderPipeline({
                     label: "invalid render pipeline",
                     vertex: { module: shader, entryPoint: "missingEntryPoint" },
@@ -540,7 +535,7 @@ TEST(NativeWebGPUAsyncBridge, SynchronousPipelineValidationErrorsThrowAndDeviceS
                 });
             });
 
-            expectPipelineFailure("GPUDevice.createComputePipeline", () => {
+            await expectPipelineFailure("GPUDevice.createComputePipeline", () => {
                 device.createComputePipeline({
                     label: "invalid compute pipeline",
                     compute: { module: shader, entryPoint: "missingEntryPoint" }
@@ -568,6 +563,99 @@ TEST(NativeWebGPUAsyncBridge, SynchronousPipelineValidationErrorsThrowAndDeviceS
         })().catch((error) => {
             __nativeWebGpuTestDone(false, error && error.stack ? error.stack : String(error));
         });
+    )JS");
+}
+
+TEST(NativeWebGPUAsyncBridge, ErrorScopesCaptureFirstMatchingErrorWithoutLeaking)
+{
+    RunNativeWebGpuAsyncScript(R"JS(
+        (async () => {
+            const device = await (await navigator.gpu.requestAdapter()).requestDevice();
+            const check = (ok, message) => { if (!ok) throw new Error(message); };
+            let events = 0;
+            device.onuncapturederror = e => { e.preventDefault(); ++events; };
+            device.pushErrorScope('validation');
+            device.pushErrorScope('validation');
+            device.pushErrorScope('internal');
+            device.createBuffer({size: 16, usage: 0xffff});
+            device.createShaderModule({code: 'not valid WGSL'});
+            check(await device.popErrorScope() === null, 'Wrong filter captured validation');
+            const first = await device.popErrorScope();
+            check(first instanceof GPUValidationError && /usage/.test(first.message), 'First error was replaced');
+            check(await device.popErrorScope() === null, 'Occupied inner scope leaked to parent');
+            device.pushErrorScope('validation');
+            const encoder = device.createCommandEncoder();
+            const src = device.createBuffer({size: 16, usage: GPUBufferUsage.COPY_SRC});
+            const dst = device.createBuffer({size: 4, usage: GPUBufferUsage.COPY_DST});
+            encoder.copyBufferToBuffer(src, dst, 16);
+            encoder.finish();
+            check(await device.popErrorScope() instanceof GPUValidationError, 'Encoding error missed finish scope');
+            await new Promise(resolve => setTimeout(resolve, 10));
+            check(events === 0, 'Captured errors leaked as events');
+            device.destroy();
+            __nativeWebGpuTestDone(true, '');
+        })().catch(e => __nativeWebGpuTestDone(false, e.stack || String(e)));
+    )JS");
+}
+
+TEST(NativeWebGPUAsyncBridge, LogicalDevicesIsolateErrorsResourcesAndLoss)
+{
+    RunNativeWebGpuAsyncScript(R"JS(
+        (async () => {
+            const adapter = await navigator.gpu.requestAdapter();
+            const first = await adapter.requestDevice(), second = await adapter.requestDevice();
+            const check = (ok, message) => { if (!ok) throw new Error(message); };
+            const mapped = first.createBuffer({size: 16, usage: GPUBufferUsage.COPY_SRC, mappedAtCreation: true});
+            const range = mapped.getMappedRange();
+            const foreign = first.createBuffer({size: 16, usage: GPUBufferUsage.COPY_DST});
+            first.pushErrorScope('validation'); second.pushErrorScope('validation');
+            second.queue.writeBuffer(foreign, 0, new Uint32Array([1]));
+            check(await second.popErrorScope() instanceof GPUValidationError, 'Cross-device resource accepted');
+            check(await first.popErrorScope() === null, 'Error delivered to wrong device');
+            const lost = first.lost;
+            first.destroy(); first.destroy();
+            check((await lost).reason === 'destroyed' && first.lost === lost, 'Loss identity or reason incorrect');
+            check(range.byteLength === 0 && mapped.mapState === 'unmapped', 'Destroy retained active mapping');
+            first.pushErrorScope('validation');
+            first.createShaderModule({code: 'invalid'});
+            first.queue.submit([]);
+            check(await first.popErrorScope() === null, 'Lost device generated errors');
+            const data = second.createBuffer({size: 4, usage: GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST});
+            const readback = second.createBuffer({size: 4, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ});
+            second.queue.writeBuffer(data, 0, new Uint32Array([0x12345678]));
+            const encoder = second.createCommandEncoder(); encoder.copyBufferToBuffer(data, readback);
+            second.queue.submit([encoder.finish()]);
+            await readback.mapAsync(GPUMapMode.READ);
+            check(new Uint32Array(readback.getMappedRange())[0] === 0x12345678, 'Destroy broke another device');
+            readback.unmap(); second.destroy();
+            __nativeWebGpuTestDone(true, '');
+        })().catch(e => __nativeWebGpuTestDone(false, e.stack || String(e)));
+    )JS");
+}
+
+TEST(NativeWebGPUAsyncBridge, AsyncPipelineErrorsRejectWithoutScopeOrEventLeakage)
+{
+    RunNativeWebGpuAsyncScript(R"JS(
+        (async () => {
+            const device = await (await navigator.gpu.requestAdapter()).requestDevice();
+            const check = (ok, message) => { if (!ok) throw new Error(message); };
+            const shader = device.createShaderModule({code: '@compute @workgroup_size(1) fn main() {}'});
+            let events = 0;
+            device.onuncapturederror = e => { e.preventDefault(); ++events; };
+            device.pushErrorScope('validation');
+            const result = device.createComputePipelineAsync({layout: 'auto', compute: {module: shader, entryPoint: 'missing'}});
+            const popped = device.popErrorScope();
+            let failure;
+            try { await result; } catch (error) { failure = error; }
+            check(failure instanceof GPUPipelineError && failure.reason === 'validation', 'Wrong async pipeline error');
+            check(await popped === null, 'Async pipeline error leaked into scope');
+            await new Promise(resolve => setTimeout(resolve, 10));
+            check(events === 0, 'Async pipeline error leaked into event');
+            const pending = device.createComputePipelineAsync({layout: 'auto', compute: {module: shader, entryPoint: 'main'}});
+            device.destroy();
+            check(await pending instanceof GPUComputePipeline, 'Destroyed device did not resolve invalid pipeline');
+            __nativeWebGpuTestDone(true, '');
+        })().catch(e => __nativeWebGpuTestDone(false, e.stack || String(e)));
     )JS");
 }
 

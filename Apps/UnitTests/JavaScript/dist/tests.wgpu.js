@@ -1817,13 +1817,12 @@
             expectPixel(navigator.gpu._testReadTexturePixel(textureB, 0, 0), [0, 255, 0, 255], "canvas B survived canvas A resize");
 
             contextA.unconfigure();
-            var destroyedTextureRejected = false;
-            try {
-                textureAResized.createView({ label: "after-unconfigure" });
-            } catch (error) {
-                destroyedTextureRejected = String(error && error.message || error).indexOf("GPUTexture") !== -1;
-            }
-            expect(destroyedTextureRejected, "unconfiguring canvas A should invalidate its current texture predictably");
+            device.pushErrorScope("validation");
+            var invalidView = textureAResized.createView({ label: "after-unconfigure" });
+            var destroyedTextureError = await device.popErrorScope();
+            expect(invalidView instanceof GPUTextureView, "invalid texture should still return a typed view");
+            expect(destroyedTextureError instanceof GPUValidationError && destroyedTextureError.message.indexOf("GPUTexture") !== -1,
+                "unconfiguring canvas A should invalidate its current texture predictably");
             expectPixel(navigator.gpu._testReadTexturePixel(textureB, 0, 0), [0, 255, 0, 255], "canvas B survived canvas A unconfigure");
 
             contextB.unconfigure();

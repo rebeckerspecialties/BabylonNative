@@ -8,6 +8,8 @@
 #[allow(unused_extern_crates)]
 extern crate wgpu_native;
 
+mod error_bridge;
+
 use std::any::Any;
 #[cfg(target_os = "android")]
 use std::ffi::CString;
@@ -547,6 +549,11 @@ fn run_with_active_backend<T, F>(operation: &str, fallback: T, f: F) -> T
 where
     F: FnOnce(&mut upstream_wgpu_native::InteropBackendContext) -> Result<T, String>,
 {
+    // Lost logical JS devices must not issue work on the shared physical renderer.
+    if !error_bridge::active() && !operation.starts_with("GPUObject.") {
+        return fallback;
+    }
+    let error_serial = error_bridge::serial();
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let context = ACTIVE_CONTEXT.load(Ordering::Acquire);
         if context.is_null() {
@@ -563,16 +570,18 @@ where
         Ok(Ok(value)) => value,
         Ok(Err(error)) => {
             set_last_error(&error);
+            if error_bridge::serial() == error_serial {
+                error_bridge::record(1, error);
+            }
             fallback
         }
         Err(payload) => {
-            set_last_error(
-                format!(
+            let error = format!(
                     "{operation} panicked: {}",
                     panic_payload_to_string(payload.as_ref())
-                )
-                .as_str(),
-            );
+                );
+            set_last_error(&error);
+            error_bridge::record(3, error);
             fallback
         }
     }
@@ -587,6 +596,14 @@ pub extern "C" fn babylon_wgpu_native_create_buffer(
     run_with_active_backend("GPUDevice.createBuffer", 0, |backend| {
         backend.create_buffer(size, usage, mapped_at_creation)
     })
+}
+
+#[no_mangle]
+pub extern "C" fn babylon_wgpu_native_invalidate_resource(kind: u32, id: u64) {
+    run_with_active_backend("GPUObject.invalidate", (), |backend| {
+        backend.invalidate_resource(kind, id);
+        Ok(())
+    });
 }
 
 #[no_mangle]
@@ -637,6 +654,22 @@ pub extern "C" fn babylon_wgpu_native_write_mapped_ranges(
         backend.write_mapped_ranges(buffer_id, mapped_offset, mapped_size, ranges)?;
         Ok(true)
     })
+}
+
+#[no_mangle]
+pub extern "C" fn babylon_wgpu_native_map_buffer(buffer_id: u64, mode: u32, offset: u64, size: u64) -> bool {
+    run_with_active_backend("GPUBuffer.mapAsync", false, |backend| {
+        backend.map_buffer(buffer_id, mode, offset, size)?;
+        Ok(true)
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn babylon_wgpu_native_unmap_buffer(buffer_id: u64) {
+    run_with_active_backend("GPUObject.unmap", (), |backend| {
+        backend.unmap_buffer(buffer_id);
+        Ok(())
+    });
 }
 
 #[no_mangle]
@@ -1666,7 +1699,7 @@ pub extern "C" fn babylon_wgpu_native_reset_external_image_upload_stats() {
 
 #[no_mangle]
 pub extern "C" fn babylon_wgpu_native_destroy_resource(kind: u32, resource_id: u64) -> bool {
-    run_with_active_backend("GPU resource destroy", false, |backend| {
+    run_with_active_backend("GPUObject.release", false, |backend| {
         Ok(backend.destroy_resource(kind, resource_id))
     })
 }
@@ -2410,7 +2443,7 @@ mod upstream_wgpu_native {
     }
 
     struct CommandBufferResource {
-        commands: Vec<EncoderCommand>,
+        buffer: wgpu::CommandBuffer,
     }
 
     struct PendingBufferWrite {
@@ -2453,7 +2486,11 @@ mod upstream_wgpu_native {
         ];
         let details = errors
             .into_iter()
-            .filter_map(|(kind, error)| error.map(|error| format!("{kind} error: {error}")))
+            .filter_map(|(kind, error)| error.map(|error| {
+                let detail = format!("{kind} error: {error}");
+                super::error_bridge::record_wgpu(error);
+                detail
+            }))
             .collect::<Vec<_>>();
 
         if details.is_empty() {
@@ -3619,7 +3656,10 @@ mod upstream_wgpu_native {
             mapped_at_creation: bool,
         ) -> Result<u64, String> {
             let id = self.resources.next();
-            let effective_size = size.max(4);
+            if usage & !0x03ff != 0 {
+                return Err(format!("GPUBuffer usage contains unknown flags: {usage:#x}"));
+            }
+            let effective_size = size;
             let buffer = self.runtime.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("babylon-native-webgpu.web-buffer"),
                 size: effective_size,
@@ -3749,6 +3789,14 @@ mod upstream_wgpu_native {
                     .buffers
                     .get_mut(&buffer_id)
                     .ok_or_else(|| format!("GPUBuffer {buffer_id} was not found"))?;
+                if !buffer.buffer.usage().contains(wgpu::BufferUsages::COPY_DST)
+                    || !offset.is_multiple_of(wgpu::COPY_BUFFER_ALIGNMENT)
+                    || !(data.len() as u64).is_multiple_of(wgpu::COPY_BUFFER_ALIGNMENT)
+                    || offset > buffer.size
+                    || data.len() as u64 > buffer.size - offset
+                {
+                    return Err("GPUQueue.writeBuffer requires COPY_DST usage and an aligned, in-bounds destination range".into());
+                }
                 if !buffer.mapped {
                     buffer.buffer.clone()
                 } else {
@@ -3796,6 +3844,34 @@ mod upstream_wgpu_native {
             Ok(())
         }
 
+        pub fn map_buffer(&mut self, id: u64, mode: u32, offset: u64, size: u64) -> Result<(), String> {
+            self.submit_pending_buffer_writes("map_buffer");
+            let resource = self.resources.buffers.get_mut(&id)
+                .ok_or_else(|| format!("GPUBuffer {id} was not found"))?;
+            let mode = match mode {
+                1 => wgpu::MapMode::Read,
+                2 => wgpu::MapMode::Write,
+                _ => return Err("Invalid GPUMapMode".into()),
+            };
+            let (tx, rx) = std::sync::mpsc::channel();
+            resource.buffer.map_async(mode, offset..offset + size, move |result| {
+                let _ = tx.send(result);
+            });
+            self.runtime.device.poll(wgpu::PollType::wait_indefinitely())
+                .map_err(|error| error.to_string())?;
+            rx.recv().map_err(|error| error.to_string())?
+                .map_err(|error| error.to_string())?;
+            resource.mapped = true;
+            Ok(())
+        }
+
+        pub fn unmap_buffer(&mut self, id: u64) {
+            if let Some(resource) = self.resources.buffers.get_mut(&id) {
+                resource.buffer.unmap();
+                resource.mapped = false;
+            }
+        }
+
         pub fn read_buffer(
             &mut self,
             buffer_id: u64,
@@ -3820,6 +3896,11 @@ mod upstream_wgpu_native {
 
             let end = start + copy_len as u64;
             let slice = buffer_resource.buffer.slice(start..end);
+            if buffer_resource.mapped {
+                let mapped = slice.get_mapped_range().map_err(|error| error.to_string())?;
+                output[..copy_len].copy_from_slice(&mapped[..copy_len]);
+                return Ok(());
+            }
             let (tx, rx) = std::sync::mpsc::channel::<Result<(), String>>();
             slice.map_async(wgpu::MapMode::Read, move |result| {
                 let _ = tx.send(result.map_err(|error| error.to_string()));
@@ -5498,10 +5579,18 @@ mod upstream_wgpu_native {
                 .remove(&encoder_id)
                 .ok_or_else(|| format!("GPUCommandEncoder {encoder_id} was not found"))?;
             let id = self.resources.next();
+            // Validate on the encoding timeline, before the caller can pop its scope.
+            // Queue writes remain separate and are submitted before these commands.
+            let mut native = self.runtime.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("babylon-native-webgpu.web-command-buffer"),
+            });
+            for command in &encoder.commands {
+                self.execute_encoder_command(&mut native, command);
+            }
             self.resources.command_buffers.insert(
                 id,
                 CommandBufferResource {
-                    commands: encoder.commands,
+                    buffer: native.finish(),
                 },
             );
             Ok(id)
@@ -5894,79 +5983,27 @@ mod upstream_wgpu_native {
                 return Ok(());
             }
 
-            let mut encoder =
-                self.runtime
-                    .device
-                    .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                        label: Some("babylon-native-webgpu.web-command-submit"),
-                    });
-            for command_buffer_id in command_buffer_ids {
-                let command_buffer = self
-                    .resources
-                    .command_buffers
-                    .get(command_buffer_id)
-                    .ok_or_else(|| format!("GPUCommandBuffer {command_buffer_id} was not found"))?;
-                if std::env::var_os("BABYLON_NATIVE_WEBGPU_TRACE").is_some() {
-                    let labels = command_buffer
-                        .commands
-                        .iter()
-                        .map(|command| match command {
-                            EncoderCommand::RenderPass {
-                                descriptor,
-                                commands,
-                            } => {
-                                format!(
-                                    "render:{}:{}cmd",
-                                    descriptor.label.as_deref().unwrap_or("(unlabeled)"),
-                                    commands.len()
-                                )
-                            }
-                            EncoderCommand::ComputePass { label, commands } => {
-                                format!(
-                                    "compute:{}:{}cmd",
-                                    label.as_deref().unwrap_or("(unlabeled)"),
-                                    commands.len()
-                                )
-                            }
-                            EncoderCommand::CopyBufferToBuffer { .. } => {
-                                "copyBufferToBuffer".to_string()
-                            }
-                            EncoderCommand::CopyBufferToTexture { .. } => {
-                                "copyBufferToTexture".to_string()
-                            }
-                            EncoderCommand::CopyTextureToBuffer { .. } => {
-                                "copyTextureToBuffer".to_string()
-                            }
-                            EncoderCommand::CopyTextureToTexture { .. } => {
-                                "copyTextureToTexture".to_string()
-                            }
-                            EncoderCommand::ClearBuffer { .. } => "clearBuffer".to_string(),
-                        })
-                        .collect::<Vec<_>>()
-                        .join(",");
-                    eprintln!(
-                        "NativeWebGPU trace executeCommandBuffer: id={} commands={} [{}]",
-                        command_buffer_id,
-                        command_buffer.commands.len(),
-                        labels
-                    );
+            for (index, id) in command_buffer_ids.iter().enumerate() {
+                if !self.resources.command_buffers.contains_key(id)
+                    || command_buffer_ids[..index].contains(id)
+                {
+                    return Err(format!("GPUCommandBuffer {id} is invalid or submitted more than once"));
                 }
             }
-            let encoded_pending_writes = self.encode_pending_buffer_writes(&mut encoder);
+            let mut buffers = Vec::with_capacity(command_buffer_ids.len() + 1);
+            let encoded_pending_writes = !self.pending_buffer_writes.is_empty();
             if encoded_pending_writes {
+                let mut uploads = self.runtime.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("babylon-native-webgpu.web-command-uploads"),
+                });
+                self.encode_pending_buffer_writes(&mut uploads);
                 self.staging_belt.finish();
+                buffers.push(uploads.finish());
             }
-            for command_buffer_id in command_buffer_ids {
-                let command_buffer = self
-                    .resources
-                    .command_buffers
-                    .remove(command_buffer_id)
-                    .ok_or_else(|| format!("GPUCommandBuffer {command_buffer_id} was not found"))?;
-                for command in &command_buffer.commands {
-                    self.execute_encoder_command(&mut encoder, command);
-                }
+            for id in command_buffer_ids {
+                buffers.push(self.resources.command_buffers.remove(id).unwrap().buffer);
             }
-            self.runtime.queue.submit(Some(encoder.finish()));
+            self.runtime.queue.submit(buffers);
             if encoded_pending_writes {
                 self.staging_belt.recall();
             }
@@ -6465,6 +6502,7 @@ mod upstream_wgpu_native {
             let Some(target) = self.canvas_targets.remove(&canvas_id) else {
                 return;
             };
+            target.texture.destroy();
 
             if let Some(texture) = self.resources.textures.remove(&target.texture_id) {
                 subtract_estimated_gpu_memory_bytes(estimated_texture_resource_bytes(&texture));
@@ -6600,6 +6638,24 @@ mod upstream_wgpu_native {
                     .is_some(),
                 14 => self.resources.compute_passes.remove(&resource_id).is_some(),
                 _ => false,
+            }
+        }
+
+        pub fn invalidate_resource(&mut self, kind: u32, id: u64) {
+            match kind {
+                1 => {
+                    if let Some(resource) = self.resources.buffers.get_mut(&id) {
+                        self.pending_buffer_writes.retain(|write| write.buffer != resource.buffer);
+                        resource.buffer.destroy();
+                        resource.mapped = false;
+                    }
+                }
+                2 => {
+                    if let Some(resource) = self.resources.textures.get(&id) {
+                        resource.texture.destroy();
+                    }
+                }
+                _ => {}
             }
         }
     }
@@ -8528,6 +8584,7 @@ mod upstream_wgpu_native {
             )
         })?;
 
+        crate::error_bridge::install(&device);
         device.set_device_lost_callback(|reason, message| {
             if reason == wgpu::DeviceLostReason::Destroyed {
                 return;
@@ -8535,6 +8592,7 @@ mod upstream_wgpu_native {
             let error = format!("NativeWebGPU device lost ({reason:?}): {message}");
             eprintln!("{error}");
             crate::set_last_error(&error);
+            crate::error_bridge::record(4, error);
         });
 
         Ok(LocalBootstrapRuntime {

@@ -53,6 +53,11 @@ struct BabylonWgpuMappedRangeWrite final
 
 extern "C"
 {
+    // Error kinds: 1 validation, 2 out-of-memory, 3 internal, 4 physical device loss.
+    void babylon_wgpu_native_set_error_device(uint64_t device, bool active);
+    void babylon_wgpu_native_set_error_notify(void (*notify)(void*), void* data);
+    size_t babylon_wgpu_native_take_error(uint64_t* device, uint32_t* kind, char* output, size_t capacity);
+    void babylon_wgpu_native_invalidate_resource(uint32_t kind, uint64_t id);
     void* babylon_wgpu_create(const BabylonWgpuConfig* config);
     void babylon_wgpu_destroy(void* context);
     bool babylon_wgpu_resize(void* context, uint32_t width, uint32_t height);
@@ -100,6 +105,8 @@ extern "C"
         const BabylonWgpuMappedRangeWrite* ranges,
         size_t range_count);
     bool babylon_wgpu_native_read_buffer(uint64_t buffer_id, uint64_t offset, uint8_t* data, size_t data_len);
+    bool babylon_wgpu_native_map_buffer(uint64_t buffer_id, uint32_t mode, uint64_t offset, uint64_t size);
+    void babylon_wgpu_native_unmap_buffer(uint64_t buffer_id);
     uint64_t babylon_wgpu_native_create_texture(const char* descriptor_json);
     uint64_t babylon_wgpu_native_import_metal_texture(const void* native_texture, const char* descriptor_json);
     void* babylon_wgpu_native_get_metal_device();
