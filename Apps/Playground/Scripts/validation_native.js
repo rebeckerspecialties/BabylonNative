@@ -1968,7 +1968,20 @@
                 if (scene.activeCamera && typeof scene.render === "function") {
                     // Readiness renders are only for material/effect compilation.
                     // Preserve the screenshot test's animation frame count.
-                    scene.render(true, true);
+                    const readinessEngine = scene.getEngine();
+                    if (readinessEngine.isWebGPU) {
+                        // WebGPU submits queued passes and uploads at endFrame.
+                        // Without frame boundaries, every readiness render is
+                        // retained in one submission until validation begins.
+                        readinessEngine.beginFrame();
+                        try {
+                            scene.render(true, true);
+                        } finally {
+                            readinessEngine.endFrame();
+                        }
+                    } else {
+                        scene.render(true, true);
+                    }
                     frameCount++;
                     if (frameCount <= 3) {
                         logNativeWebGPUStats("after readiness pump frame " + frameCount + " for " + pumpLabel);

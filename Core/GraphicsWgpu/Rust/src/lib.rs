@@ -8528,6 +8528,15 @@ mod upstream_wgpu_native {
             )
         })?;
 
+        device.set_device_lost_callback(|reason, message| {
+            if reason == wgpu::DeviceLostReason::Destroyed {
+                return;
+            }
+            let error = format!("NativeWebGPU device lost ({reason:?}): {message}");
+            eprintln!("{error}");
+            crate::set_last_error(&error);
+        });
+
         Ok(LocalBootstrapRuntime {
             adapter,
             adapter_info,
