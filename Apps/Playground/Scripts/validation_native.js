@@ -2750,10 +2750,10 @@ fragmentOutputs.color=color;
             }
         };
 
-        // Keep Babylon's internal executeWhenReady timeout aligned with the
-        // harness timer so longer-running tests do not lose their callback
-        // before the harness can report diagnostics and clean up.
-        currentScene.onReadyTimeoutDuration = sceneReadyTimeoutMs;
+        // The harness owns the deadline below. Babylon may already have started
+        // its timer during loading; shortening it here can silently clear the
+        // ready callback before our own deadline, even when the scene is ready.
+        currentScene.onReadyTimeoutDuration = 0;
 
         readinessTimer = setTimeout(function () {
             if (evaluated) {
@@ -2956,11 +2956,21 @@ fragmentOutputs.color=color;
         }, true);
     }
 
+    function processLoadedScene(test, scene, done, referenceImage, compareFunction) {
+        if (currentValidationTest !== test || !done.isActive()) {
+            if (scene && typeof scene.dispose === "function") {
+                scene.dispose();
+            }
+            return;
+        }
+        currentScene = scene;
+        processCurrentScene(test, referenceImage, done, compareFunction);
+    }
+
     function loadPlayground(test, done, referenceImage, compareFunction) {
         if (test.sceneFolder) {
             BABYLON.SceneLoader.Load(config.root + test.sceneFolder, test.sceneFilename, engine, function (newScene) {
-                currentScene = newScene;
-                processCurrentScene(test, referenceImage, done, compareFunction);
+                processLoadedScene(test, newScene, done, referenceImage, compareFunction);
             },
                 null,
                 function (loadedScene, msg) {
@@ -3032,41 +3042,13 @@ fragmentOutputs.color=color;
                                     // Runs before the first await, so the eval still happens at the
                                     // shallow stack depth this setTimeout exists to provide.
                                     seed = 1;
-                                    currentScene = eval(pgCode);
-
-                                    if (currentScene && currentScene.then) {
-                                        // Handle if createScene returns a promise. Guard against a
-                                        // snippet whose promise never resolves (e.g. a scene whose
-                                        // utility-layer executeWhenReady never fires on Native): the
-                                        // onReadyTimeout safety net lives inside processCurrentScene
-                                        // and only applies AFTER the promise resolves, so without this
-                                        // a pending createScene promise hangs the whole suite. Mirror
-                                        // onReadyTimeoutDuration and convert it to a fast failure.
-                                        // Note: this only fires if the JS event loop keeps running; a
-                                        // snippet that blocks the JS thread natively (e.g. manual
-                                        // setInterval frame-driving) is not rescued by this.
-                                        const createSceneTimeoutMs = 10 * 60 * 1000;
-                                        let createSceneTimeoutId;
-                                        try {
-                                            currentScene = await Promise.race([
-                                                currentScene,
-                                                new Promise(function (resolve, reject) {
-                                                    createSceneTimeoutId = setTimeout(function () {
-                                                        reject(new Error("createScene promise for " + test.playgroundId +
-                                                            " did not resolve within " + (createSceneTimeoutMs / 1000) + "s."));
-                                                    }, createSceneTimeoutMs);
-                                                })
-                                            ]);
-                                        }
-                                        finally {
-                                            // Always clear it: a pending timer would otherwise keep the
-                                            // event loop alive for the full timeout after a scene that
-                                            // resolved normally.
-                                            clearTimeout(createSceneTimeoutId);
-                                        }
+                                    if (!done.isActive()) {
+                                        return;
                                     }
-
-                                    processCurrentScene(test, referenceImage, done, compareFunction);
+                                    // runTest's load timer also covers unresolved promises. Keep
+                                    // them out of currentScene, which cleanup treats as a Scene.
+                                    const scene = await eval(pgCode);
+                                    processLoadedScene(test, scene, done, referenceImage, compareFunction);
                                 }
                                 catch (e) {
                                     console.error("Failed to evaluate playground snippet " + test.playgroundId + ": " + e);
@@ -3127,7 +3109,7 @@ fragmentOutputs.color=color;
 
                     const scriptCode = scriptToRun + test.functionToCall + "(engine)";
                     // Keep scene construction off the native load callback's C stack.
-                    setTimeout(function () {
+                    setTimeout(async function () {
                         // Browser scripts sometimes reference `name` without declaring it. In a
                         // page that silently resolves to window.name (""), so the mistake is
                         // invisible there but throws "ReferenceError: name is not defined"
@@ -3139,18 +3121,11 @@ fragmentOutputs.color=color;
                         var name = "";
                         try {
                             seed = 1;
-                            currentScene = eval(scriptCode);
-                            if (currentScene && currentScene.then) {
-                                currentScene.then(function (scene) {
-                                    currentScene = scene;
-                                    processCurrentScene(test, referenceImage, done, compareFunction);
-                                }).catch(function (e) {
-                                    console.error(e);
-                                    failTest(done);
-                                });
-                            } else {
-                                processCurrentScene(test, referenceImage, done, compareFunction);
+                            if (!done.isActive()) {
+                                return;
                             }
+                            const scene = await eval(scriptCode);
+                            processLoadedScene(test, scene, done, referenceImage, compareFunction);
                         } catch (e) {
                             console.error(e);
                             failTest(done);
@@ -3196,6 +3171,7 @@ fragmentOutputs.color=color;
             setNativeValidationFrameTimerEnabled(false);
             done(status);
         };
+        finishTest.isActive = function () { return !finished; };
         const testInfo = "Running " + test.title;
         console.log(testInfo);
         TestUtils.setTitle(testInfo);
