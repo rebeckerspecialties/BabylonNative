@@ -17,6 +17,13 @@ endif()
 # --------------------------------------------------
 FetchContent_MakeAvailable_With_Message(arcana.cpp)
 
+# Keep standard-library includes explicit with newer libc++, including source overrides.
+execute_process(COMMAND ${CMAKE_COMMAND}
+    "-DPATCH_FILE=${CMAKE_CURRENT_LIST_DIR}/../Patches/arcana.cpp/0001-include-system-error.patch"
+    -P "${CMAKE_CURRENT_LIST_DIR}/../Patches/apply_patch_if_needed.cmake"
+    WORKING_DIRECTORY "${arcana.cpp_SOURCE_DIR}"
+    COMMAND_ERROR_IS_FATAL ANY)
+
 # --------------------------------------------------
 # arcore-android-sdk
 # --------------------------------------------------
@@ -270,6 +277,17 @@ if(ENABLE_SANITIZERS)
 endif()
 
 FetchContent_MakeAvailable_With_Message(JsRuntimeHost)
+
+execute_process(COMMAND ${CMAKE_COMMAND}
+    "-DPATCH_FILE=${CMAKE_CURRENT_LIST_DIR}/../Patches/JsRuntimeHost/0002-include-cstdlib.patch"
+    -P "${CMAKE_CURRENT_LIST_DIR}/../Patches/apply_patch_if_needed.cmake"
+    WORKING_DIRECTORY "${JsRuntimeHost_SOURCE_DIR}"
+    COMMAND_ERROR_IS_FATAL ANY)
+
+if(DEFINED _BABYLON_NATIVE_ENABLE_SANITIZERS_SAVED)
+    set(ENABLE_SANITIZERS "${_BABYLON_NATIVE_ENABLE_SANITIZERS_SAVED}" CACHE BOOL "Enable AddressSanitizer and UBSan" FORCE)
+    unset(_BABYLON_NATIVE_ENABLE_SANITIZERS_SAVED)
+endif()
 
 # Two JsRuntimeHost targets cannot be built without RTTI:
 #   v8inspector - includes asio, whose headers use typeid() unconditionally

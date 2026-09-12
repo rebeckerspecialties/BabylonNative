@@ -46,3 +46,17 @@ endif()
 
 set_property(TARGET NativeWebGPUAsyncTests PROPERTY FOLDER Plugins)
 source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${SOURCES})
+
+# Headless CTS host: the bundle supplies upstream fixtures, not a browser DOM.
+add_executable(NativeWebGPUCtsRunner "Source/CTS.cpp")
+set_property(TARGET NativeWebGPUCtsRunner PROPERTY UNITY_BUILD false)
+set_property(TARGET NativeWebGPUCtsRunner PROPERTY FOLDER Plugins)
+warnings_as_errors(NativeWebGPUCtsRunner)
+target_include_directories(NativeWebGPUCtsRunner PRIVATE
+    "${CMAKE_CURRENT_LIST_DIR}/../../../Core/GraphicsWgpu/InternalInclude")
+target_link_libraries(NativeWebGPUCtsRunner PRIVATE AppRuntime ScriptLoader Window NativeWebGPU)
+if(APPLE)
+    target_link_libraries(NativeWebGPUCtsRunner PRIVATE
+        ${APPKIT_FRAMEWORK} ${COREFOUNDATION_FRAMEWORK} ${FOUNDATION_FRAMEWORK}
+        ${METAL_FRAMEWORK} ${QUARTZCORE_FRAMEWORK})
+endif()

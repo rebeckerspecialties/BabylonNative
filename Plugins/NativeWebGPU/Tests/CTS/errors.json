@@ -1,0 +1,17 @@
+{
+  "queries": [
+    "webgpu:api,validation,error_scope:simple:errorType=\"validation\";*",
+    "webgpu:api,validation,error_scope:empty:*",
+    "webgpu:api,validation,error_scope:parent_scope:errorFilter=\"validation\";*",
+    "webgpu:api,validation,error_scope:current_scope:errorFilter=\"validation\";*",
+    "webgpu:api,validation,error_scope:balanced_siblings:*",
+    "webgpu:api,validation,error_scope:balanced_nesting:*",
+    "webgpu:api,operation,uncapturederror:iff_uncaptured:errorType=\"validation\";*",
+    "webgpu:api,operation,uncapturederror:onuncapturederror_order_wrt_addEventListener:*",
+    "webgpu:api,operation,device,lost:lost_on_destroy:*",
+    "webgpu:api,operation,device,lost:same_object:*",
+    "webgpu:api,validation,buffer,mapping:mapAsync,*",
+    "webgpu:api,validation,buffer,mapping:getMappedRange,*",
+    "webgpu:api,validation,buffer,mapping:unmap,*"
+  ]
+}

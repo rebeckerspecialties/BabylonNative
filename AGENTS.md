@@ -56,6 +56,31 @@ current evidence and exact revision boundaries.
 
 Validation harness lessons:
 
+- The replacement wgpu-native PRs are runtime #630 and dependent tests #631.
+  Both currently need maintainer Actions approval. Empty-pop/Internal-filter C
+  API fixes must remain a separate follow-up after both replacements pass CI.
+- NativeWebGPU CTS lives in `Plugins/NativeWebGPU/Tests/CTS/README.md`. The
+  original 25-case operation selection and the 75-case error/mapping selection
+  now pass natively on M4 Metal. Keep the packaged Dawn control's eight mapping
+  failures visible; no CTS assertions or screenshot thresholds were relaxed.
+- GPU validation is delivered through scopes/events, not synchronous JS throws.
+  Encoding must validate by `finish`, not only by `submit`. Async pipelines
+  reject `GPUPipelineError` without leaking into scopes or uncaptured events.
+- JS devices share one physical renderer. Preserve logical resource ownership
+  and never implement JS `device.destroy()` by destroying that physical device.
+- Never expose a returned mapped ArrayBuffer to JSC's native byte-pointer API
+  before detaching it. That pins the mapping and breaks `unmap` detachment.
+- Passing the JS CTS does not validate wgpu-native's C error scopes: direct
+  probes still abort on empty pop and the Internal filter. See the C API ledger.
+- Use the CTS `configure.mjs` sanitizer build instructions, including upstream
+  LLVM 23 on macOS 27. LLVM 21's ASan runtime deadlocks before main in dyld on
+  this host; AppleClang's sanitizer ABI does not match Rust's. Never count a
+  pre-main sanitizer failure as a CTS/device result. Rust instrumentation and
+  rebuilt std require the explicit `BABYLON_NATIVE_RUST_SANITIZERS` option.
+- Keep `ENABLE_SANITIZERS` restored after the temporary JsRuntimeHost override.
+  The shared Cargo build consumes only wgpu-native's rlib; do not re-enable
+  unused cdylib/staticlib outputs that try to link separate sanitizer runtimes.
+
 - Pair every WebGPU readiness render with `beginFrame`/`endFrame`, including
   exception cleanup. Omitting submission boundaries caused real device loss.
 - `ignoreAnimations` does not suppress render observers or GPU particles.

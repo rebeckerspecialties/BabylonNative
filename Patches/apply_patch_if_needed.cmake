@@ -4,7 +4,8 @@ endif()
 
 execute_process(
     COMMAND git apply --check --ignore-whitespace "${PATCH_FILE}"
-    RESULT_VARIABLE APPLY_CHECK_RESULT)
+    RESULT_VARIABLE APPLY_CHECK_RESULT
+    ERROR_VARIABLE APPLY_CHECK_ERROR)
 
 if(APPLY_CHECK_RESULT EQUAL 0)
     execute_process(
@@ -18,8 +19,9 @@ endif()
 
 execute_process(
     COMMAND git apply --reverse --check --ignore-whitespace "${PATCH_FILE}"
-    RESULT_VARIABLE REVERSE_CHECK_RESULT)
+    RESULT_VARIABLE REVERSE_CHECK_RESULT
+    ERROR_VARIABLE REVERSE_CHECK_ERROR)
 
 if(NOT REVERSE_CHECK_RESULT EQUAL 0)
-    message(FATAL_ERROR "${PATCH_FILE} neither applies cleanly nor appears to be already applied.")
+    message(FATAL_ERROR "${PATCH_FILE} neither applies cleanly nor appears to be already applied.\n${APPLY_CHECK_ERROR}\n${REVERSE_CHECK_ERROR}")
 endif()

@@ -1,0 +1,9 @@
+diff --git a/Source/Shared/arcana/threading/cancellation.h b/Source/Shared/arcana/threading/cancellation.h
+--- a/Source/Shared/arcana/threading/cancellation.h
++++ b/Source/Shared/arcana/threading/cancellation.h
+@@ -8,4 +8,5 @@
+ #include <cassert>
+ #include <memory>
+ #include <optional>
++#include <system_error>
+ #include <vector>

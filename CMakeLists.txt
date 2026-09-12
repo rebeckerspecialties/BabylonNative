@@ -379,18 +379,18 @@ if(BABYLON_NATIVE_WGPU_USE_UPSTREAM_NATIVE)
             PATTERN "target" EXCLUDE
             PATTERN ".local-wgpu" EXCLUDE)
         file(READ "${wgpu_native_rlib_SOURCE_DIR}/Cargo.toml" _wgpu_native_cargo_toml)
-        if(_wgpu_native_cargo_toml MATCHES "crate-type = \\[[^]]*\"rlib\"")
-            # This wgpu-native already exposes an rlib; nothing to patch.
-            set(_wgpu_native_cargo_toml_patched "${_wgpu_native_cargo_toml}")
-        else()
-            string(REPLACE
-                "crate-type = [\"cdylib\", \"staticlib\"]"
-                "crate-type = [\"rlib\"]"
-                _wgpu_native_cargo_toml_patched
-                "${_wgpu_native_cargo_toml}")
-            if(_wgpu_native_cargo_toml_patched STREQUAL _wgpu_native_cargo_toml)
-                message(FATAL_ERROR "Failed to patch wgpu-native Cargo.toml to expose rlib.")
-            endif()
+        # Only the rlib is consumed by our shared Rust graph. Building unused
+        # cdylib/staticlib outputs also tries to link a second sanitizer runtime.
+        string(REPLACE
+            "crate-type = [\"cdylib\", \"rlib\", \"staticlib\"]"
+            "crate-type = [\"rlib\"]"
+            _wgpu_native_cargo_toml_patched "${_wgpu_native_cargo_toml}")
+        string(REPLACE
+            "crate-type = [\"cdylib\", \"staticlib\"]"
+            "crate-type = [\"rlib\"]"
+            _wgpu_native_cargo_toml_patched "${_wgpu_native_cargo_toml_patched}")
+        if(NOT _wgpu_native_cargo_toml_patched MATCHES "crate-type = \\[\"rlib\"\\]")
+            message(FATAL_ERROR "Failed to restrict wgpu-native Cargo.toml to rlib.")
         endif()
         set(_wgpu_native_cargo_toml_after_crate_type "${_wgpu_native_cargo_toml_patched}")
         string(REPLACE

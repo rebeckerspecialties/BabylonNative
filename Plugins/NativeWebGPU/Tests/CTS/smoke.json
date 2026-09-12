@@ -1,0 +1,11 @@
+{
+  "ctsRevision": "32cc9f03ad14135b5f6f833dba83e7e80edc256f",
+  "queries": [
+    "webgpu:api,operation,compute,basic:memcpy:*",
+    "webgpu:api,operation,compute,basic:large_dispatch:dispatchSize=256;*",
+    "webgpu:api,operation,queue,writeBuffer:*",
+    "webgpu:api,operation,command_buffer,clearBuffer:*",
+    "webgpu:api,operation,command_buffer,copyBufferToBuffer:*",
+    "webgpu:api,operation,command_buffer,copyTextureToTexture:color_textures,non_compressed,non_array:srcFormat=\"rgba8unorm\";dstFormat=\"rgba8unorm\";dimension=\"2d\";*"
+  ]
+}

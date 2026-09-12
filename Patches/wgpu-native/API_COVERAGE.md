@@ -5,7 +5,9 @@
 [PR #617](https://github.com/gfx-rs/wgpu-native/pull/617) separates the expanded
 wgpu 30 feature exposure from the dependent testing work in
 [PR #594](https://github.com/gfx-rs/wgpu-native/pull/594). The replacements keep
-that split and preserve original author/email/date and source-commit ancestry.
+that split and preserve original author/email/date and source-commit ancestry:
+[runtime #630](https://github.com/gfx-rs/wgpu-native/pull/630) and
+[dependent tests #631](https://github.com/gfx-rs/wgpu-native/pull/631).
 The runtime is a general native WebGPU implementation built on wgpu-core, not
 a Babylon-specific rendering path. It exposes native extensions as well as
 the shared webgpu.h API; native extensions are not WebGPU-spec features.
@@ -103,10 +105,33 @@ standalone backend-unconfigure operation.
    dependency and calls are directly on wgpu-core. Running it unmodified would
    validate the core, not wgpu-native. Keep that useful core baseline separate.
 
+The [headless NativeWebGPU CTS runner](../../Plugins/NativeWebGPU/Tests/CTS/README.md)
+preserves this boundary. After fixing binding scopes, device loss/ownership,
+mapping and copy/write semantics, the original 25 cases / 544 subcases pass in
+both NativeWebGPU and the packaged Dawn Node/Metal control. An expanded error,
+event, loss and mapping selection passes 75 cases / 370 subcases natively.
+The packaged Dawn control fails eight of those cases on mapping rejection
+timing/validation. No upstream CTS assertions were changed. These are native
+binding/core results, not C ABI CTS coverage or complete conformance.
+
+Direct C probes on the integrated library additionally reproduce two errors:
+`wgpuDevicePopErrorScope` on an empty stack aborts (`scopes.pop().unwrap()`),
+and `wgpuDevicePushErrorScope(Internal)` aborts (`invalid error filter`). A
+balanced validation-scope control passes. Logs are under
+`build_wgpu_cts/c-api-error-contracts/`; reproduce with the added modes in
+`build_wgpu_pr_stack/webgpu-contract-probe.cpp`. The feature-only source has
+not been changed to mask these failures. Include both in future error/future
+contract work, with subprocess tests for aborts and callback reentrancy coverage.
+
 Local reproducible diagnostics and ledgers live under `build_wgpu_pr_stack`:
 `webgpu-contract-probe.cpp`, `webgpu-contract-validation/`,
 `metal-timestamp-probe.mm`, `timestamp-validation/final/`,
 `probe-nextest-pipes.mjs`, `nextest-pipe-validation/`, and
 `post-merge-c-api-validation/`. These known-gap probes are separate from the
 passing dependent-test additions; do not silently skip them or describe them
-as passing. No replacement upstream PR has been created or pushed.
+as passing. Replacement branches were published on September 12, 2026 at
+`50a9cd11` (runtime) and `00b94e2d` (tests). These add only MSRV/CI toolchain
+alignment to the measured runtime, and the 13 check groups plus an all-features
+Rust 1.93 check pass. Upstream Actions currently requires maintainer approval;
+that is not a passing CI result. The two error-scope abort fixes and tests are
+deliberately gated on green replacement CI and belong in a separate follow-up.
