@@ -28273,6 +28273,66 @@ describe("RequestFile", function () {
   });
 });
 
+// data: URLs are resolved by JsRuntimeHost's UrlLib scheme resolver for every consumer, so the
+// same paths Babylon.js' asset and texture loaders take (RequestFile -> XMLHttpRequest) work
+// without the network transport. Fixtures: "hello data" as text, [1,2,3] as base64, a 1x1 red
+// RGBA PNG, and gzip("hello gzip", mtime 0) as base64.
+describe("DataUrls", function () {
+  this.timeout(0);
+  var pngDataUrl = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP4z8DwHwAFAAH/VscvDQAAAABJRU5ErkJggg==";
+
+  it("RequestFile loads a percent-encoded text data: URL", function (done) {
+    (0,_babylonjs_core__WEBPACK_IMPORTED_MODULE_4__.RequestFile)("data:text/plain,hello%20data", function (data) {
+      try {(0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(data).to.equal("hello data");done();} catch (error) {done(error);}
+    }, undefined, undefined, false, function (_, exception) {return done(exception !== null && exception !== void 0 ? exception : new Error("request failed"));});
+  });
+
+  it("RequestFile loads a base64 data: URL as an ArrayBuffer", function (done) {
+    (0,_babylonjs_core__WEBPACK_IMPORTED_MODULE_4__.RequestFile)("data:application/octet-stream;base64,AQID", function (data) {
+      try {(0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(Array.from(new Uint8Array(data))).to.deep.equal([1, 2, 3]);done();} catch (error) {done(error);}
+    }, undefined, undefined, true, function (_, exception) {return done(exception !== null && exception !== void 0 ? exception : new Error("request failed"));});
+  });
+
+  it("Texture loads a PNG from a data: URL", function (done) {
+    var engine = new _babylonjs_core__WEBPACK_IMPORTED_MODULE_4__.NativeEngine();
+    var scene = new _babylonjs_core__WEBPACK_IMPORTED_MODULE_4__.Scene(engine);
+    scene.createDefaultCamera();
+    var texture = new _babylonjs_core__WEBPACK_IMPORTED_MODULE_4__.Texture(pngDataUrl, scene, undefined, undefined, undefined, function () {
+      try {
+        var size = texture.getSize();
+        (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(size.width).to.equal(1);
+        (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(size.height).to.equal(1);
+        (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(texture.isReady()).to.equal(true);
+        done();
+      } catch (error) {done(error);}
+    }, function (message, exception) {return done(exception !== null && exception !== void 0 ? exception : new Error(message !== null && message !== void 0 ? message : "texture failed to load"));});
+  });
+
+  it("a data: URL round-trips through Blob and an object URL into the asset loader", /*#__PURE__*/(0,_babel_runtime_helpers_asyncToGenerator__WEBPACK_IMPORTED_MODULE_0__["default"])(/*#__PURE__*/_babel_runtime_regenerator__WEBPACK_IMPORTED_MODULE_1___default().mark(function _callee() {var response, blob, objectUrl, bytes;return _babel_runtime_regenerator__WEBPACK_IMPORTED_MODULE_1___default().wrap(function (_context) {while (1) switch (_context.prev = _context.next) {case 0:_context.next = 1;return (
+            fetch("data:application/octet-stream;base64,AQID"));case 1:response = _context.sent;_context.next = 2;return (
+            response.blob());case 2:blob = _context.sent;
+          (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(blob.size).to.equal(3);
+          objectUrl = URL.createObjectURL(blob);_context.prev = 3;_context.next = 4;return (
+
+            new Promise(function (resolve, reject) {
+              (0,_babylonjs_core__WEBPACK_IMPORTED_MODULE_4__.RequestFile)(objectUrl, function (data) {return resolve(data);}, undefined, undefined, true, function (_, exception) {return reject(exception !== null && exception !== void 0 ? exception : new Error("request failed"));});
+            }));case 4:bytes = _context.sent;
+          (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(Array.from(new Uint8Array(bytes))).to.deep.equal([1, 2, 3]);case 5:_context.prev = 5;
+
+          URL.revokeObjectURL(objectUrl);return _context.finish(5);case 6:case "end":return _context.stop();}}, _callee, null, [[3,, 5, 6]]);}))
+
+  );
+
+  it("a base64 gzip data: URL streams through DecompressionStream", /*#__PURE__*/(0,_babel_runtime_helpers_asyncToGenerator__WEBPACK_IMPORTED_MODULE_0__["default"])(/*#__PURE__*/_babel_runtime_regenerator__WEBPACK_IMPORTED_MODULE_1___default().mark(function _callee2() {var response, decompressed, _t;return _babel_runtime_regenerator__WEBPACK_IMPORTED_MODULE_1___default().wrap(function (_context2) {while (1) switch (_context2.prev = _context2.next) {case 0:
+          if (typeof DecompressionStream !== "function") {
+            this.skip();
+          }_context2.next = 1;return (
+            fetch("data:application/gzip;base64,H4sIAAAAAAAC/8tIzcnJV0ivyiwAABlq0t8KAAAA"));case 1:response = _context2.sent;
+          decompressed = response.body.pipeThrough(new DecompressionStream("gzip"));_t =
+          chai__WEBPACK_IMPORTED_MODULE_3__.expect;_context2.next = 2;return new Response(decompressed).text();case 2:_t(_context2.sent).to.equal("hello gzip");case 3:case "end":return _context2.stop();}}, _callee2, this);}))
+  );
+});
+
 describe("ColorParsing", function () {
   (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(_native.Canvas.parseColor("")).to.equal(0);
   (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(_native.Canvas.parseColor("transparent")).to.equal(0);
@@ -28897,9 +28957,9 @@ describe("PostProcesses", function () {
 describe("NativeEncoding", function () {
   this.timeout(0);function
 
-  expectValidPNG(_x) {return _expectValidPNG.apply(this, arguments);}function _expectValidPNG() {_expectValidPNG = (0,_babel_runtime_helpers_asyncToGenerator__WEBPACK_IMPORTED_MODULE_0__["default"])(/*#__PURE__*/_babel_runtime_regenerator__WEBPACK_IMPORTED_MODULE_1___default().mark(function _callee3(blob) {var arrayBuffer, pngSignature;return _babel_runtime_regenerator__WEBPACK_IMPORTED_MODULE_1___default().wrap(function (_context3) {while (1) switch (_context3.prev = _context3.next) {case 0:
-            (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(blob).to.be.instanceOf(Blob);_context3.next = 1;return (
-              blob.arrayBuffer());case 1:arrayBuffer = _context3.sent;
+  expectValidPNG(_x) {return _expectValidPNG.apply(this, arguments);}function _expectValidPNG() {_expectValidPNG = (0,_babel_runtime_helpers_asyncToGenerator__WEBPACK_IMPORTED_MODULE_0__["default"])(/*#__PURE__*/_babel_runtime_regenerator__WEBPACK_IMPORTED_MODULE_1___default().mark(function _callee5(blob) {var arrayBuffer, pngSignature;return _babel_runtime_regenerator__WEBPACK_IMPORTED_MODULE_1___default().wrap(function (_context5) {while (1) switch (_context5.prev = _context5.next) {case 0:
+            (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(blob).to.be.instanceOf(Blob);_context5.next = 1;return (
+              blob.arrayBuffer());case 1:arrayBuffer = _context5.sent;
             (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(arrayBuffer.byteLength).to.be.greaterThan(0);
 
             pngSignature = new Uint8Array(arrayBuffer.slice(0, 4));
@@ -28907,23 +28967,23 @@ describe("NativeEncoding", function () {
             (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(pngSignature[1]).to.equal(80); // 'P'
             (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(pngSignature[2]).to.equal(78); // 'N'
             (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(pngSignature[3]).to.equal(71); // 'G'
-          case 2:case "end":return _context3.stop();}}, _callee3);}));return _expectValidPNG.apply(this, arguments);}
+          case 2:case "end":return _context5.stop();}}, _callee5);}));return _expectValidPNG.apply(this, arguments);}
 
-  it("should encode a PNG", /*#__PURE__*/(0,_babel_runtime_helpers_asyncToGenerator__WEBPACK_IMPORTED_MODULE_0__["default"])(/*#__PURE__*/_babel_runtime_regenerator__WEBPACK_IMPORTED_MODULE_1___default().mark(function _callee() {var pixelData, result;return _babel_runtime_regenerator__WEBPACK_IMPORTED_MODULE_1___default().wrap(function (_context) {while (1) switch (_context.prev = _context.next) {case 0:
-          pixelData = new Uint8Array(4).fill(255);_context.next = 1;return (
-            _native.EncodeImageAsync(pixelData, 1, 1, "image/png", false));case 1:result = _context.sent;_context.next = 2;return (
-            expectValidPNG(result));case 2:case "end":return _context.stop();}}, _callee);}))
+  it("should encode a PNG", /*#__PURE__*/(0,_babel_runtime_helpers_asyncToGenerator__WEBPACK_IMPORTED_MODULE_0__["default"])(/*#__PURE__*/_babel_runtime_regenerator__WEBPACK_IMPORTED_MODULE_1___default().mark(function _callee3() {var pixelData, result;return _babel_runtime_regenerator__WEBPACK_IMPORTED_MODULE_1___default().wrap(function (_context3) {while (1) switch (_context3.prev = _context3.next) {case 0:
+          pixelData = new Uint8Array(4).fill(255);_context3.next = 1;return (
+            _native.EncodeImageAsync(pixelData, 1, 1, "image/png", false));case 1:result = _context3.sent;_context3.next = 2;return (
+            expectValidPNG(result));case 2:case "end":return _context3.stop();}}, _callee3);}))
   );
 
-  it("should handle multiple concurrent encoding tasks", /*#__PURE__*/(0,_babel_runtime_helpers_asyncToGenerator__WEBPACK_IMPORTED_MODULE_0__["default"])(/*#__PURE__*/_babel_runtime_regenerator__WEBPACK_IMPORTED_MODULE_1___default().mark(function _callee2() {var pixelDatas, i, results;return _babel_runtime_regenerator__WEBPACK_IMPORTED_MODULE_1___default().wrap(function (_context2) {while (1) switch (_context2.prev = _context2.next) {case 0:
+  it("should handle multiple concurrent encoding tasks", /*#__PURE__*/(0,_babel_runtime_helpers_asyncToGenerator__WEBPACK_IMPORTED_MODULE_0__["default"])(/*#__PURE__*/_babel_runtime_regenerator__WEBPACK_IMPORTED_MODULE_1___default().mark(function _callee4() {var pixelDatas, i, results;return _babel_runtime_regenerator__WEBPACK_IMPORTED_MODULE_1___default().wrap(function (_context4) {while (1) switch (_context4.prev = _context4.next) {case 0:
           pixelDatas = [];
           for (i = 0; i < 10; i++) {
             pixelDatas.push(new Uint8Array(4).fill(255));
-          }_context2.next = 1;return (
+          }_context4.next = 1;return (
             Promise.all(pixelDatas.map(function (pixelData) {return (
                 _native.EncodeImageAsync(pixelData, 1, 1, "image/png", false));}
-            )));case 1:results = _context2.sent;_context2.next = 2;return (
-            Promise.all(results.map(function (b) {return expectValidPNG(b);})));case 2:case "end":return _context2.stop();}}, _callee2);}))
+            )));case 1:results = _context4.sent;_context4.next = 2;return (
+            Promise.all(results.map(function (b) {return expectValidPNG(b);})));case 2:case "end":return _context4.stop();}}, _callee4);}))
   );
 });
 
