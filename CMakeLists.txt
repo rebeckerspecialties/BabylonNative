@@ -314,8 +314,29 @@ if(BABYLON_NATIVE_LTO_BITCODE_STATIC_LIBS)
         message(FATAL_ERROR "BABYLON_NATIVE_LTO_BITCODE_STATIC_LIBS requires a Clang-compatible compiler.")
     endif()
 
-    add_compile_options($<$<COMPILE_LANGUAGE:C,CXX,OBJC,OBJCXX>:-flto=full>)
-    add_link_options(-flto=full)
+    # LTO mode for the native bitcode. On Linux the JavaScriptCore engine is Bun's build, whose
+    # bitcode archives are ThinLTO with LTO-unit splitting off; clang stamps every -flto=full
+    # translation unit with splitting ON regardless of -fno-split-lto-unit, and lld refuses a link
+    # whose modules disagree -- so ThinLTO is the only mode that can put Bun's JavaScriptCore, the
+    # Rust linker-plugin bitcode and our own translation units in one whole-program link there.
+    # Elsewhere (system JavaScriptCore on Apple) full LTO remains the default.
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        set(BABYLON_NATIVE_LTO_MODE_DEFAULT "thin")
+    else()
+        set(BABYLON_NATIVE_LTO_MODE_DEFAULT "full")
+    endif()
+    set(BABYLON_NATIVE_LTO_MODE "${BABYLON_NATIVE_LTO_MODE_DEFAULT}" CACHE STRING "LTO mode for native bitcode static libraries: thin or full")
+    set_property(CACHE BABYLON_NATIVE_LTO_MODE PROPERTY STRINGS thin full)
+    if(NOT BABYLON_NATIVE_LTO_MODE MATCHES "^(thin|full)$")
+        message(FATAL_ERROR "BABYLON_NATIVE_LTO_MODE must be 'thin' or 'full'; got '${BABYLON_NATIVE_LTO_MODE}'")
+    endif()
+    add_compile_options($<$<COMPILE_LANGUAGE:C,CXX,OBJC,OBJCXX>:-flto=${BABYLON_NATIVE_LTO_MODE}>)
+    add_link_options(-flto=${BABYLON_NATIVE_LTO_MODE})
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND BABYLON_NATIVE_LTO_MODE STREQUAL "thin")
+        # Let JsRuntimeHost link Bun's ThinLTO JavaScriptCore archives into the same LTO link. It
+        # enforces the LLVM 21 toolchain requirement (clang, lld, llvm-ar/ranlib) at configure time.
+        set(JSR_BUN_JSC_LTO ON CACHE BOOL "Link Bun's ThinLTO JavaScriptCore archives" FORCE)
+    endif()
 endif()
 
 # Hardwired for wgpu branch: these are not user-configurable until bgfx is fully removed.
