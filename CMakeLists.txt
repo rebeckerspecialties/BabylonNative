@@ -65,7 +65,7 @@ FetchContent_Declare(ios-cmake
     EXCLUDE_FROM_ALL)
 FetchContent_Declare(JsRuntimeHost
     GIT_REPOSITORY https://github.com/rebeckerspecialties/JsRuntimeHost.git
-    GIT_TAG c490defcd703c732c111debb5e6ba470502d2c77)
+    GIT_TAG 8d1e15413bc28557c39cc509c27e0937612bf54d
 FetchContent_Declare(libwebp
     GIT_REPOSITORY https://github.com/webmproject/libwebp.git
     GIT_TAG baff2c8980970f58e2aa88622c6575bdee2f876a
@@ -75,13 +75,10 @@ FetchContent_Declare(webgpu_headers
     URL_HASH SHA256=6754c6c2465c79a954f7c04c7890c9f00b7ecce8addbe01b5056e860ba3933e6
     EXCLUDE_FROM_ALL)
 # Keep the public wgpu 30 pin while the runtime/test PR split is validated.
-# The reviewed runtime-only delta is packaged locally; see Patches/wgpu-native.
+# takeover/parity carries the reviewed parity runtime upstream of this pin; no local patch is applied.
 FetchContent_Declare(wgpu_native
     GIT_REPOSITORY https://github.com/rebeckerspecialties/wgpu-native.git
-    GIT_TAG c8df6cb99795a4cab585355582ce53e8111c9c0d
-    PATCH_COMMAND ${CMAKE_COMMAND}
-        "-DPATCH_FILE=${CMAKE_CURRENT_LIST_DIR}/Patches/wgpu-native/0001-reviewed-parity-runtime.patch"
-        -P "${CMAKE_CURRENT_LIST_DIR}/Patches/apply_patch_if_needed.cmake"
+    GIT_TAG 50a9cd1179963f2b9d0a2caf640f52ddb5d00d30
     EXCLUDE_FROM_ALL)
 FetchContent_Declare(metal-cpp
     GIT_REPOSITORY https://github.com/bkaradzic/metal-cpp.git
@@ -317,8 +314,29 @@ if(BABYLON_NATIVE_LTO_BITCODE_STATIC_LIBS)
         message(FATAL_ERROR "BABYLON_NATIVE_LTO_BITCODE_STATIC_LIBS requires a Clang-compatible compiler.")
     endif()
 
-    add_compile_options($<$<COMPILE_LANGUAGE:C,CXX,OBJC,OBJCXX>:-flto=full>)
-    add_link_options(-flto=full)
+    # LTO mode for the native bitcode. On Linux the JavaScriptCore engine is Bun's build, whose
+    # bitcode archives are ThinLTO with LTO-unit splitting off; clang stamps every -flto=full
+    # translation unit with splitting ON regardless of -fno-split-lto-unit, and lld refuses a link
+    # whose modules disagree -- so ThinLTO is the only mode that can put Bun's JavaScriptCore, the
+    # Rust linker-plugin bitcode and our own translation units in one whole-program link there.
+    # Elsewhere (system JavaScriptCore on Apple) full LTO remains the default.
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        set(BABYLON_NATIVE_LTO_MODE_DEFAULT "thin")
+    else()
+        set(BABYLON_NATIVE_LTO_MODE_DEFAULT "full")
+    endif()
+    set(BABYLON_NATIVE_LTO_MODE "${BABYLON_NATIVE_LTO_MODE_DEFAULT}" CACHE STRING "LTO mode for native bitcode static libraries: thin or full")
+    set_property(CACHE BABYLON_NATIVE_LTO_MODE PROPERTY STRINGS thin full)
+    if(NOT BABYLON_NATIVE_LTO_MODE MATCHES "^(thin|full)$")
+        message(FATAL_ERROR "BABYLON_NATIVE_LTO_MODE must be 'thin' or 'full'; got '${BABYLON_NATIVE_LTO_MODE}'")
+    endif()
+    add_compile_options($<$<COMPILE_LANGUAGE:C,CXX,OBJC,OBJCXX>:-flto=${BABYLON_NATIVE_LTO_MODE}>)
+    add_link_options(-flto=${BABYLON_NATIVE_LTO_MODE})
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND BABYLON_NATIVE_LTO_MODE STREQUAL "thin")
+        # Let JsRuntimeHost link Bun's ThinLTO JavaScriptCore archives into the same LTO link. It
+        # enforces the LLVM 21 toolchain requirement (clang, lld, llvm-ar/ranlib) at configure time.
+        set(JSR_BUN_JSC_LTO ON CACHE BOOL "Link Bun's ThinLTO JavaScriptCore archives" FORCE)
+    endif()
 endif()
 
 # Hardwired for wgpu branch: these are not user-configurable until bgfx is fully removed.

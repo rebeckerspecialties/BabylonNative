@@ -17,7 +17,8 @@ import {
   ShaderMaterial,
   Scene,
   Vector2,
-  BlurPostProcess
+  BlurPostProcess,
+  Texture
 } from "@babylonjs/core";
 import { GradientMaterial } from "@babylonjs/materials";
 
@@ -39,6 +40,66 @@ describe("RequestFile", function () {
       RequestFile("noprotocol.gltf", () => {});
     }
     expect(requestFile).to.throw();
+  });
+});
+
+// data: URLs are resolved by JsRuntimeHost's UrlLib scheme resolver for every consumer, so the
+// same paths Babylon.js' asset and texture loaders take (RequestFile -> XMLHttpRequest) work
+// without the network transport. Fixtures: "hello data" as text, [1,2,3] as base64, a 1x1 red
+// RGBA PNG, and gzip("hello gzip", mtime 0) as base64.
+describe("DataUrls", function () {
+  this.timeout(0);
+  const pngDataUrl = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP4z8DwHwAFAAH/VscvDQAAAABJRU5ErkJggg==";
+
+  it("RequestFile loads a percent-encoded text data: URL", function (done) {
+    RequestFile("data:text/plain,hello%20data", (data) => {
+      try { expect(data).to.equal("hello data"); done(); } catch (error) { done(error); }
+    }, undefined, undefined, false, (_, exception) => done(exception ?? new Error("request failed")));
+  });
+
+  it("RequestFile loads a base64 data: URL as an ArrayBuffer", function (done) {
+    RequestFile("data:application/octet-stream;base64,AQID", (data) => {
+      try { expect(Array.from(new Uint8Array(data as ArrayBuffer))).to.deep.equal([1, 2, 3]); done(); } catch (error) { done(error); }
+    }, undefined, undefined, true, (_, exception) => done(exception ?? new Error("request failed")));
+  });
+
+  it("Texture loads a PNG from a data: URL", function (done) {
+    const engine = new NativeEngine();
+    const scene = new Scene(engine);
+    scene.createDefaultCamera();
+    const texture = new Texture(pngDataUrl, scene, undefined, undefined, undefined, () => {
+      try {
+        const size = texture.getSize();
+        expect(size.width).to.equal(1);
+        expect(size.height).to.equal(1);
+        expect(texture.isReady()).to.equal(true);
+        done();
+      } catch (error) { done(error); }
+    }, (message, exception) => done(exception ?? new Error(message ?? "texture failed to load")));
+  });
+
+  it("a data: URL round-trips through Blob and an object URL into the asset loader", async function () {
+    const response = await fetch("data:application/octet-stream;base64,AQID");
+    const blob = await response.blob();
+    expect(blob.size).to.equal(3);
+    const objectUrl = URL.createObjectURL(blob);
+    try {
+      const bytes = await new Promise<ArrayBuffer>((resolve, reject) => {
+        RequestFile(objectUrl, (data) => resolve(data as ArrayBuffer), undefined, undefined, true, (_, exception) => reject(exception ?? new Error("request failed")));
+      });
+      expect(Array.from(new Uint8Array(bytes))).to.deep.equal([1, 2, 3]);
+    } finally {
+      URL.revokeObjectURL(objectUrl);
+    }
+  });
+
+  it("a base64 gzip data: URL streams through DecompressionStream", async function () {
+    if (typeof DecompressionStream !== "function") {
+      this.skip();
+    }
+    const response = await fetch("data:application/gzip;base64,H4sIAAAAAAAC/8tIzcnJV0ivyiwAABlq0t8KAAAA");
+    const decompressed = response.body!.pipeThrough(new DecompressionStream("gzip"));
+    expect(await new Response(decompressed).text()).to.equal("hello gzip");
   });
 });
 
