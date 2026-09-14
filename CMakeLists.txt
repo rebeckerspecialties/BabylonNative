@@ -65,7 +65,7 @@ FetchContent_Declare(ios-cmake
     EXCLUDE_FROM_ALL)
 FetchContent_Declare(JsRuntimeHost
     GIT_REPOSITORY https://github.com/rebeckerspecialties/JsRuntimeHost.git
-    GIT_TAG dba2ba20ba4490ef89e80a017d36e0f70ba54400
+    GIT_TAG 8d1e15413bc28557c39cc509c27e0937612bf54d
 FetchContent_Declare(libwebp
     GIT_REPOSITORY https://github.com/webmproject/libwebp.git
     GIT_TAG baff2c8980970f58e2aa88622c6575bdee2f876a
