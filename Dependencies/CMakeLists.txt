@@ -369,7 +369,9 @@ if(BABYLON_NATIVE_PLUGIN_SHADERCOMPILER)
     else()
         set(SPIRV_CROSS_ENABLE_WEBMIN ON)
     endif()
-    if(NOT GRAPHICS_API STREQUAL "OpenGL")
+    # Vulkan's ShaderCompiler still uses the GLSL backend for reflection and
+    # binding rewrites even though its output is SPIR-V.
+    if(NOT GRAPHICS_API STREQUAL "OpenGL" AND NOT GRAPHICS_API STREQUAL "Vulkan")
         set(SPIRV_CROSS_ENABLE_GLSL OFF)
     endif()
     if(NOT GRAPHICS_API STREQUAL "Metal")
