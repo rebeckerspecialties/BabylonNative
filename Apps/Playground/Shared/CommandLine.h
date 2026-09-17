@@ -12,6 +12,9 @@ struct PlaygroundOptions
     bool ShowHelp = false;
     bool ListTests = false;
     bool Headless = false;
+    // Run JavaScriptCore without its JIT (JSC_useJIT=false before the runtime starts), so a desktop run
+    // shows the interpreter-only cost that iOS, visionOS, tvOS and watchOS third-party apps always pay.
+    bool JscInterpreterOnly = false;
     bool BreakOnFail = false;
     bool StopOnFirstFailure = false;
     bool GenerateReferences = false;

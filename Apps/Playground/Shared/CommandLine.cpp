@@ -160,6 +160,10 @@ namespace
             "                              Disables the JavaScript debugger listener.\n",
             [](PlaygroundOptions& o, std::string_view, std::string&) { o.Headless = true; }},
 
+        FlagSpec{"--jsc-interpreter-only", "", FlagKind::Boolean, "",
+            "Run JavaScriptCore without its JIT (like iOS/tvOS/visionOS/watchOS apps).", "",
+            [](PlaygroundOptions& o, std::string_view, std::string&) { o.JscInterpreterOnly = true; }},
+
         FlagSpec{"--break-on-fail", "", FlagKind::Boolean, "",
             "Trigger debugger break on a failing test.", "",
             [](PlaygroundOptions& o, std::string_view, std::string&) { o.BreakOnFail = true; }},
