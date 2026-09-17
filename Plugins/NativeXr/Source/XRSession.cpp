@@ -836,7 +836,10 @@ namespace Babylon
         {
             auto deferred{ Napi::Promise::Deferred::New(info.Env()) };
             m_xr->EndSessionAsync().then(m_runtimeScheduler, arcana::cancellation::none(),
-                [this, deferred, sessionPtr{ std::make_shared<Napi::ObjectReference>(Napi::Persistent(info.This().As<Napi::Object>())) }](const arcana::expected<void, std::exception_ptr>& result) {
+                [
+                    this,
+                    deferred,
+                    sessionPtr{ std::make_shared<Napi::ObjectReference>(Napi::Persistent(info.This().As<Napi::Object>())) }](const arcana::expected<void, std::exception_ptr>& result) {
                     (void)sessionPtr;
                     if (result.has_error())
                     {

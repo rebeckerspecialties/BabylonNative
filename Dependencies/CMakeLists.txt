@@ -278,12 +278,6 @@ endif()
 
 FetchContent_MakeAvailable_With_Message(JsRuntimeHost)
 
-execute_process(COMMAND ${CMAKE_COMMAND}
-    "-DPATCH_FILE=${CMAKE_CURRENT_LIST_DIR}/../Patches/JsRuntimeHost/0002-include-cstdlib.patch"
-    -P "${CMAKE_CURRENT_LIST_DIR}/../Patches/apply_patch_if_needed.cmake"
-    WORKING_DIRECTORY "${JsRuntimeHost_SOURCE_DIR}"
-    COMMAND_ERROR_IS_FATAL ANY)
-
 if(DEFINED _BABYLON_NATIVE_ENABLE_SANITIZERS_SAVED)
     set(ENABLE_SANITIZERS "${_BABYLON_NATIVE_ENABLE_SANITIZERS_SAVED}" CACHE BOOL "Enable AddressSanitizer and UBSan" FORCE)
     unset(_BABYLON_NATIVE_ENABLE_SANITIZERS_SAVED)
@@ -369,7 +363,9 @@ if(BABYLON_NATIVE_PLUGIN_SHADERCOMPILER)
     else()
         set(SPIRV_CROSS_ENABLE_WEBMIN ON)
     endif()
-    if(NOT GRAPHICS_API STREQUAL "OpenGL")
+    # Vulkan's ShaderCompiler still uses the GLSL backend for reflection and
+    # binding rewrites even though its output is SPIR-V.
+    if(NOT GRAPHICS_API STREQUAL "OpenGL" AND NOT GRAPHICS_API STREQUAL "Vulkan")
         set(SPIRV_CROSS_ENABLE_GLSL OFF)
     endif()
     if(NOT GRAPHICS_API STREQUAL "Metal")
