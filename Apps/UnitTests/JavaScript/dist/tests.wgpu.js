@@ -1227,6 +1227,40 @@
             expectPixel(await readCanvasPixel(radial, 8, 8, 4, 4), [0, 255, 0, 255], "radial gradient center stop");
             expectPixel(await readCanvasPixel(radial, 8, 8, 0, 0), [0, 0, 0, 255], "radial gradient outer stop");
         }],
+        ["CanvasGradient survives saved-state ownership and later mutation", async function () {
+            var canvas = new _native.Canvas();
+            canvas.width = 8;
+            canvas.height = 4;
+            var context = canvas.getContext("2d");
+            var gradient = context.createLinearGradient(0, 0, 8, 0);
+            gradient.addColorStop(0, "red");
+            gradient.addColorStop(1, "red");
+            context.fillStyle = gradient;
+            context.strokeStyle = gradient;
+            context.save();
+            context.fillStyle = "blue";
+            context.strokeStyle = "blue";
+            gradient = null;
+
+            // The saved drawing state is the only remaining owner during GC stress.
+            await Promise.resolve();
+            var pressure = [];
+            for (var i = 0; i < 1024; i++) {
+                pressure.push({ value: new Array(128).fill(i) });
+            }
+            expectEqual(pressure.length, 1024, "allocation pressure completes");
+            context.restore();
+            expectEqual(context.fillStyle, context.strokeStyle, "saved styles retain the same gradient object");
+            context.fillRect(0, 0, 8, 4);
+            expectPixel(await readCanvasPixel(canvas, 8, 4, 4, 2), [255, 0, 0, 255], "saved gradient remains drawable");
+
+            context.fillStyle.addColorStop(0.25, "lime");
+            context.fillStyle.addColorStop(0.75, "lime");
+            context.fillRect(0, 0, 8, 4);
+            expectPixel(await readCanvasPixel(canvas, 8, 4, 4, 2), [0, 255, 0, 255], "restored gradient remains live and mutable");
+            context.fillStyle = "blue";
+            context.strokeStyle = "blue";
+        }],
         ["Canvas 2D dashed strokes render and preserve drawing state", async function () {
             var canvas = new _native.Canvas();
             canvas.width = 12;
