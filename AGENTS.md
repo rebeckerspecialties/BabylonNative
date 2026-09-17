@@ -197,8 +197,25 @@ The `Fluid rendering particle system` screenshot test is native catalog index
 `348`. It is excluded from automatic runs, so force it explicitly:
 
 ```sh
-xcrun devicectl device process launch --device <COREDEVICE_ID> --terminate-existing --console com.rebeckerspecialties.BabylonNative.Playground --test-index 348 --include-excluded --once --save-results true
+xcrun devicectl device process launch --device <COREDEVICE_ID> --terminate-existing --console --environment-variables '{"NSUnbufferedIO":"YES"}' com.BabylonNative.Playground.iOS --headless --test-index 348 --include-excluded --once --save-results true
 ```
+
+Notes from the 2026-09-17 iPhone XS Max pass:
+
+- `--save-results` takes a value (`true`); a bare `--save-results` makes the parser
+  read the next flag as its value and print usage.
+- `--once` means *run only the first matching test*. For several scenes pass a
+  comma list to `--test-index` (or repeated `--test`) and omit `--once`; the app
+  stays alive after `Run complete`, so terminate `devicectl` yourself.
+- The app's stdout is block-buffered under `--console`, so nothing appears until
+  it exits; `NSUnbufferedIO=YES` makes the validation log stream live.
+- The fork's bundle id here is `com.BabylonNative.Playground.iOS` (team `4GWK4YU2PW`).
+- A launch that prints nothing at all was the missing `UIMainStoryboardFile` /
+  `UILaunchStoryboardName` keys (fixed in `Apps/Playground/iOS/Info.plist`); the
+  quickest diagnosis is `lldb --batch -o "device select <id>" -o "device process attach --pid <pid>"`
+  with a script that waits for the stopped state and dumps `thread backtrace all`.
+- CMake copies the iOS `Info.plist` at generate time: re-run `cmake -S <source> -B integration-build-ios`
+  after editing it, before `xcodebuild`.
 
 Do not insert a standalone `--` before the Playground flags in that
 `devicectl` command. The Playground parser treats `--` as end-of-options and
