@@ -2,8 +2,12 @@
 
 This directory contains the local Babylon.js source patches needed for
 NativeWebGPU and NativeXR portal validation in this BabylonNative branch.
-The stack is maintained against the Babylon.js `9.22.1` release used by this
-branch.
+The stack is maintained against the Babylon.js `9.26.0` release used by this
+branch (`Apps/package.json` pins every Babylon.js package to that version).
+The validation catalog runs on the published npm bundles, which do not carry
+these patches; the stack only applies to a source checkout
+(`npm run patch:babylonjs:check` / `patch:babylonjs:apply`, sibling `../Babylon.js`
+or `BABYLON_JS_DIR`), and it was verified to apply cleanly to the `9.26.0` tag.
 
 The patches are source-oriented on purpose. Avoid patching generated UMD files
 such as `Apps/node_modules/babylonjs/babylon.max.js`; those diffs are large,
