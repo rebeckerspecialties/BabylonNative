@@ -131,10 +131,19 @@ namespace Babylon::Polyfills::Internal
         JsRuntime::NativeObject::GetFromJavaScript(env).Set(JS_CANVAS_GRADIENT_CONSTRUCTOR_NAME, func);
     }
 
+    bool CanvasGradient::IsInstance(Napi::Env env, const Napi::Value& value)
+    {
+        if (!value.IsObject())
+        {
+            return false;
+        }
+
+        const auto constructor = JsRuntime::NativeObject::GetFromJavaScript(env).Get(JS_CANVAS_GRADIENT_CONSTRUCTOR_NAME);
+        return constructor.IsFunction() && value.As<Napi::Object>().InstanceOf(constructor.As<Napi::Function>());
+    }
+
     Napi::Object CanvasGradient::CreateLinear(Napi::Env env, const std::shared_ptr<NVGcontext*>& context, float x0, float y0, float x1, float y1)
     {
-        Napi::HandleScope scope{ env };
-
         auto func = JsRuntime::NativeObject::GetFromJavaScript(env).Get(JS_CANVAS_GRADIENT_CONSTRUCTOR_NAME).As<Napi::Function>();
         auto gradientValue = func.New({ Napi::Value::From(env, x0), Napi::Value::From(env, y0), Napi::Value::From(env, x1), Napi::Value::From(env, y1) });
         CanvasGradient::Unwrap(gradientValue)->context = context;
@@ -143,8 +152,6 @@ namespace Babylon::Polyfills::Internal
 
     Napi::Object CanvasGradient::CreateRadial(Napi::Env env, const std::shared_ptr<NVGcontext*>& context, float x0, float y0, float r0, float x1, float y1, float r1)
     {
-        Napi::HandleScope scope{ env };
-
         auto func = JsRuntime::NativeObject::GetFromJavaScript(env).Get(JS_CANVAS_GRADIENT_CONSTRUCTOR_NAME).As<Napi::Function>();
         auto gradientValue = func.New({ Napi::Value::From(env, x0), Napi::Value::From(env, y0), Napi::Value::From(env, x1), Napi::Value::From(env, y1), Napi::Value::From(env, r0), Napi::Value::From(env, r1) });
         CanvasGradient::Unwrap(gradientValue)->context = context;
