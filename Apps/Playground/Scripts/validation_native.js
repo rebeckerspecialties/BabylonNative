@@ -1065,26 +1065,8 @@
         // captured here, before the retry wrapper below is installed.
         const originalLoadFile = BABYLON.Tools.LoadFile;
 
-        globalThis.createImageBitmap = function (source, options) {
-            if (typeof Blob !== "undefined" && source instanceof Blob) {
-                return blobToArrayBuffer(source).then(function (buffer) {
-                    return imageFromArrayBuffer(buffer, source.type);
-                });
-            }
-            if (source instanceof ArrayBuffer || ArrayBuffer.isView(source)) {
-                return imageFromArrayBuffer(source);
-            }
-            if (source && typeof source._getNativeImageData === "function") {
-                return Promise.resolve(source);
-            }
-            if (source && typeof source.getCanvasTexture === "function") {
-                return Promise.resolve(source);
-            }
-            if (source && typeof source.src === "string") {
-                return imageFromDataUrl(source.src);
-            }
-            return Promise.reject(new Error("Unsupported createImageBitmap source for validation."));
-        };
+        // createImageBitmap comes from the runtime's Canvas polyfill (it accepts Blob, ArrayBuffer,
+        // typed-array, ImageData, canvas and image sources); the harness no longer replaces it.
 
         function loadImageWithNativeCanvas(source, onLoad, onError, offlineProvider, mimeType, imageBitmapOptions, engine) {
             function reportError(message, error) {
