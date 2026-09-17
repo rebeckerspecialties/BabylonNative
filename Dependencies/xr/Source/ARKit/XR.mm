@@ -26,6 +26,13 @@
 @end
 
 namespace {
+    using ImageTrackingData = std::shared_ptr<const std::vector<uint8_t>>;
+
+    void ReleaseImageTrackingData(void* info, const void*, size_t)
+    {
+        delete static_cast<ImageTrackingData*>(info);
+    }
+
     typedef struct {
         vector_float2 position;
         vector_float2 uv;
@@ -1790,7 +1797,16 @@ namespace xr {
                 const size_t pixelStride{request.stride / request.width};
                 const size_t bitsPerComponent{static_cast<size_t>(pixelStride == 2 || pixelStride == 6 || pixelStride == 8 ? 16 : 8)};
                 const CGColorSpaceRef colorSpace{pixelStride > 2 ? CGColorSpaceCreateDeviceRGB() : CGColorSpaceCreateDeviceGray()};
-                const CGDataProviderRef provider{CGDataProviderCreateWithData(nil, request.data, imageBytes, nil)};
+                auto providerData{std::make_unique<ImageTrackingData>(request.data)};
+                const CGDataProviderRef provider{CGDataProviderCreateWithData(
+                    providerData.get(),
+                    request.data->data(),
+                    imageBytes,
+                    ReleaseImageTrackingData)};
+                if (provider != nil)
+                {
+                    providerData.release();
+                }
                 const CGImageRef image{
                     CGImageCreate(
                        request.width,
