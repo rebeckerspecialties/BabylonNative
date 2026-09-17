@@ -1,5 +1,6 @@
 #include <Babylon/Plugins/NativeWebGPU.h>
 #include <Babylon/JsRuntime.h>
+#include <Babylon/JsRuntimeScheduler.h>
 #include <Babylon/Graphics/WgpuInterop.h>
 
 #include <napi/napi.h>
@@ -216,13 +217,13 @@ namespace Babylon::Plugins::NativeWebGPU
 
         struct DeviceRegistry final : std::enable_shared_from_this<DeviceRegistry>
         {
-            Babylon::JsRuntime& Runtime;
+            Babylon::JsRuntimeScheduler Scheduler;
             std::unordered_map<uint64_t, std::weak_ptr<NativeDeviceState>> Devices{};
             std::weak_ptr<DeviceRegistry> WeakSelf{};
             std::atomic_bool Stopped{};
             std::atomic_bool WakePending{};
 
-            explicit DeviceRegistry(Babylon::JsRuntime& runtime) : Runtime{runtime} {}
+            explicit DeviceRegistry(Babylon::JsRuntime& runtime) : Scheduler{runtime} {}
 
             std::optional<GpuError> Drain(Napi::Env env, uint64_t suppressDevice = 0)
             {
@@ -270,7 +271,7 @@ namespace Babylon::Plugins::NativeWebGPU
                 if (!registry || registry->Stopped || registry->WakePending.exchange(true)) return;
                 try
                 {
-                    registry->Runtime.Dispatch([registry](Napi::Env env) {
+                    registry->Scheduler([registry](Napi::Env env) {
                         registry->WakePending = false;
                         if (!registry->Stopped) registry->Drain(env);
                     });
@@ -1796,13 +1797,13 @@ namespace Babylon::Plugins::NativeWebGPU
 
 #ifdef BABYLON_NATIVE_WEBGPU_TEST_HOOKS
         void ScheduleFuturePromiseSettlement(
-            Babylon::JsRuntime& runtime,
+            Babylon::JsRuntimeScheduler scheduler,
             std::shared_ptr<FuturePromiseState> state)
         {
-            runtime.Dispatch([&runtime, state = std::move(state)](Napi::Env callbackEnv) {
+            scheduler([scheduler, state = std::move(state)](Napi::Env callbackEnv) mutable {
                 if (state->Future.wait_for(std::chrono::milliseconds{0}) != std::future_status::ready)
                 {
-                    ScheduleFuturePromiseSettlement(runtime, state);
+                    ScheduleFuturePromiseSettlement(std::move(scheduler), state);
                     return;
                 }
 
@@ -1864,8 +1865,7 @@ namespace Babylon::Plugins::NativeWebGPU
             state->CallSiteStack = CaptureCallSiteStack(env, state->OperationName);
 
             auto promise = state->Deferred->Promise();
-            auto& runtime = Babylon::JsRuntime::GetFromJavaScript(env);
-            ScheduleFuturePromiseSettlement(runtime, state);
+            ScheduleFuturePromiseSettlement(Babylon::JsRuntimeScheduler{Babylon::JsRuntime::GetFromJavaScript(env)}, state);
 
             return promise;
         }
