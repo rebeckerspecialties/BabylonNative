@@ -12,15 +12,36 @@ namespace Babylon::Plugins
     inline xr::System::Session::ImageTrackingRequest CreateImageTrackingRequest(const Napi::Object& request)
     {
         const auto env{request.Env()};
-        const auto image{request.Get("image").As<Napi::Object>()};
-        const auto data{image.Get("data")};
+        auto image{request.Get("image").As<Napi::Object>()};
+        auto data{image.Get("data")};
+        if (!data.IsTypedArray())
+        {
+            const auto getNativeImageData{image.Get("_getNativeImageData")};
+            if (!getNativeImageData.IsFunction())
+            {
+                throw Napi::TypeError::New(env, "Tracked image pixel data is unavailable.");
+            }
+
+            const auto snapshot{getNativeImageData.As<Napi::Function>().Call(image, {})};
+            if (!snapshot.IsObject())
+            {
+                throw Napi::TypeError::New(env, "Tracked image pixel data is unavailable.");
+            }
+            image = snapshot.As<Napi::Object>();
+            data = image.Get("data");
+        }
         if (!data.IsTypedArray())
         {
             throw Napi::TypeError::New(env, "Tracked image data must be a byte typed array.");
         }
 
-        const auto readDimension = [&image, env](const char* name) {
-            const double value{image.Get(name).ToNumber().DoubleValue()};
+        const auto readDimension = [&image, env](const char* name, bool defaultToOne = false) {
+            const auto dimension{image.Get(name)};
+            if (defaultToOne && dimension.IsUndefined())
+            {
+                return uint32_t{1};
+            }
+            const double value{dimension.ToNumber().DoubleValue()};
             if (!std::isfinite(value) || value <= 0 || std::floor(value) != value || value > std::numeric_limits<int32_t>::max())
             {
                 throw Napi::RangeError::New(env, "Tracked image dimensions must be positive integers within the native image limits.");
@@ -29,7 +50,7 @@ namespace Babylon::Plugins
         };
         const auto width{readDimension("width")};
         const auto height{readDimension("height")};
-        const auto depth{readDimension("depth")};
+        const auto depth{readDimension("depth", true)};
         const float measuredWidth{request.Get("widthInMeters").ToNumber().FloatValue()};
         if (!std::isfinite(measuredWidth) || measuredWidth < 0)
         {

@@ -88,6 +88,89 @@ TEST(NativeXrImageTracking, AcceptsSupportedByteLayouts)
     });
 }
 
+TEST(NativeXrImageTracking, CanvasSnapshotUsesReceiverPayloadAndOwnsPixels)
+{
+    xr::System::Session::ImageTrackingRequest snapshot;
+    RunImageTest([&](Napi::Env env) {
+        auto bytes{Napi::Uint8Array::New(env, 24)};
+        for (size_t i = 0; i < bytes.ElementLength(); ++i)
+        {
+            bytes[i] = static_cast<uint8_t>(i);
+        }
+        auto view{Napi::Uint8Array::New(env, 16, bytes.ArrayBuffer(), 4)};
+        auto payload{MakeRequest(env, view).Get("image").As<Napi::Object>()};
+        payload.Delete("depth");
+        auto request{MakeRequest(env, env.Undefined(), 99, 77)};
+        auto image{request.Get("image").As<Napi::Object>()};
+        image.Set("depth", 5);
+        image.Set("snapshot", payload);
+        size_t calls{};
+        image.Set("_getNativeImageData", Napi::Function::New(env, [&calls](const Napi::CallbackInfo& info) {
+            ++calls;
+            return info.This().As<Napi::Object>().Get("snapshot");
+        }));
+
+        snapshot = Babylon::Plugins::CreateImageTrackingRequest(request);
+        EXPECT_EQ(calls, 1u);
+        EXPECT_EQ(snapshot.width, 2u);
+        EXPECT_EQ(snapshot.height, 2u);
+        EXPECT_EQ(snapshot.depth, 1u);
+        EXPECT_EQ(snapshot.stride, 8u);
+        bytes[4] = 255;
+        image.Delete("snapshot");
+    });
+
+    ASSERT_EQ(snapshot.data->size(), 16u);
+    for (size_t i = 0; i < snapshot.data->size(); ++i)
+    {
+        EXPECT_EQ((*snapshot.data)[i], i + 4);
+    }
+}
+
+TEST(NativeXrImageTracking, DirectPixelsTakePrecedenceOverSnapshotAdapter)
+{
+    RunImageTest([](Napi::Env env) {
+        auto request{MakeRequest(env, Napi::Uint8Array::New(env, 16))};
+        auto image{request.Get("image").As<Napi::Object>()};
+        image.Delete("depth");
+        image.Set("_getNativeImageData", Napi::Function::New(env, [](const Napi::CallbackInfo& info) -> Napi::Value {
+            throw Napi::Error::New(info.Env(), "Unexpected snapshot call.");
+        }));
+        EXPECT_EQ(Babylon::Plugins::CreateImageTrackingRequest(request).depth, 1u);
+    });
+}
+
+TEST(NativeXrImageTracking, RejectsUnavailableOrMalformedCanvasSnapshots)
+{
+    RunImageTest([](Napi::Env env) {
+        auto request{MakeRequest(env, env.Undefined())};
+        auto image{request.Get("image").As<Napi::Object>()};
+        EXPECT_THROW(Babylon::Plugins::CreateImageTrackingRequest(request), Napi::Error);
+        image.Set("_getNativeImageData", Napi::Function::New(env, [](const Napi::CallbackInfo& info) {
+            return info.This().As<Napi::Object>().Get("snapshot");
+        }));
+        const std::vector<Napi::Value> invalidSnapshots{
+            env.Undefined(), env.Null(), Napi::Number::New(env, 1), Napi::Object::New(env),
+            MakeRequest(env, Napi::Uint16Array::New(env, 8)).Get("image"),
+            MakeRequest(env, Napi::Uint8Array::New(env, 16), 0, 2).Get("image"),
+            MakeRequest(env, Napi::Uint8Array::New(env, 20)).Get("image")};
+        for (const auto& value : invalidSnapshots)
+        {
+            image.Set("snapshot", value);
+            EXPECT_THROW(Babylon::Plugins::CreateImageTrackingRequest(request), Napi::Error);
+        }
+
+        auto payload{MakeRequest(env, Napi::Uint8Array::New(env, 16)).Get("image").As<Napi::Object>()};
+        payload.Set("depth", 0);
+        image.Set("snapshot", payload);
+        EXPECT_THROW(Babylon::Plugins::CreateImageTrackingRequest(request), Napi::Error);
+        image.Set("_getNativeImageData", Napi::Function::New(env, [](const Napi::CallbackInfo& info) -> Napi::Value {
+            throw Napi::Error::New(info.Env(), "Snapshot failed.");
+        }));
+        EXPECT_THROW(Babylon::Plugins::CreateImageTrackingRequest(request), Napi::Error);
+    });
+}
+
 TEST(NativeXrImageTracking, RejectsInvalidDimensionsAndPhysicalWidth)
 {
     RunImageTest([](Napi::Env env) {
