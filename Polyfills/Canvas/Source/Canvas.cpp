@@ -6,8 +6,15 @@
 #include <napi/pointer.h>
 #include <cassert>
 #include <cstring>
+#include <string>
+#include <vector>
 #include "Colors.h"
 #include "Gradient.h"
+#include "Font.h"
+#include <basen.hpp>
+#include <bimg/encode.h>
+#include <bx/allocator.h>
+#include <bx/readerwriter.h>
 
 namespace
 {
@@ -32,6 +39,7 @@ namespace Babylon::Polyfills::Internal
                 InstanceAccessor("height", &NativeCanvas::GetHeight, &NativeCanvas::SetHeight),
                 InstanceMethod("getContext", &NativeCanvas::GetContext),
                 InstanceMethod("getCanvasTexture", &NativeCanvas::GetCanvasTexture),
+                InstanceMethod("toDataURL", &NativeCanvas::ToDataURL),
                 InstanceMethod("dispose", &NativeCanvas::Dispose),
                 InstanceMethod("remove", &NativeCanvas::Remove),
                 StaticMethod("parseColor", &NativeCanvas::ParseColor)});
@@ -48,6 +56,13 @@ namespace Babylon::Polyfills::Internal
 
     NativeCanvas::~NativeCanvas()
     {
+        // Canvas and Context form a JS cycle; finalizer order is not guaranteed.
+        // Clear the reverse pointer first so Context::~Context cannot touch us.
+        if (m_context != nullptr)
+        {
+            m_context->DetachCanvas();
+            m_context = nullptr;
+        }
         Dispose();
     }
 
@@ -63,22 +78,29 @@ namespace Babylon::Polyfills::Internal
 
     void NativeCanvas::LoadTTF(const Napi::CallbackInfo& info)
     {
+        LoadTTFCore(info, "Canvas.loadTTF");
+    }
+
+    void NativeCanvas::LoadTTFCore(const Napi::CallbackInfo& info, const char* methodName)
+    {
+        if (info.Length() < 1 || !info[0].IsString())
+        {
+            throw Napi::TypeError::New(info.Env(), std::string{methodName} + " expects the font name as a string in argument 1.");
+        }
+
         // don't allow same font to be loaded more than once
         // why? because Context doesn't update nvgCreateFontMem when old fontBuffer released
         auto fontName = info[0].As<Napi::String>().Utf8Value();
         if (fontsInfos.find(fontName) == fontsInfos.end())
         {
-            const auto buffer = info[1].As<Napi::ArrayBuffer>();
-            std::vector<uint8_t> fontBuffer(buffer.ByteLength());
-            memcpy(fontBuffer.data(), (uint8_t*)buffer.Data(), buffer.ByteLength());
-            fontsInfos[fontName] = std::move(fontBuffer);
+            fontsInfos[fontName] = GetFontDataArgument(info, 1, methodName);
         }
     }
 
     // @deprecated: LoadTTFAsync is always synchronous, use LoadTTF instead
     Napi::Value NativeCanvas::LoadTTFAsync(const Napi::CallbackInfo& info)
     {
-        LoadTTF(info);
+        LoadTTFCore(info, "Canvas.loadTTFAsync");
 
         auto deferred{Napi::Promise::Deferred::New(info.Env())};
         deferred.Resolve(info.Env().Undefined());
@@ -95,6 +117,10 @@ namespace Babylon::Polyfills::Internal
         {
             context = Context::CreateInstance(info.Env(), info.This());
             thisObj.Set(contextPropertyName, context);
+            if (context.IsObject())
+            {
+                m_context = Context::Unwrap(context.As<Napi::Object>());
+            }
         }
 
         return context;
@@ -154,7 +180,7 @@ namespace Babylon::Polyfills::Internal
         bool needClear = m_clear;
         m_clear = false;
 
-        if (m_dirty)
+        if (m_dirty || !m_frameBuffer)
         {
             // make sure render targets are filled with 0 : https://registry.khronos.org/webgl/specs/latest/1.0/#TEXIMAGE2D
             const bgfx::Memory* mem = bgfx::alloc(static_cast<uint32_t>(m_width) * static_cast<uint32_t>(m_height) * 4);
@@ -214,11 +240,48 @@ namespace Babylon::Polyfills::Internal
             m_texture = std::make_unique<Graphics::Texture>(m_graphicsContext);
         }
 
-        m_texture->Attach(bgfx::getTexture(m_frameBuffer->Handle()), false, m_width, m_height, false, 1, bgfx::TextureFormat::RGBA8, BGFX_TEXTURE_RT);
+        m_texture->Attach(bgfx::getTexture(m_frameBuffer->Handle()), m_width, m_height, false, 1, bgfx::TextureFormat::RGBA8, BGFX_TEXTURE_RT);
         // Hand the blit view id reserved during the preceding Context::Flush to the texture so
         // NativeEngine::CopyTexture blits on a view ordered before the consuming layer.
-        m_texture->BlitViewId(m_blitViewId);
+        m_texture->BlitViewId(m_blitViewId, m_blitViewIdGeneration);
         return Napi::Pointer<Graphics::Texture>::Create(info.Env(), m_texture.get());
+    }
+
+    Napi::Value NativeCanvas::ToDataURL(const Napi::CallbackInfo& info)
+    {
+        // PNG is also the Canvas fallback for empty or unsupported media types.
+        const uint32_t width = m_width;
+        const uint32_t height = m_height;
+        std::vector<uint8_t> rgba(static_cast<size_t>(width) * height * 4, 0);
+        if (m_context != nullptr && width > 0 && height > 0)
+        {
+            try
+            {
+                // GPU readback after flush so NanoVG content (fillRect/text/paths) is included.
+                rgba = m_context->CaptureRGBA();
+            }
+            catch (const std::exception& ex)
+            {
+                throw Napi::Error::New(info.Env(), ex.what());
+            }
+        }
+
+        bx::MemoryBlock memoryBlock{&Graphics::DeviceContext::GetDefaultAllocator()};
+        bx::MemoryWriter writer{&memoryBlock};
+        bx::Error err{};
+        bimg::imageWritePng(&writer, width, height, width * 4, rgba.data(), bimg::TextureFormat::RGBA8, false, &err);
+        // MemoryBlock reports allocation capacity, not the number of encoded bytes.
+        const size_t pngSize = static_cast<size_t>(bx::getSize(&writer));
+        if (!err.isOk() || pngSize == 0)
+        {
+            throw Napi::Error::New(info.Env(), "Canvas.toDataURL: PNG encode failed.");
+        }
+
+        // more(0) returns the buffer start without growing (see bx::MemoryBlock).
+        const char* pngBytes = static_cast<const char*>(memoryBlock.more(0));
+        std::string encoded;
+        bn::encode_b64(pngBytes, pngBytes + pngSize, std::back_inserter(encoded));
+        return Napi::String::New(info.Env(), "data:image/png;base64," + encoded);
     }
 
     Napi::Value NativeCanvas::ParseColor(const Napi::CallbackInfo& info)

@@ -28245,8 +28245,10 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony import */ var mocha__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! mocha */ "../../node_modules/mocha/browser-entry.js");
 /* harmony import */ var mocha__WEBPACK_IMPORTED_MODULE_2___default = /*#__PURE__*/__webpack_require__.n(mocha__WEBPACK_IMPORTED_MODULE_2__);
 /* harmony import */ var chai__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! chai */ "../../node_modules/chai/index.js");
-/* harmony import */ var _babylonjs_core__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(/*! @babylonjs/materials */ "@babylonjs/core");
-/* harmony import */ var _babylonjs_core__WEBPACK_IMPORTED_MODULE_4___default = /*#__PURE__*/__webpack_require__.n(_babylonjs_core__WEBPACK_IMPORTED_MODULE_4__);
+/* harmony import */ var buffer__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(/*! buffer */ "../../node_modules/buffer/index.js");
+/* harmony import */ var _babylonjs_core__WEBPACK_IMPORTED_MODULE_5__ = __webpack_require__(/*! @babylonjs/materials */ "@babylonjs/core");
+/* harmony import */ var _babylonjs_core__WEBPACK_IMPORTED_MODULE_5___default = /*#__PURE__*/__webpack_require__.n(_babylonjs_core__WEBPACK_IMPORTED_MODULE_5__);
+function _createForOfIteratorHelper(r, e) {var t = "undefined" != typeof Symbol && r[Symbol.iterator] || r["@@iterator"];if (!t) {if (Array.isArray(r) || (t = _unsupportedIterableToArray(r)) || e && r && "number" == typeof r.length) {t && (r = t);var _n = 0,F = function F() {};return { s: F, n: function n() {return _n >= r.length ? { done: !0 } : { done: !1, value: r[_n++] };}, e: function e(r) {throw r;}, f: F };}throw new TypeError("Invalid attempt to iterate non-iterable instance.\nIn order to be iterable, non-array objects must have a [Symbol.iterator]() method.");}var o,a = !0,u = !1;return { s: function s() {t = t.call(r);}, n: function n() {var r = t.next();return a = r.done, r;}, e: function e(r) {u = !0, o = r;}, f: function f() {try {a || null == t.return || t.return();} finally {if (u) throw o;}} };}function _unsupportedIterableToArray(r, a) {if (r) {if ("string" == typeof r) return _arrayLikeToArray(r, a);var t = {}.toString.call(r).slice(8, -1);return "Object" === t && r.constructor && (t = r.constructor.name), "Map" === t || "Set" === t ? Array.from(r) : "Arguments" === t || /^(?:Ui|I)nt(?:8|16|32)(?:Clamped)?Array$/.test(t) ? _arrayLikeToArray(r, a) : void 0;}}function _arrayLikeToArray(r, a) {(null == a || a > r.length) && (a = r.length);for (var e = 0, n = Array(a); e < a; e++) n[e] = r[e];return n;}
 
 
 
@@ -28263,11 +28265,12 @@ mocha__WEBPACK_IMPORTED_MODULE_2__.reporter("spec");
 
 
 
+
 describe("RequestFile", function () {
   this.timeout(0);
   it("should throw when requesting a URL with no protocol", function () {
     function requestFile() {
-      (0,_babylonjs_core__WEBPACK_IMPORTED_MODULE_4__.RequestFile)("noprotocol.gltf", function () {});
+      (0,_babylonjs_core__WEBPACK_IMPORTED_MODULE_5__.RequestFile)("noprotocol.gltf", function () {});
     }
     (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(requestFile).to.throw();
   });
@@ -28282,13 +28285,29 @@ describe("ColorParsing", function () {
   (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(_native.Canvas.parseColor("#12345678")).to.equal(0x78563412);
   (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(_native.Canvas.parseColor("snow")).to.equal(0xfffafaff);
   (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(_native.Canvas.parseColor("rgb(16,32,48)")).to.equal(0xff302010);
-  (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(_native.Canvas.parseColor("rgba(16,32,48,64)")).to.equal(0x40302010);
+  // Alpha is a 0-1 number (or a percentage) per CSS Color, so any value above
+  // 1 clamps to fully opaque. It is not a 0-255 channel like r/g/b.
+  (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(_native.Canvas.parseColor("rgba(16,32,48,64)")).to.equal(0xff302010);
   (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(_native.Canvas.parseColor("rgb(16,     32   ,  48   )")).to.equal(
     0xff302010
   );
   (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(
     _native.Canvas.parseColor("rgba(    16,     32   ,  48 , 64  )")
-  ).to.equal(0x40302010);
+  ).to.equal(0xff302010);
+  (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(_native.Canvas.parseColor("rgba(16,32,48,1)")).to.equal(0xff302010);
+  (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(_native.Canvas.parseColor("rgba(16,32,48,0)")).to.equal(0x00302010);
+  // Fractional and percentage alpha, whitespace-separated components and the
+  // "/ alpha" form all used to fall through to the "unable to parse" throw.
+  (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(_native.Canvas.parseColor("rgba(16,32,48,0.5)")).to.equal(0x80302010);
+  (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(_native.Canvas.parseColor("rgba(16 32 48 / 50%)")).to.equal(
+    0x80302010
+  );
+  (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(_native.Canvas.parseColor("rgb(16 32 48)")).to.equal(0xff302010);
+  (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(_native.Canvas.parseColor("rgb(100%,0%,0%)")).to.equal(0xff0000ff);
+  (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(_native.Canvas.parseColor("hsl(0,100%,50%)")).to.equal(0xff0000ff);
+  (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(_native.Canvas.parseColor("hsla(0,100%,50%,0.5)")).to.equal(
+    0x800000ff
+  );
 
   it("should throw", function () {
     function incorrectColor() {
@@ -28360,9 +28379,1004 @@ describe("ColorParsing", function () {
   });
 });
 
+describe("Canvas2D", function () {
+  // No-op renderers accept GPU commands but cannot produce pixels for readback.
+  var itWithGpu = hasGpuRendering ? it : it.skip;
+
+  function createContext() {
+    var canvas = new _native.Canvas();
+    canvas.width = 64;
+    canvas.height = 64;
+    return canvas.getContext("2d");
+  }
+
+  function createCanvas(width, height) {
+    var canvas = new _native.Canvas();
+    canvas.width = width;
+    canvas.height = height;
+    return { canvas: canvas, context: canvas.getContext("2d") };
+  }
+
+  function disposeCanvas(resource) {
+    resource.context.dispose();
+    resource.canvas.dispose();
+  }
+
+  function captureGpuPixels(canvas) {
+    return canvas.getContext("2d").getImageData(
+      0,
+      0,
+      canvas.width,
+      canvas.height
+    ).data;
+  }
+
+  function pixelAt(
+  pixels,
+  width,
+  x,
+  y)
+  {
+    var offset = (y * width + x) * 4;
+    return [
+    pixels[offset],
+    pixels[offset + 1],
+    pixels[offset + 2],
+    pixels[offset + 3]];
+
+  }
+
+  it("round-trips a string fillStyle and strokeStyle", function () {
+    var ctx = createContext();
+    ctx.fillStyle = "#ff0000";
+    ctx.strokeStyle = "#00ff00";
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(ctx.fillStyle).to.equal("#ff0000");
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(ctx.strokeStyle).to.equal("#00ff00");
+  });
+
+  it("accepts a CanvasGradient as fillStyle", function () {
+    var ctx = createContext();
+    var gradient = ctx.createLinearGradient(0, 0, 64, 64);
+    gradient.addColorStop(0, "red");
+    gradient.addColorStop(1, "blue");
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(function () {
+      ctx.fillStyle = gradient;
+    }).to.not.throw();
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(ctx.fillStyle).to.not.equal("#ff0000");
+  });
+
+  it("accepts a CanvasGradient as strokeStyle", function () {
+    // strokeStyle used to be string-only and threw "A string was expected",
+    // which broke every GUI control that strokes with a gradient (Line, Button border).
+    var ctx = createContext();
+    var gradient = ctx.createLinearGradient(0, 0, 64, 64);
+    gradient.addColorStop(0, "red");
+    gradient.addColorStop(1, "blue");
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(function () {
+      ctx.strokeStyle = gradient;
+    }).to.not.throw();
+  });
+
+  it("accepts a radial CanvasGradient defined by two independent circles", function () {
+    var ctx = createContext();
+    // Neither concentric nor r0 == 0: both circles have to be honored.
+    var gradient = ctx.createRadialGradient(10, 10, 5, 40, 32, 30);
+    gradient.addColorStop(0, "yellow");
+    gradient.addColorStop(0.5, "pink");
+    gradient.addColorStop(1, "green");
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(function () {
+      ctx.fillStyle = gradient;
+      ctx.strokeStyle = gradient;
+    }).to.not.throw();
+  });
+
+  it("restores a gradient strokeStyle across save/restore", function () {
+    var ctx = createContext();
+    var gradient = ctx.createLinearGradient(0, 0, 64, 64);
+    gradient.addColorStop(0, "red");
+    ctx.strokeStyle = "#0000ff";
+    ctx.save();
+    ctx.strokeStyle = gradient;
+    ctx.restore();
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(ctx.strokeStyle).to.equal("#0000ff");
+  });
+
+  it("restores the shadow attributes across save/restore", function () {
+    // These have no nanovg counterpart, so nvgRestore() never rewound them and a
+    // value assigned after save() survived restore().
+    var ctx = createContext();
+    ctx.shadowColor = "#00ff00";
+    ctx.shadowBlur = 1;
+    ctx.shadowOffsetX = 2;
+    ctx.shadowOffsetY = 3;
+    ctx.save();
+    ctx.shadowColor = "#ff0000";
+    ctx.shadowBlur = 40;
+    ctx.shadowOffsetX = 50;
+    ctx.shadowOffsetY = 60;
+    ctx.restore();
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(ctx.shadowColor).to.equal("#00ff00");
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(ctx.shadowBlur).to.equal(1);
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(ctx.shadowOffsetX).to.equal(2);
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(ctx.shadowOffsetY).to.equal(3);
+  });
+
+  it("restores the remaining drawing state across save/restore", function () {
+    // nvgRestore() rewinds nanovg's copy of these, but the wrapper kept its own
+    // mirror, so the getters reported the post-save() value forever after.
+    var ctx = createContext();
+    ctx.lineWidth = 1;
+    ctx.globalAlpha = 1;
+    ctx.lineCap = "butt";
+    ctx.lineJoin = "miter";
+    ctx.miterLimit = 10;
+    ctx.setLineDash([1, 2]);
+    ctx.save();
+    ctx.lineWidth = 9;
+    ctx.globalAlpha = 0.25;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "bevel";
+    ctx.miterLimit = 3;
+    ctx.setLineDash([7, 8, 9]);
+    ctx.restore();
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(ctx.lineWidth).to.equal(1);
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(ctx.globalAlpha).to.equal(1);
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(ctx.lineCap).to.equal("butt");
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(ctx.lineJoin).to.equal("miter");
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(ctx.miterLimit).to.equal(10);
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(ctx.getLineDash()).to.deep.equal([1, 2]);
+  });
+
+  it("reads back globalAlpha", function () {
+    // globalAlpha was registered with a nullptr getter, so it was write-only and
+    // reading it gave undefined. The value was never mirrored either, so the
+    // save/restore stack carried a field nothing could observe.
+    var ctx = createContext();
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(ctx.globalAlpha).to.equal(1);
+    ctx.globalAlpha = 0.5;
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(ctx.globalAlpha).to.equal(0.5);
+  });
+
+  it("ignores an out-of-range or non-finite globalAlpha", function () {
+    // The spec says values outside [0, 1] and non-finite values are ignored,
+    // leaving the previous value in place, rather than clamped or thrown.
+    var ctx = createContext();
+    ctx.globalAlpha = 0.5;
+    ctx.globalAlpha = -1;
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(ctx.globalAlpha).to.equal(0.5);
+    ctx.globalAlpha = 2;
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(ctx.globalAlpha).to.equal(0.5);
+    ctx.globalAlpha = Infinity;
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(ctx.globalAlpha).to.equal(0.5);
+    ctx.globalAlpha = NaN;
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(ctx.globalAlpha).to.equal(0.5);
+    ctx.globalAlpha = 0;
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(ctx.globalAlpha).to.equal(0);
+  });
+
+  it("reports the spec defaults on a fresh context", function () {
+    // These four mirror state nanovg also keeps, and nvgReset installs butt/miter/1/10.
+    // The C++ mirrors were value-initialized to ""/""/0/0 instead, so a fresh context
+    // reported a default it was not actually drawing with.
+    var ctx = createContext();
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(ctx.lineCap).to.equal("butt");
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(ctx.lineJoin).to.equal("miter");
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(ctx.lineWidth).to.equal(1);
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(ctx.miterLimit).to.equal(10);
+  });
+
+  it("keeps the previous dash list when a new one is rejected", function () {
+    // The list was cleared before validation, so a rejected argument -- which the
+    // spec says must leave the previous list untouched -- wiped it instead.
+    var ctx = createContext();
+    ctx.setLineDash([5, 10]);
+    ctx.setLineDash([-1]);
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(ctx.getLineDash()).to.deep.equal([5, 10]);
+    ctx.setLineDash([2, "x"]);
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(ctx.getLineDash()).to.deep.equal([5, 10]);
+    ctx.setLineDash([Number.NaN]);
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(ctx.getLineDash()).to.deep.equal([5, 10]);
+    // A valid list still replaces it, and an empty list still means "solid".
+    ctx.setLineDash([3, 4]);
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(ctx.getLineDash()).to.deep.equal([3, 4]);
+    ctx.setLineDash([]);
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(ctx.getLineDash()).to.deep.equal([]);
+  });
+
+  it("keeps a gradient assigned to fillStyle alive across a collection", function () {
+    var ctx = createContext();
+    var global = Function("return this")();
+
+    // Create and assign the gradient inside a scope that keeps no reference to it, so
+    // the only thing left pointing at it is whatever fillStyle stored. CanvasGradient is
+    // an ObjectWrap, so if the style does not root the JavaScript wrapper the finalizer
+    // deletes the native gradient and the next fill dereferences freed memory.
+    (function () {
+      var gradient = ctx.createLinearGradient(0, 0, 64, 0);
+      gradient.addColorStop(0, "red");
+      gradient.addColorStop(1, "blue");
+      gradient.tag = "kept";
+      ctx.fillStyle = gradient;
+    })();
+
+    // Not every engine the polyfill runs on exposes a collection hook; the assertions
+    // below are worth making either way.
+    if (typeof global.CollectGarbage === "function") {
+      global.CollectGarbage();
+    }
+
+    // The getter has to hand back the object that was assigned. The expando proves it is
+    // that same JavaScript object rather than a fresh wrapper.
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(ctx.fillStyle.tag).to.equal("kept");
+    // ...and the native gradient behind it has to still be there.
+    ctx.fillStyle.addColorStop(0.5, "green");
+    ctx.fillRect(0, 0, 64, 64);
+  });
+  it("keeps a gradient assigned to strokeStyle alive across a collection", function () {
+    var ctx = createContext();
+    var global = Function("return this")();
+
+    (function () {
+      var gradient = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
+      gradient.addColorStop(0, "red");
+      gradient.addColorStop(1, "blue");
+      gradient.tag = "kept";
+      ctx.strokeStyle = gradient;
+    })();
+
+    if (typeof global.CollectGarbage === "function") {
+      global.CollectGarbage();
+    }
+
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(ctx.strokeStyle.tag).to.equal("kept");
+    ctx.strokeStyle.addColorStop(0.5, "green");
+    ctx.strokeRect(0, 0, 64, 64);
+  });
+  it("keeps the previous dash list when the argument is not a list", function () {
+    // A present-but-rejected argument skipped the parse loop and then committed the
+    // empty temporary, so setLineDash("x") cleared the list where setLineDash([-1])
+    // correctly kept it. An absent argument still means "solid".
+    var ctx = createContext();
+    ctx.setLineDash([5, 10]);
+    ctx.setLineDash("x");
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(ctx.getLineDash()).to.deep.equal([5, 10]);
+    ctx.setLineDash(null);
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(ctx.getLineDash()).to.deep.equal([5, 10]);
+    ctx.setLineDash(7);
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(ctx.getLineDash()).to.deep.equal([5, 10]);
+    ctx.setLineDash();
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(ctx.getLineDash()).to.deep.equal([]);
+  });
+
+  it("restores font", function () {
+    // font was the one exposed attribute left out of the saved state. It is worse than
+    // the getter-only cases: the font id resolved here is what the text draw path binds,
+    // so the wrong face actually rendered after a restore().
+    var ctx = createContext();
+    ctx.font = "18px Arial";
+    // The getter reports a normalized serialization, so compare against the round-tripped
+    // value rather than the literal that was assigned.
+    var saved = ctx.font;
+    ctx.save();
+    ctx.font = "40px Times";
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(ctx.font).to.not.equal(saved);
+    ctx.restore();
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(ctx.font).to.equal(saved);
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(function () {
+      ctx.fillText("after restore", 0, 20);
+    }).to.not.throw();
+  });
+
+  it("ignores a fillStyle or strokeStyle that is neither a color string nor a gradient", function () {
+    // Both setters reached napi_unwrap for any object, so `ctx.strokeStyle = {}` unwrapped
+    // an object that was never wrapped and dereferenced whatever the slot held. Per spec
+    // an unusable value leaves the attribute unchanged.
+    var ctx = createContext();
+    ctx.fillStyle = "#ff0000";
+    ctx.strokeStyle = "#00ff00";
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(function () {
+      ctx.fillStyle = {};
+      ctx.strokeStyle = {};
+      ctx.fillStyle = [];
+      ctx.strokeStyle = function () {};
+    }).to.not.throw();
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(ctx.fillStyle).to.equal("#ff0000");
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(ctx.strokeStyle).to.equal("#00ff00");
+    // A real gradient is still accepted.
+    var gradient = ctx.createLinearGradient(0, 0, 64, 0);
+    gradient.addColorStop(0, "red");
+    gradient.addColorStop(1, "blue");
+    ctx.fillStyle = gradient;
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(ctx.fillStyle).to.not.equal("#ff0000");
+  });
+
+  it("accepts two color stops at the same offset", function () {
+    // Only checks that the insertion path accepts the duplicate offset the spec allows;
+    // std::map::insert() dropped it by returning {it, false} rather than throwing, so this
+    // does not by itself prove the stop survives. That needs a separate rendered-ramp assertion.
+    var ctx = createContext();
+    var gradient = ctx.createLinearGradient(0, 0, 64, 0);
+    gradient.addColorStop(0, "red");
+    gradient.addColorStop(0.5, "red");
+    gradient.addColorStop(0.5, "blue");
+    gradient.addColorStop(1, "blue");
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(function () {
+      ctx.fillStyle = gradient;
+      ctx.fillRect(0, 0, 64, 64);
+    }).to.not.throw();
+  });
+
+  // The three parsers below all used to reach std::stof/std::stoi with a value the regex
+  // admits but the target type cannot hold. The resulting std::out_of_range is not a
+  // Napi::Error, so it escaped the N-API callback and terminated the host process outright
+  // rather than surfacing as a JS exception. Reaching the assertion at all is the test.
+  it("survives an out-of-range rgb() component", function () {
+    var ctx = createContext();
+    var huge = "9".repeat(400);
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(function () {
+      ctx.fillStyle = "rgb(".concat(huge, ", 0, 0)");
+    }).to.not.throw();
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(function () {
+      ctx.fillStyle = "rgba(0, 0, 0, ".concat(huge, ")");
+    }).to.not.throw();
+  });
+
+  it("survives an out-of-range font size and weight", function () {
+    var ctx = createContext();
+    ctx.font = "18px Arial";
+    // The size regex accepts an exponent, so this parses but does not fit a float.
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(function () {
+      ctx.font = "18e999px Arial";
+    }).to.not.throw();
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(function () {
+      ctx.font = "".concat("9".repeat(400), " 18px Arial");
+    }).to.not.throw();
+    // An unparseable font is ignored, so the previous one stays in effect.
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(ctx.font).to.contain("18px");
+  });
+
+  it("survives an out-of-range letterSpacing", function () {
+    var ctx = createContext();
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(function () {
+      ctx.letterSpacing = "".concat("9".repeat(400), "px");
+    }).to.not.throw();
+  });
+
+  it("rejects a createImageData source whose dimensions are not valid extents", function () {
+    var ctx = createContext();
+    // The ImageData overload is duck-typed, so these never went through WebIDL's
+    // unsigned long conversion. A negative width used to wrap to 4294967295 and ask
+    // for a ~17 GB allocation instead of being rejected.
+    var bad = [
+    { width: -1, height: 1 },
+    { width: 1, height: -1 },
+    { width: 1.5, height: 1 },
+    { width: 5e9, height: 1 },
+    { width: Infinity, height: 1 }];
+
+    bad.forEach(function (source) {
+      (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(function () {
+        ctx.createImageData(source);
+      }, JSON.stringify(source)).to.throw();
+    });
+  });
+
+  it("creates image data from a valid source object", function () {
+    var ctx = createContext();
+    var data = ctx.createImageData({ width: 4, height: 3 });
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(data.width).to.equal(4);
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(data.height).to.equal(3);
+  });
+
+  itWithGpu("renders a semi-transparent Canvas source through the destination GPU", function () {
+    var source = createCanvas(8, 8);
+    var destination = createCanvas(8, 8);
+    try {
+      source.context.fillStyle = "rgba(240, 120, 60, 0.5)";
+      source.context.fillRect(0, 0, 8, 8);
+      destination.context.drawImage(source.canvas, 0, 0);
+
+      var sample = pixelAt(
+        captureGpuPixels(destination.canvas),
+        destination.canvas.width,
+        4,
+        4
+      );
+      (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(sample[0]).to.be.within(220, 255);
+      (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(sample[1]).to.be.within(100, 140);
+      (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(sample[2]).to.be.within(40, 80);
+      (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(sample[3]).to.be.within(110, 145);
+    } finally {
+      disposeCanvas(destination);
+      disposeCanvas(source);
+    }
+  });
+
+  itWithGpu("recognizes a Canvas source before ImageBitmap-shaped own properties", function () {
+    var source = createCanvas(8, 8);
+    var destination = createCanvas(8, 8);
+    try {
+      source.context.fillStyle = "#20c060";
+      source.context.fillRect(0, 0, 8, 8);
+      Object.defineProperty(source.canvas, "data", {
+        value: new Uint8Array(8 * 8 * 4)
+      });
+
+      destination.context.drawImage(source.canvas, 0, 0);
+
+      var sample = pixelAt(
+        captureGpuPixels(destination.canvas),
+        destination.canvas.width,
+        4,
+        4
+      );
+      (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(sample[0]).to.be.within(15, 50);
+      (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(sample[1]).to.be.within(175, 210);
+      (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(sample[2]).to.be.within(75, 115);
+      (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(sample[3]).to.be.greaterThan(240);
+    } finally {
+      disposeCanvas(destination);
+      disposeCanvas(source);
+    }
+  });
+
+  itWithGpu("applies fractional source crops and destination rectangles on the GPU", function () {
+    var source = createCanvas(12, 8);
+    var destination = createCanvas(30, 22);
+    try {
+      source.context.fillStyle = "#ff0000";
+      source.context.fillRect(0, 0, 6, 4);
+      source.context.fillStyle = "#00ff00";
+      source.context.fillRect(6, 0, 6, 4);
+      source.context.fillStyle = "#0000ff";
+      source.context.fillRect(0, 4, 6, 4);
+      source.context.fillStyle = "#ffff00";
+      source.context.fillRect(6, 4, 6, 4);
+
+      // A narrow crop straddling x=6 amplifies fractional-coordinate handling.
+      destination.context.drawImage(
+        source.canvas,
+        5.99,
+        0,
+        1.01,
+        4,
+        2.75,
+        1.25,
+        24.5,
+        8.5
+      );
+      // Do the same across y=4 in a separate destination region.
+      destination.context.drawImage(
+        source.canvas,
+        0,
+        3.99,
+        6,
+        1.01,
+        1.25,
+        11.75,
+        12.5,
+        8.5
+      );
+
+      var pixels = captureGpuPixels(destination.canvas);
+      // Pixel (12,3), sampled at its center (12.5,3.5), maps to source
+      // x = 5.99 + (12.5 - 2.75) * 1.01 / 24.5 = 6.39194.
+      // Between red texel center 5.5 and green center 6.5, ideal bilinear
+      // weights are 10.8% red / 89.2% green (R~28, G~227).
+      // Integer truncation maps x to 5.4375; ignoring the crop maps x to
+      // 5.25. Both negative controls are solid red at this sample.
+      var green = pixelAt(pixels, destination.canvas.width, 12, 3);
+      (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(green[1] - green[0]).to.be.greaterThan(100);
+      (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(green[3]).to.be.greaterThan(200);
+
+      // Pixel (3,14), sampled at (3.5,14.5), maps to source
+      // y = 3.99 + (14.5 - 11.75) * 1.01 / 8.5 = 4.31676.
+      // That is 18.3% top red / 81.7% bottom blue (R~47, B~208).
+      // Integer truncation maps y to 3.4375 and ignoring the crop maps y
+      // to 3.5, both solid red rather than blue.
+      var blue = pixelAt(pixels, destination.canvas.width, 3, 14);
+      (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(blue[2] - blue[0]).to.be.greaterThan(80);
+      (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(blue[3]).to.be.greaterThan(200);
+
+      var fractionalEdge = pixelAt(
+        pixels,
+        destination.canvas.width,
+        26,
+        3
+      );
+      (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(fractionalEdge[0]).to.be.lessThan(80);
+      (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(fractionalEdge[1]).to.be.greaterThan(180);
+      (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(fractionalEdge[2]).to.be.lessThan(50);
+      (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(fractionalEdge[3]).to.be.greaterThan(150);
+    } finally {
+      disposeCanvas(destination);
+      disposeCanvas(source);
+    }
+  });
+
+  itWithGpu("normalizes negative source and destination extents", function () {
+    var source = createCanvas(12, 8);
+    var destination = createCanvas(16, 12);
+    try {
+      source.context.fillStyle = "#ff0000";
+      source.context.fillRect(0, 0, 12, 8);
+      source.context.fillStyle = "#ffff00";
+      source.context.fillRect(6, 4, 4, 3);
+
+      destination.context.drawImage(
+        source.canvas,
+        10,
+        7,
+        -4,
+        -3,
+        12,
+        10,
+        -8,
+        -6
+      );
+
+      var pixels = captureGpuPixels(destination.canvas);
+      var inside = pixelAt(pixels, destination.canvas.width, 7, 7);
+      (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(inside[0]).to.be.greaterThan(220);
+      (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(inside[1]).to.be.greaterThan(220);
+      (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(inside[2]).to.be.lessThan(30);
+      (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(inside[3]).to.be.greaterThan(220);
+
+      var outside = pixelAt(pixels, destination.canvas.width, 2, 7);
+      (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(outside[3]).to.equal(0);
+    } finally {
+      disposeCanvas(destination);
+      disposeCanvas(source);
+    }
+  });
+
+  itWithGpu("clips the source rectangle and adjusts the destination proportionally", function () {
+    var source = createCanvas(8, 8);
+    var destination = createCanvas(16, 16);
+    try {
+      source.context.fillStyle = "#00ffff";
+      source.context.fillRect(0, 0, 8, 8);
+      destination.context.drawImage(
+        source.canvas,
+        -2,
+        -2,
+        4,
+        4,
+        2,
+        2,
+        12,
+        12
+      );
+
+      var pixels = captureGpuPixels(destination.canvas);
+      (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(pixelAt(pixels, destination.canvas.width, 5, 5)[3]).to.equal(0);
+
+      var inside = pixelAt(pixels, destination.canvas.width, 10, 10);
+      (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(inside[0]).to.be.lessThan(30);
+      (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(inside[1]).to.be.greaterThan(220);
+      (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(inside[2]).to.be.greaterThan(220);
+      (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(inside[3]).to.be.greaterThan(220);
+    } finally {
+      disposeCanvas(destination);
+      disposeCanvas(source);
+    }
+  });
+
+  itWithGpu("keeps temporary Canvas images alive until queued draws flush", function () {
+    var source = createCanvas(8, 8);
+    var destination = createCanvas(16, 8);
+    try {
+      source.context.fillStyle = "#ff0000";
+      source.context.fillRect(0, 0, 8, 8);
+      destination.context.drawImage(source.canvas, 0, 0, 8, 8);
+
+      source.context.fillStyle = "#0000ff";
+      source.context.fillRect(0, 0, 8, 8);
+      destination.context.drawImage(source.canvas, 8, 0, 8, 8);
+
+      var pixels = captureGpuPixels(destination.canvas);
+      var first = pixelAt(pixels, destination.canvas.width, 4, 4);
+      (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(first[0]).to.be.greaterThan(220);
+      (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(first[1]).to.be.lessThan(30);
+      (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(first[2]).to.be.lessThan(30);
+      (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(first[3]).to.be.greaterThan(220);
+
+      var second = pixelAt(pixels, destination.canvas.width, 12, 4);
+      (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(second[0]).to.be.lessThan(30);
+      (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(second[1]).to.be.lessThan(30);
+      (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(second[2]).to.be.greaterThan(220);
+      (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(second[3]).to.be.greaterThan(220);
+    } finally {
+      disposeCanvas(destination);
+      disposeCanvas(source);
+    }
+  });
+
+  itWithGpu("keeps ImageData uploads alive through putImageData and drawImage", function () {
+    var destination = createCanvas(12, 6);
+    try {
+      var putData = destination.context.createImageData(4, 4);
+      var drawData = destination.context.createImageData(4, 4);
+      for (var i = 0; i < putData.data.length; i += 4) {
+        putData.data[i] = 240;
+        putData.data[i + 1] = 96;
+        putData.data[i + 2] = 32;
+        putData.data[i + 3] = 255;
+
+        drawData.data[i] = 96;
+        drawData.data[i + 1] = 48;
+        drawData.data[i + 2] = 240;
+        drawData.data[i + 3] = 255;
+      }
+
+      destination.context.putImageData(putData, 1, 1);
+      destination.context.drawImage(
+        {
+          data: drawData.data,
+          width: drawData.width,
+          height: drawData.height,
+          // NativeEngine image bitmaps expose bimg::TextureFormat::RGBA8.
+          format: 74
+        },
+        7,
+        1
+      );
+
+      var pixels = captureGpuPixels(destination.canvas);
+      var putSample = pixelAt(pixels, destination.canvas.width, 2, 2);
+      (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(putSample[0]).to.be.greaterThan(220);
+      (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(putSample[1]).to.be.within(75, 115);
+      (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(putSample[2]).to.be.within(15, 50);
+      (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(putSample[3]).to.be.greaterThan(240);
+
+      var drawSample = pixelAt(pixels, destination.canvas.width, 8, 2);
+      (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(drawSample[0]).to.be.within(75, 115);
+      (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(drawSample[1]).to.be.within(30, 70);
+      (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(drawSample[2]).to.be.greaterThan(220);
+      (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(drawSample[3]).to.be.greaterThan(240);
+    } finally {
+      disposeCanvas(destination);
+    }
+  });
+
+  itWithGpu("preserves transform, rectangular clip, and globalAlpha for Canvas crops", function () {
+    var source = createCanvas(20, 8);
+    var destination = createCanvas(16, 12);
+    try {
+      source.context.fillStyle = "#00ffff";
+      source.context.fillRect(12, 0, 8, 8);
+
+      destination.context.fillStyle = "#000000";
+      destination.context.fillRect(0, 0, 16, 12);
+      destination.context.beginPath();
+      destination.context.rect(4, 2, 6, 6);
+      destination.context.clip();
+      destination.context.translate(2, 1);
+      destination.context.globalAlpha = 0.5;
+      destination.context.drawImage(
+        source.canvas,
+        12,
+        0,
+        4,
+        8,
+        0,
+        0,
+        8,
+        8
+      );
+
+      (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(destination.context.globalAlpha).to.equal(0.5);
+      var transform = destination.context.getTransform();
+      (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(transform.e).to.equal(2);
+      (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(transform.f).to.equal(1);
+
+      var pixels = captureGpuPixels(destination.canvas);
+      var cropped = pixelAt(pixels, destination.canvas.width, 5, 4);
+      (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(cropped[0]).to.be.lessThan(30);
+      (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(cropped[1]).to.be.within(100, 155);
+      (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(cropped[2]).to.be.within(100, 155);
+      (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(cropped[3]).to.be.greaterThan(240);
+
+      var translatedEdge = pixelAt(
+        pixels,
+        destination.canvas.width,
+        8,
+        4
+      );
+      (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(translatedEdge[0]).to.be.lessThan(30);
+      (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(translatedEdge[1]).to.be.within(100, 155);
+      (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(translatedEdge[2]).to.be.within(100, 155);
+      (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(translatedEdge[3]).to.be.greaterThan(240);
+
+      var clippedOut = pixelAt(pixels, destination.canvas.width, 5, 8);
+      (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(clippedOut[0]).to.be.lessThan(10);
+      (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(clippedOut[1]).to.be.lessThan(10);
+      (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(clippedOut[2]).to.be.lessThan(10);
+      (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(clippedOut[3]).to.be.greaterThan(240);
+    } finally {
+      disposeCanvas(destination);
+      disposeCanvas(source);
+    }
+  });
+
+  itWithGpu("intersects repeated Canvas draws with a retained non-rectangular clip", function () {
+    var source = createCanvas(4, 4);
+    var destination = createCanvas(16, 12);
+    try {
+      source.context.fillStyle = "#ff0000";
+      source.context.fillRect(0, 0, 4, 4);
+
+      destination.context.fillStyle = "#000000";
+      destination.context.fillRect(0, 0, 16, 12);
+      destination.context.beginPath();
+      destination.context.moveTo(1, 1);
+      destination.context.lineTo(13, 1);
+      destination.context.lineTo(1, 11);
+      destination.context.closePath();
+      destination.context.clip();
+      destination.context.drawImage(source.canvas, 2, 2, 4, 4);
+      destination.context.drawImage(source.canvas, 10, 8, 4, 4);
+
+      var pixels = captureGpuPixels(destination.canvas);
+      var firstDraw = pixelAt(pixels, destination.canvas.width, 3, 3);
+      (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(firstDraw[0]).to.be.greaterThan(220);
+      (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(firstDraw[1]).to.be.lessThan(30);
+      (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(firstDraw[2]).to.be.lessThan(30);
+      (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(firstDraw[3]).to.be.greaterThan(240);
+
+      [
+      // Inside the triangle but outside both destination rectangles.
+      pixelAt(pixels, destination.canvas.width, 2, 8),
+      // Inside the second destination rectangle but outside the triangle.
+      pixelAt(pixels, destination.canvas.width, 12, 9)].
+      forEach(function (outside) {
+        (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(outside[0]).to.be.lessThan(10);
+        (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(outside[1]).to.be.lessThan(10);
+        (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(outside[2]).to.be.lessThan(10);
+        (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(outside[3]).to.be.greaterThan(240);
+      });
+    } finally {
+      disposeCanvas(destination);
+      disposeCanvas(source);
+    }
+  });
+
+  itWithGpu("reads fractional drawImage edge coverage from the framebuffer", function () {
+    var source = createCanvas(2, 2);
+    var destination = createCanvas(8, 8);
+    try {
+      source.context.fillStyle = "#ffffff";
+      source.context.fillRect(0, 0, 2, 2);
+      destination.context.drawImage(source.canvas, 1.75, 1.75, 2.5, 2.5);
+
+      var pixels = destination.context.getImageData(0, 0, 8, 8).data;
+      (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(pixelAt(pixels, destination.canvas.width, 2, 2)[3]).to.equal(255);
+      [
+      pixelAt(pixels, destination.canvas.width, 1, 2),
+      pixelAt(pixels, destination.canvas.width, 4, 2),
+      pixelAt(pixels, destination.canvas.width, 2, 1),
+      pixelAt(pixels, destination.canvas.width, 2, 4)].
+      forEach(function (edge) {
+        (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(edge[3]).to.be.within(40, 90);
+      });
+    } finally {
+      disposeCanvas(destination);
+      disposeCanvas(source);
+    }
+  });
+
+  itWithGpu("reads new NanoVG draws after getImageData and toDataURL snapshots", function () {
+    var resource = createCanvas(8, 8);
+    try {
+      resource.context.fillStyle = "#ff0000";
+      resource.context.fillRect(0, 0, 8, 8);
+      (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(pixelAt(captureGpuPixels(resource.canvas), 8, 6, 6)).to.deep.equal([255, 0, 0, 255]);
+      resource.canvas.toDataURL();
+
+      resource.context.fillStyle = "#0000ff";
+      resource.context.fillRect(0, 0, 4, 8);
+      var pixels = captureGpuPixels(resource.canvas);
+      (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(pixelAt(pixels, 8, 2, 2)).to.deep.equal([0, 0, 255, 255]);
+      (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(pixelAt(pixels, 8, 6, 6)).to.deep.equal([255, 0, 0, 255]);
+    } finally {
+      disposeCanvas(resource);
+    }
+  });
+
+  itWithGpu("reads filtered Canvas draws instead of unfiltered source pixels", function () {
+    var source = createCanvas(16, 16);
+    var destination = createCanvas(16, 16);
+    try {
+      source.context.fillStyle = "#ffffff";
+      source.context.fillRect(4, 4, 8, 8);
+      destination.context.filter = "blur(2px)";
+      destination.context.drawImage(source.canvas, 0, 0);
+      var pixels = captureGpuPixels(destination.canvas);
+      var fringe = pixelAt(pixels, 16, 3, 8);
+      var center = pixelAt(pixels, 16, 8, 8);
+      // The unfiltered CPU copy has zero alpha outside the source ink.
+      (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(fringe[0]).to.equal(fringe[1]);
+      (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(fringe[1]).to.equal(fringe[2]);
+      (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(fringe[3]).to.be.greaterThan(0);
+      (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(center[3]).to.be.greaterThan(fringe[3]);
+    } finally {
+      disposeCanvas(destination);
+      disposeCanvas(source);
+    }
+  });
+
+  itWithGpu("reads source dimensions after coercing drawImage coordinates once", function () {
+    var source = createCanvas(8, 8);
+    var destination = createCanvas(8, 8);
+    try {
+      source.context.fillStyle = "#ff0000";
+      source.context.fillRect(0, 0, 8, 8);
+      var conversions = 0;
+      destination.context.drawImage(source.canvas, {
+        valueOf: function valueOf() {
+          ++conversions;
+          source.canvas.width = 4;
+          return 0;
+        }
+      }, 0);
+      (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(conversions).to.equal(1);
+      var pixels = captureGpuPixels(destination.canvas);
+      (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(pixelAt(pixels, 8, 2, 2)).to.deep.equal([255, 0, 0, 255]);
+      (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(pixelAt(pixels, 8, 6, 2)).to.deep.equal([0, 0, 0, 0]);
+    } finally {
+      disposeCanvas(destination);
+      disposeCanvas(source);
+    }
+  });
+
+  itWithGpu("retains the Canvas source kind across coordinate coercion", function () {
+    var source = createCanvas(8, 8);
+    var destination = createCanvas(8, 8);
+    var prototype = Object.getPrototypeOf(source.canvas);
+    try {
+      source.context.fillStyle = "#ff0000";
+      source.context.fillRect(0, 0, 8, 8);
+      var conversions = 0;
+      destination.context.drawImage(source.canvas, {
+        valueOf: function valueOf() {
+          ++conversions;
+          source.canvas.width = 4;
+          Object.setPrototypeOf(source.canvas, null);
+          source.canvas.data = new Uint8Array(0);
+          return 0;
+        }
+      }, 0);
+      (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(conversions).to.equal(1);
+      var pixels = captureGpuPixels(destination.canvas);
+      (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(pixelAt(pixels, 8, 2, 2)).to.deep.equal([255, 0, 0, 255]);
+      (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(pixelAt(pixels, 8, 6, 2)).to.deep.equal([0, 0, 0, 0]);
+    } finally {
+      Object.setPrototypeOf(source.canvas, prototype);
+      disposeCanvas(destination);
+      disposeCanvas(source);
+    }
+  });
+
+  it("retains the ImageBitmap source kind when coercion removes its data", function () {
+    var destination = createCanvas(8, 8);
+    try {
+      [false, true].forEach(function (noOp) {
+        var bitmap = {
+          width: 8,
+          height: 8,
+          format: 74,
+          data: new Uint8Array(8 * 8 * 4)
+        };
+        var conversions = 0;
+        var draw = function draw() {
+          destination.context.drawImage(bitmap, {
+            valueOf: function valueOf() {
+              ++conversions;
+              delete bitmap.data;
+              return 0;
+            }
+          }, 0, noOp ? 0 : 8, 8);
+        };
+        if (noOp) {
+          (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(draw).not.to.throw();
+        } else {
+          (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(draw).to.throw("drawImage: ImageBitmap data must be a typed array.");
+        }
+        (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(conversions).to.equal(1);
+      });
+    } finally {
+      disposeCanvas(destination);
+    }
+  });
+
+  itWithGpu("clips framebuffer readback and normalizes negative region extents", function () {
+    var resource = createCanvas(8, 8);
+    try {
+      resource.context.fillStyle = "#ff0000";
+      resource.context.fillRect(0, 0, 8, 8);
+      var positive = resource.context.getImageData(-1, -1, 3, 3);
+      var negative = resource.context.getImageData(2, 2, -3, -3);
+      (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(Array.from(negative.data)).to.deep.equal(Array.from(positive.data));
+      (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(pixelAt(positive.data, 3, 0, 0)).to.deep.equal([0, 0, 0, 0]);
+      (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(pixelAt(positive.data, 3, 1, 1)).to.deep.equal([255, 0, 0, 255]);
+
+      var outside = resource.context.getImageData(-2147483648, 0, -2, 1);
+      (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(Array.from(outside.data)).to.deep.equal([0, 0, 0, 0, 0, 0, 0, 0]);
+      resource.canvas.width = 4;
+      (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(Array.from(resource.context.getImageData(0, 0, 1, 1).data)).to.deep.equal([0, 0, 0, 0]);
+    } finally {
+      disposeCanvas(resource);
+    }
+  });
+
+  it("falls back to PNG for default, empty, case-variant, and unsupported MIME types", function () {
+    var canvas = new _native.Canvas();
+    canvas.width = 2;
+    canvas.height = 2;
+    try {
+      [
+      canvas.toDataURL(),
+      canvas.toDataURL(""),
+      canvas.toDataURL("image/png"),
+      canvas.toDataURL("IMAGE/PNG"),
+      canvas.toDataURL("image/jpeg")].
+      forEach(function (url) {
+        (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(url.indexOf("data:image/png;base64,")).to.equal(0);
+        (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(url.length).to.be.greaterThan(32);
+      });
+    } finally {
+      canvas.dispose();
+    }
+  });
+
+  it("ends PNG data URLs at IEND without trailing allocation bytes", function () {
+    [1, 2, 64].forEach(function (size) {
+      var canvas = new _native.Canvas();
+      canvas.width = size;
+      canvas.height = size;
+      try {
+        var url = canvas.toDataURL();
+        var png = buffer__WEBPACK_IMPORTED_MODULE_4__.Buffer.from(url.substring("data:image/png;base64,".length), "base64");
+        (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(Array.from(png.subarray(0, 8))).to.deep.equal([137, 80, 78, 71, 13, 10, 26, 10]);
+        var offset = 8;
+        var foundEnd = false;
+        while (offset + 12 <= png.length) {
+          var length = png.readUInt32BE(offset);
+          var type = png.toString("ascii", offset + 4, offset + 8);
+          offset += length + 12;
+          (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(offset).to.be.at.most(png.length);
+          if (type === "IEND") {
+            (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(length).to.equal(0);
+            foundEnd = true;
+            break;
+          }
+        }
+        (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(foundEnd).to.equal(true);
+        (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(offset).to.equal(png.length);
+      } finally {
+        canvas.dispose();
+      }
+    });
+  });
+
+  it("returns ascent and descent in no-font text metrics", function () {
+    var resource = createCanvas(8, 8);
+    try {
+      resource.context.font = "20px MissingFontForCanvasMetrics";
+      var metrics = resource.context.measureText("test");
+      (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(metrics).to.have.property("actualBoundingBoxAscent");
+      (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(metrics).to.have.property("actualBoundingBoxDescent");
+      (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(metrics.actualBoundingBoxAscent).to.equal(15);
+      (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(metrics.actualBoundingBoxDescent).to.equal(5);
+    } finally {
+      disposeCanvas(resource);
+    }
+  });
+});
+
 function createSceneAndWait(callback, done) {
-  var engine = new _babylonjs_core__WEBPACK_IMPORTED_MODULE_4__.NativeEngine();
-  var scene = new _babylonjs_core__WEBPACK_IMPORTED_MODULE_4__.Scene(engine);
+  var engine = new _babylonjs_core__WEBPACK_IMPORTED_MODULE_5__.NativeEngine();
+  var scene = new _babylonjs_core__WEBPACK_IMPORTED_MODULE_5__.Scene(engine);
   scene.createDefaultCamera();
   callback(engine, scene);
   scene.executeWhenReady(function () {
@@ -28375,7 +29389,7 @@ describe("Materials", function () {
   it("Empty ShaderMaterial should compile", function (done) {
     function createEmptyShaderMat() {
       createSceneAndWait(function (engine, scene) {
-        var sphere = _babylonjs_core__WEBPACK_IMPORTED_MODULE_4__.MeshBuilder.CreateSphere(
+        var sphere = _babylonjs_core__WEBPACK_IMPORTED_MODULE_5__.MeshBuilder.CreateSphere(
           "sphere",
           { diameter: 2, segments: 32 },
           scene
@@ -28384,7 +29398,7 @@ describe("Materials", function () {
           vertexSource: "void main() {}",
           fragmentSource: "void main() {}"
         };
-        var mat = new _babylonjs_core__WEBPACK_IMPORTED_MODULE_4__.ShaderMaterial("shader", scene, shaders, {});
+        var mat = new _babylonjs_core__WEBPACK_IMPORTED_MODULE_5__.ShaderMaterial("shader", scene, shaders, {});
         sphere.material = mat;
       }, done);
     }
@@ -28392,12 +29406,12 @@ describe("Materials", function () {
   });
   it("GradientMaterial should compile", function (done) {
     createSceneAndWait(function (engine, scene) {
-      var sphere = _babylonjs_core__WEBPACK_IMPORTED_MODULE_4__.MeshBuilder.CreateSphere(
+      var sphere = _babylonjs_core__WEBPACK_IMPORTED_MODULE_5__.MeshBuilder.CreateSphere(
         "sphere",
         { diameter: 2, segments: 32 },
         scene
       );
-      var gradientMaterial = new _babylonjs_core__WEBPACK_IMPORTED_MODULE_4__.GradientMaterial("grad", scene);
+      var gradientMaterial = new _babylonjs_core__WEBPACK_IMPORTED_MODULE_5__.GradientMaterial("grad", scene);
       sphere.material = gradientMaterial;
     }, done);
   });
@@ -28408,21 +29422,21 @@ describe("PostProcesses", function () {
   it("PassPostProcess", function (done) {
     createSceneAndWait(function (engine, scene) {
       var camera = scene._activeCamera;
-      new _babylonjs_core__WEBPACK_IMPORTED_MODULE_4__.PassPostProcess("Scene copy", 1.0, camera);
+      new _babylonjs_core__WEBPACK_IMPORTED_MODULE_5__.PassPostProcess("Scene copy", 1.0, camera);
     }, done);
   });
   it("BlackAndWhitePostProcess", function (done) {
     createSceneAndWait(function (engine, scene) {
       var camera = scene._activeCamera;
-      new _babylonjs_core__WEBPACK_IMPORTED_MODULE_4__.BlackAndWhitePostProcess("bandw", 1.0, camera);
+      new _babylonjs_core__WEBPACK_IMPORTED_MODULE_5__.BlackAndWhitePostProcess("bandw", 1.0, camera);
     }, done);
   });
   it("BlurPostProcess", function (done) {
     createSceneAndWait(function (engine, scene) {
       var camera = scene._activeCamera;
-      new _babylonjs_core__WEBPACK_IMPORTED_MODULE_4__.BlurPostProcess(
+      new _babylonjs_core__WEBPACK_IMPORTED_MODULE_5__.BlurPostProcess(
         "Horizontal blur",
-        new _babylonjs_core__WEBPACK_IMPORTED_MODULE_4__.Vector2(1.0, 0),
+        new _babylonjs_core__WEBPACK_IMPORTED_MODULE_5__.Vector2(1.0, 0),
         32,
         0.25,
         camera
@@ -28432,9 +29446,9 @@ describe("PostProcesses", function () {
   it("ConvolutionPostProcess", function (done) {
     createSceneAndWait(function (engine, scene) {
       var camera = scene._activeCamera;
-      new _babylonjs_core__WEBPACK_IMPORTED_MODULE_4__.ConvolutionPostProcess(
+      new _babylonjs_core__WEBPACK_IMPORTED_MODULE_5__.ConvolutionPostProcess(
         "Sepia",
-        _babylonjs_core__WEBPACK_IMPORTED_MODULE_4__.ConvolutionPostProcess.EmbossKernel,
+        _babylonjs_core__WEBPACK_IMPORTED_MODULE_5__.ConvolutionPostProcess.EmbossKernel,
         1.0,
         camera
       );
@@ -28443,28 +29457,28 @@ describe("PostProcesses", function () {
   it("HighlightsPostProcess", function (done) {
     createSceneAndWait(function (engine, scene) {
       var camera = scene._activeCamera;
-      new _babylonjs_core__WEBPACK_IMPORTED_MODULE_4__.HighlightsPostProcess("highlights", 1.0, camera);
+      new _babylonjs_core__WEBPACK_IMPORTED_MODULE_5__.HighlightsPostProcess("highlights", 1.0, camera);
     }, done);
   });
   it("TonemapPostProcess", function (done) {
     createSceneAndWait(function (engine, scene) {
       var camera = scene._activeCamera;
-      new _babylonjs_core__WEBPACK_IMPORTED_MODULE_4__.TonemapPostProcess("tonemap", _babylonjs_core__WEBPACK_IMPORTED_MODULE_4__.TonemappingOperator.Hable, 1.0, camera);
+      new _babylonjs_core__WEBPACK_IMPORTED_MODULE_5__.TonemapPostProcess("tonemap", _babylonjs_core__WEBPACK_IMPORTED_MODULE_5__.TonemappingOperator.Hable, 1.0, camera);
     }, done);
   });
   it("ImageProcessingPostProcess", function (done) {
     createSceneAndWait(function (engine, scene) {
       var camera = scene._activeCamera;
-      new _babylonjs_core__WEBPACK_IMPORTED_MODULE_4__.ImageProcessingPostProcess("processing", 1.0, camera);
+      new _babylonjs_core__WEBPACK_IMPORTED_MODULE_5__.ImageProcessingPostProcess("processing", 1.0, camera);
     }, done);
   });
   it("RefractionPostProcess", function (done) {
     createSceneAndWait(function (engine, scene) {
       var camera = scene._activeCamera;
-      new _babylonjs_core__WEBPACK_IMPORTED_MODULE_4__.RefractionPostProcess(
+      new _babylonjs_core__WEBPACK_IMPORTED_MODULE_5__.RefractionPostProcess(
         "Refraction",
         "https://playground.babylonjs.com/textures/grass.jpg",
-        new _babylonjs_core__WEBPACK_IMPORTED_MODULE_4__.Color3(1.0, 1.0, 1.0),
+        new _babylonjs_core__WEBPACK_IMPORTED_MODULE_5__.Color3(1.0, 1.0, 1.0),
         0.5,
         0.5,
         1.0,
@@ -28475,7 +29489,7 @@ describe("PostProcesses", function () {
   it("DefaultPipeline", function (done) {
     createSceneAndWait(function (engine, scene) {
       var camera = scene._activeCamera;
-      new _babylonjs_core__WEBPACK_IMPORTED_MODULE_4__.DefaultRenderingPipeline(
+      new _babylonjs_core__WEBPACK_IMPORTED_MODULE_5__.DefaultRenderingPipeline(
         "defaultPipeline", // The name of the pipeline
         true, // Do you want the pipeline to use HDR texture?
         scene, // The scene instance
@@ -28557,6 +29571,356 @@ describe("NativeEncoding", function () {
             )));case 1:results = _context2.sent;_context2.next = 2;return (
             Promise.all(results.map(function (b) {return expectValidPNG(b);})));case 2:case "end":return _context2.stop();}}, _callee2);}))
   );
+});
+
+function hexToBytes(hex) {
+  var out = new Uint8Array(hex.length / 2);
+  for (var i = 0; i < out.length; ++i) {
+    out[i] = parseInt(hex.substr(i * 2, 2), 16);
+  }
+  return out;
+}
+
+// Both plugins default to OFF, so report them as skipped rather than silently passing
+// when the build did not opt in. CI enables both for the jobs that run UnitTests.
+(typeof _native.DracoCodec !== "undefined" ? describe : describe.skip)("NativeDraco", function () {
+  this.timeout(0);
+
+  // Two triangles sharing an edge. Values are exact halves so they survive the float32
+  // round trip bit-for-bit once quantization is disabled.
+  var positions = new Float32Array([
+  0, 0, 0,
+  1, 0, 0,
+  0, 1, 0,
+  1, 1, 0]
+  );
+  var indices = new Uint16Array([0, 1, 2, 1, 3, 2]);
+
+  // Encoded by the reference draco3dgltf 1.5.7 encoder (the same package Babylon.js takes
+  // its decoder from), standard edgebreaker, 14-bit position quantization. Using a fixture
+  // from the reference encoder rather than our own output pins this decoder to the upstream
+  // bitstream instead of to itself.
+  var ENCODED = hexToBytes(
+    "445241434f02020101000000040200020000011fff011101ff00000100090300000201010100030301300110030024824a0400000000ff3f00000000000000000000000000000000803f0e");
+  var POSITION_ATTRIBUTE_ID = 0;
+
+  // A 63-vertex UV sphere carrying POSITION, NORMAL and TEX_COORD, encoded by the same
+  // reference encoder with per-attribute quantization. The single-triangle-pair fixture
+  // above cannot exercise multi-attribute decoding or a non-degenerate edgebreaker
+  // traversal, which are what the glTF-bitstream-only build actually restricts.
+  //
+  // The expected counts below are what the reference draco3dgltf decoder reports for this
+  // exact buffer, not the pre-encode mesh: Draco merges points whose attributes all match
+  // and drops the degenerate triangles at the poles, so 63 vertices / 96 triangles going
+  // in becomes 62 vertices / 91 triangles coming out.
+  var SPHERE = hexToBytes(
+    "445241434f020201010000003a5b025b05001a5fd73e55ad3e55d5aa3e5555adaa3ea55455559faaaaaa565501ff0111" +
+    "ff02694af8058097a3755f03ff0000000000010100010009030000020101090300010301030902000202010101000f2b" +
+    "a106b907592e51030c141534f4dfc29a78ddaf7f80bed2ffff2bad28fedf4fcb03010030a7577c44104633030047e86d" +
+    "00c02304008f08128a7a003c181d05009108c20010d48301102848f888fa0fdc030090d02b010050db9591d895901000" +
+    "749b07f388bca224060084f91f49f408cd0c0088ee9110006466480800ba0d840110a80703405010e61175c5500b00ba" +
+    "12a805005dc92b23d12b9dc1b6fbb400e0113dc2480c8007eb8a9208c2b43d000009bd1200f8b4a016007425510b00bc" +
+    "525702009fd62b010050eb950040a8ed4a0040d48a5a00d095422d00f04aa0160078a54f0b00ba92570200a2b62b0180" +
+    "50eb0cb89da8ed3600e0110200490409030580074762004098a00000e1aef8881e8cb7010090b0ed018047f8081f1100" +
+    "80b0001075ea0e00cc0c00000000ff3f0000000080bf000080bf000080bf000000400e000301000b036904135103f109" +
+    "a106b9270e3ecb87a50ecead84ceeaa8bdde65000002dc7542d24fdbb29af35e882de5dab6c48d3dd1bbeceebaec45c6" +
+    "73b0bb6b772244eb067057e873dc4e3d72c57b21b6539244f9b4fe44ef620ee3d4cf9108b00b40340076034034000000" +
+    "44130dc01c19673cc72e4413bd8b398c673cc72e00d10010057042d294b60000fc0fd127b6b63cbd9acf91f1ffff9492" +
+    "621f37ff030000ff0100000a010101000d039532550a1b0901090109010a0eb9fbab2e93abef3f8700fcff00aceaff00" +
+    "60a0001a8220220800400800820822089a0000000000ff0f000000000000000000000000803f0c");
+  var SPHERE_VERTICES = 62;
+  var SPHERE_INDICES = 273;
+
+  it("publishes the codec version it was built against", function () {
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(_native.DracoCodec.Version).to.be.a("string");
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(_native.DracoCodec.Version).to.match(/^\d+\.\d+\.\d+$/);
+  });
+
+  it("decodes a mesh produced by the reference glTF encoder", function () {
+    var decoded = _native.DracoCodec.Decode(ENCODED, { position: POSITION_ATTRIBUTE_ID });
+
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(decoded.totalVertices).to.equal(positions.length / 3);
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(decoded.indices.length).to.equal(indices.length);
+
+    // Draco reorders points, so compare the triangles as sets of resolved corner
+    // positions rather than assuming the original vertex order survived. Rounded to
+    // two decimals so the comparison tolerates quantization but still separates
+    // coordinates that are a whole unit apart.
+    var attribute = decoded.attributes.find(function (a) {return a.kind === "position";});
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(attribute, "decoded position attribute").to.not.equal(undefined);
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(attribute.size).to.equal(3);
+
+    var corner = function corner(buffer, i) {return (
+        [buffer[i * 3], buffer[i * 3 + 1], buffer[i * 3 + 2]].
+        map(function (v) {return v.toFixed(2);}).
+        join(","));};
+
+    var expectedCorners = [];
+    var actualCorners = [];
+    for (var i = 0; i < indices.length; ++i) {
+      expectedCorners.push(corner(positions, indices[i]));
+      actualCorners.push(corner(attribute.data, decoded.indices[i]));
+    }
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(actualCorners.sort()).to.deep.equal(expectedCorners.sort());
+  });
+
+  it("decodes without an explicit attribute id map", function () {
+    var decoded = _native.DracoCodec.Decode(ENCODED);
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(decoded.totalVertices).to.equal(positions.length / 3);
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(decoded.attributes.find(function (a) {return a.kind === "position";})).to.not.equal(undefined);
+  });
+
+  it("decodes a multi-attribute mesh", function () {
+    var decoded = _native.DracoCodec.Decode(SPHERE, { position: 0, normal: 1, uv: 2 });
+
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(decoded.totalVertices).to.equal(SPHERE_VERTICES);
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(decoded.indices.length).to.equal(SPHERE_INDICES);
+
+    var byKind = {};var _iterator = _createForOfIteratorHelper(
+        decoded.attributes),_step;try {for (_iterator.s(); !(_step = _iterator.n()).done;) {var a = _step.value;
+        byKind[a.kind] = a;
+      }} catch (err) {_iterator.e(err);} finally {_iterator.f();}
+
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(byKind.position.size).to.equal(3);
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(byKind.normal.size).to.equal(3);
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(byKind.uv.size).to.equal(2);
+
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(byKind.position.data.length).to.equal(SPHERE_VERTICES * 3);
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(byKind.normal.data.length).to.equal(SPHERE_VERTICES * 3);
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(byKind.uv.data.length).to.equal(SPHERE_VERTICES * 2);
+
+    // Every index must address a real vertex, and the geometry must actually be the
+    // unit sphere that was encoded rather than plausible-looking noise.
+    for (var i = 0; i < decoded.indices.length; ++i) {
+      (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(decoded.indices[i]).to.be.lessThan(SPHERE_VERTICES);
+    }
+
+    for (var v = 0; v < SPHERE_VERTICES; ++v) {
+      var x = byKind.position.data[v * 3];
+      var y = byKind.position.data[v * 3 + 1];
+      var z = byKind.position.data[v * 3 + 2];
+      (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(Math.sqrt(x * x + y * y + z * z)).to.be.closeTo(1, 0.01);
+    }
+  });
+
+  it("rejects malformed input", function () {
+    var garbage = new Uint8Array(64);
+    for (var i = 0; i < garbage.length; ++i) {
+      garbage[i] = i * 37 & 0xff;
+    }
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(function () {return _native.DracoCodec.Decode(garbage);}).to.throw();
+  });
+
+  it("rejects truncated input", function () {
+    var truncated = ENCODED.slice(0, Math.floor(ENCODED.length / 2));
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(function () {return _native.DracoCodec.Decode(truncated);}).to.throw();
+  });
+
+  it("rejects an empty buffer", function () {
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(function () {return _native.DracoCodec.Decode(new Uint8Array(0));}).to.throw();
+  });
+
+  it("exposes an encoder", function () {
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(_native.DracoCodec.Encode).to.be.a("function");
+  });
+
+  it("round trips a mesh through the encoder and back", function () {
+    // Quantization is left off so the exact-half coordinates above survive bit for bit.
+    var encoded = _native.DracoCodec.Encode(
+      [{ kind: "position", dracoName: "POSITION", size: 3, data: positions }],
+      indices);
+
+    // Int8Array, matching Babylon.js's IDracoEncodedMeshData contract and the WASM
+    // encoder it stands in for.
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(encoded.data).to.be.an.instanceOf(Int8Array);
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(encoded.data.length).to.be.greaterThan(0);
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(encoded.attributeIds.position).to.be.a("number");
+
+    var decoded = _native.DracoCodec.Decode(encoded.data, { position: encoded.attributeIds.position });
+
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(decoded.totalVertices).to.equal(positions.length / 3);
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(decoded.indices.length).to.equal(indices.length);
+
+    // Same set-of-corners comparison as the decode tests: Draco is free to reorder points.
+    var attribute = decoded.attributes.find(function (a) {return a.kind === "position";});
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(attribute, "decoded position attribute").to.not.equal(undefined);
+
+    var corner = function corner(buffer, i) {return (
+        [buffer[i * 3], buffer[i * 3 + 1], buffer[i * 3 + 2]].
+        map(function (v) {return v.toFixed(2);}).
+        join(","));};
+
+    var expectedCorners = [];
+    var actualCorners = [];
+    for (var i = 0; i < indices.length; ++i) {
+      expectedCorners.push(corner(positions, indices[i]));
+      actualCorners.push(corner(attribute.data, decoded.indices[i]));
+    }
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(actualCorners.sort()).to.deep.equal(expectedCorners.sort());
+  });
+
+  it("encodes an unindexed mesh", function () {
+    // Without an index buffer the vertices are taken as a flat triangle list, so the
+    // vertex count itself has to be a multiple of three. The shared quad fixture is
+    // four vertices, so use a single triangle here.
+    var triangle = new Float32Array([
+    0, 0, 0,
+    1, 0, 0,
+    0, 1, 0]
+    );
+
+    var encoded = _native.DracoCodec.Encode(
+      [{ kind: "position", dracoName: "POSITION", size: 3, data: triangle }]);
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(encoded.data).to.be.an.instanceOf(Int8Array);
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(encoded.data.length).to.be.greaterThan(0);
+  });
+
+  it("accepts 32 bit indices", function () {
+    var encoded = _native.DracoCodec.Encode(
+      [{ kind: "position", dracoName: "POSITION", size: 3, data: positions }],
+      new Uint32Array(indices));
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(encoded.data.length).to.be.greaterThan(0);
+  });
+
+  it("encodes typed array views with a non-zero byteOffset", function () {
+    // Both the attribute and the index buffer are subviews sitting partway into a larger
+    // ArrayBuffer, preceded by deliberately wrong data. Reading via ArrayBuffer().Data()
+    // instead of the typed view would silently encode that padding, so the round trip
+    // below is what catches it -- the decoded corners would not match.
+    var padFloats = 5;
+    var positionStorage = new Float32Array(padFloats + positions.length);
+    positionStorage.fill(-999);
+    positionStorage.set(positions, padFloats);
+    var positionView = positionStorage.subarray(padFloats);
+
+    var padIndices = 3;
+    var indexStorage = new Uint16Array(padIndices + indices.length);
+    indexStorage.fill(0xdead & 0xffff);
+    indexStorage.set(indices, padIndices);
+    var indexView = indexStorage.subarray(padIndices);
+
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(positionView.byteOffset).to.be.greaterThan(0);
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(indexView.byteOffset).to.be.greaterThan(0);
+
+    var encoded = _native.DracoCodec.Encode(
+      [{ kind: "position", dracoName: "POSITION", size: 3, data: positionView }],
+      indexView);
+
+    var decoded = _native.DracoCodec.Decode(encoded.data, { position: encoded.attributeIds.position });
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(decoded.totalVertices).to.equal(positions.length / 3);
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(decoded.indices.length).to.equal(indices.length);
+
+    var attribute = decoded.attributes.find(function (a) {return a.kind === "position";});
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(attribute, "decoded position attribute").to.not.equal(undefined);
+
+    var corner = function corner(buffer, i) {return (
+        [buffer[i * 3], buffer[i * 3 + 1], buffer[i * 3 + 2]].
+        map(function (v) {return v.toFixed(2);}).
+        join(","));};
+
+    var expectedCorners = [];
+    var actualCorners = [];
+    for (var i = 0; i < indices.length; ++i) {
+      expectedCorners.push(corner(positions, indices[i]));
+      actualCorners.push(corner(attribute.data, decoded.indices[i]));
+    }
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(actualCorners.sort()).to.deep.equal(expectedCorners.sort());
+  });
+
+  it("rejects an index buffer that is neither 16 nor 32 bit", function () {
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(function () {return _native.DracoCodec.Encode(
+        [{ kind: "position", dracoName: "POSITION", size: 3, data: positions }],
+        new Int32Array([0, 1, 2, 1, 3, 2]));}).to.throw();
+  });
+
+  it("rejects an index count that is not a multiple of 3", function () {
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(function () {return _native.DracoCodec.Encode(
+        [{ kind: "position", dracoName: "POSITION", size: 3, data: positions }],
+        new Uint16Array([0, 1, 2, 1]));}).to.throw();
+  });
+
+  it("rejects an index that is out of range for the vertex count", function () {
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(function () {return _native.DracoCodec.Encode(
+        [{ kind: "position", dracoName: "POSITION", size: 3, data: positions }],
+        new Uint16Array([0, 1, 9999]));}).to.throw();
+  });
+
+  it("rejects an attribute length that is not a multiple of its size", function () {
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(function () {return _native.DracoCodec.Encode(
+        [{ kind: "position", dracoName: "POSITION", size: 3, data: new Float32Array([0, 0, 0, 1]) }],
+        indices);}).to.throw();
+  });
+
+  it("rejects a mesh with no position attribute", function () {
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(function () {return _native.DracoCodec.Encode(
+        [{ kind: "normal", dracoName: "NORMAL", size: 3, data: positions }],
+        indices);}).to.throw();
+  });
+});
+
+(typeof _native.MeshoptCodec !== "undefined" ? describe : describe.skip)("NativeMeshopt", function () {
+  this.timeout(0);
+
+  // Produced by the reference meshoptimizer 0.22 JavaScript encoder
+  // (MeshoptEncoder.encodeVertexBuffer) over 6 vertices of 16-byte stride, so this
+  // pins our native decoder against the upstream bitstream rather than against itself.
+  var ENCODED = hexToBytes(
+    "a00000013ff000007fffa0606001380000007e0000013ff0000020ff9070480130800000800000013ff0000080ff" +
+    "a0606001320000007e012aa000000000000000000000000000000000000000000000000000000000800000000000beadde");
+  var EXPECTED = hexToBytes(
+    "00000000000000800000000000beadde0000c03f000010c00000403f01beadde00004040000090c00000c03f02beadde" +
+    "000090400000d8c00000104003beadde0000c040000010c10000404004beadde0000f040000034c10000704005beadde");
+  var COUNT = 6;
+  var STRIDE = 16;
+
+  it("publishes the codec version it was built against", function () {
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(_native.MeshoptCodec.Version).to.be.a("string");
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(_native.MeshoptCodec.Version).to.match(/^\d+\.\d+$/);
+  });
+
+  it("decodes a reference stream byte for byte", function () {
+    var decoded = _native.MeshoptCodec.Decode(ENCODED, COUNT, STRIDE, "ATTRIBUTES");
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(decoded.length).to.equal(EXPECTED.length);
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(Array.from(decoded)).to.deep.equal(Array.from(EXPECTED));
+  });
+
+  it("rejects malformed input", function () {
+    var garbage = new Uint8Array(ENCODED.length);
+    for (var i = 0; i < garbage.length; ++i) {
+      garbage[i] = i * 37 & 0xff;
+    }
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(function () {return _native.MeshoptCodec.Decode(garbage, COUNT, STRIDE, "ATTRIBUTES");}).to.throw();
+  });
+
+  it("rejects truncated input", function () {
+    var truncated = ENCODED.slice(0, Math.floor(ENCODED.length / 2));
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(function () {return _native.MeshoptCodec.Decode(truncated, COUNT, STRIDE, "ATTRIBUTES");}).to.throw();
+  });
+
+  it("rejects an unknown mode", function () {
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(function () {return _native.MeshoptCodec.Decode(ENCODED, COUNT, STRIDE, "NOT_A_MODE");}).to.throw();
+  });
+
+  it("rejects a stride outside [1, 256]", function () {
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(function () {return _native.MeshoptCodec.Decode(ENCODED, COUNT, 0, "ATTRIBUTES");}).to.throw();
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(function () {return _native.MeshoptCodec.Decode(ENCODED, COUNT, 257, "ATTRIBUTES");}).to.throw();
+  });
+
+  it("rejects an ATTRIBUTES stride that is not a multiple of 4", function () {
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(function () {return _native.MeshoptCodec.Decode(ENCODED, COUNT, 6, "ATTRIBUTES");}).to.throw();
+  });
+
+  it("rejects a negative count", function () {
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(function () {return _native.MeshoptCodec.Decode(ENCODED, -1, STRIDE, "ATTRIBUTES");}).to.throw();
+  });
+
+  it("rejects a TRIANGLES count that is not a multiple of 3", function () {
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(function () {return _native.MeshoptCodec.Decode(ENCODED, 4, 2, "TRIANGLES");}).to.throw();
+  });
+
+  it("rejects a non-typed-array source", function () {
+    (0,chai__WEBPACK_IMPORTED_MODULE_3__.expect)(function () {return _native.MeshoptCodec.Decode(null, COUNT, STRIDE, "ATTRIBUTES");}).to.throw();
+  });
 });
 
 mocha.run(function (failures) {

@@ -94,6 +94,21 @@ namespace Babylon::Graphics
 
         bgfx::ViewId AcquireNewViewId();
         bgfx::ViewId PeekNextViewId() const;
+        uint32_t ViewIdGeneration() const;
+
+        // Mid-frame view flush. If the current logical frame has acquired close to
+        // the maximum number of bgfx views, flush the accumulated views via a
+        // cross-thread bgfx::frame() and reset the view counter so rendering can
+        // continue within the same Babylon frame instead of running out of views
+        // (which previously threw "Too many views"). Called from the JS thread at
+        // draw/clear operation boundaries where no encoder work is pending.
+        void FlushViewsIfNeeded();
+
+        // Unconditionally request a mid-frame bgfx flush when a FrameCompletionScope
+        // is active (same handshake as FlushViewsIfNeeded). Used by Canvas GPU
+        // readback so bgfx::readTexture can complete without waiting for the end of
+        // the logical frame. Returns false when the render thread cannot service it.
+        bool ForceMidFrameFlush();
 
         // Frame completion scope support
         void IncrementPendingFrameScopes();
@@ -115,7 +130,7 @@ namespace Babylon::Graphics
         friend class FrameCompletionScope;
 
         static const bgfx::RendererType::Enum s_bgfxRenderType;
-        static void ConfigureBgfxPlatformData(bgfx::PlatformData& pd, WindowT window);
+        void ConfigureBgfxPlatformData(bgfx::PlatformData& pd, WindowT window);
         static void ConfigureBgfxRenderType(bgfx::PlatformData& pd, bgfx::RendererType::Enum& renderType);
 
         // Push the render resolution onto the native rendering surface so it
@@ -128,18 +143,39 @@ namespace Babylon::Graphics
         void UpdateBgfxResolution();
         void RequestScreenShots();
         void Frame();
+        void PerformMidFrameViewFlush();
         void CaptureCallback(const BgfxCallback::CaptureData&);
 
         arcana::affinity m_renderThreadAffinity{};
         bool m_rendering{};
         bool m_firstFrameStarted{};
 
+        // Keep platform-owned display resources alive until after bgfx shutdown.
+        std::unique_ptr<void, void (*)(void*)> m_nativeDisplay{nullptr, nullptr};
+
         // The single bgfx encoder for the current frame. Acquired in
         // StartRenderingCurrentFrame, ended in FinishRenderingCurrentFrame.
         // Read by all consumers via DeviceContext::GetActiveEncoder() → DeviceImpl::GetActiveEncoder().
         bgfx::Encoder* m_frameEncoder{nullptr};
 
-        std::atomic<bgfx::ViewId> m_nextViewId{0};
+        // Widened to uint32_t so that a run of failed acquisitions cannot wrap the counter
+        // back into the valid view range. AcquireNewViewId saturates it at limits.maxViews,
+        // so it is always safe to narrow back to a bgfx::ViewId.
+        std::atomic<uint32_t> m_nextViewId{0};
+
+        // Incremented every time PerformMidFrameViewFlush resets m_nextViewId in the middle of a
+        // logical frame. Anything that caches a view id across draw calls must also cache this
+        // value and re-acquire when it no longer matches, otherwise the cached (high) id would
+        // sort after ids acquired from the reset counter and invert submission order.
+        std::atomic<uint32_t> m_viewIdGeneration{0};
+
+        // Number of mid-frame view flushes performed during the current logical frame; reset
+        // when the frame is actually presented. The flush lets a logical frame exceed bgfx's
+        // per-frame view budget, but each one is a blocking round-trip to the render thread,
+        // so an unbounded number of them turns pathological content into an apparent hang
+        // instead of an error. FlushViewsIfNeeded stops rescuing past kMaxMidFrameViewFlushes
+        // and lets AcquireNewViewId throw, which is the pre-existing behaviour.
+        std::atomic<uint32_t> m_midFrameFlushCount{0};
 
         std::atomic<bool> m_captureNextFrame{false};
 
@@ -213,6 +249,13 @@ namespace Babylon::Graphics
         std::condition_variable m_frameSyncCV{};
         int m_pendingFrameScopes{0};
         bool m_frameBlocked{true};
+
+        // Mid-frame view-flush handshake (guarded by m_frameSyncMutex):
+        //   - JS thread sets m_flushRequested and waits on m_flushCompleteCV.
+        //   - Render thread (parked in FinishRenderingCurrentFrame) services the
+        //     request via PerformMidFrameViewFlush, clears the flag, and notifies.
+        bool m_flushRequested{false};
+        std::condition_variable m_flushCompleteCV{};
 
         std::mutex m_captureCallbacksMutex{};
         arcana::ticketed_collection<std::function<void(const BgfxCallback::CaptureData&)>> m_captureCallbacks{};

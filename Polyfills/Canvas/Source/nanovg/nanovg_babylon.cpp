@@ -158,6 +158,7 @@ namespace
 
     struct GLNVGtexture
     {
+        int image;
         bgfx::TextureHandle id;
         int width, height;
         int type;
@@ -259,6 +260,14 @@ namespace
         PoolInterface frameBufferPool;
         bgfx::Encoder* encoder;
 
+        // When true, the next non-filtered draw call must acquire a fresh (higher)
+        // bgfx view on the canvas framebuffer so it is ordered after any pool-buffer
+        // views used by a preceding filtered draw. Consecutive non-filtered draws
+        // otherwise share a single view to avoid exhausting the bgfx view budget
+        // (a canvas painted with thousands of ops would otherwise leak thousands of
+        // views within a single device frame -> "Too many views").
+        bool canvasViewNeedsRefresh;
+
         struct GLNVGtexture* textures;
         float view[2];
         int ntextures;
@@ -324,7 +333,7 @@ namespace
         int i;
         for (i = 0; i < gl->ntextures; i++)
         {
-            if (gl->textures[i].id.idx == id)
+            if (gl->textures[i].image == id)
             {
                 return &gl->textures[i];
             }
@@ -337,7 +346,7 @@ namespace
     {
         for (int ii = 0; ii < gl->ntextures; ii++)
         {
-            if (gl->textures[ii].id.idx == id)
+            if (gl->textures[ii].image == id)
             {
                 if (bgfx::isValid(gl->textures[ii].id)
                 && (gl->textures[ii].flags & NVG_IMAGE_NODELETE) == 0)
@@ -441,7 +450,15 @@ namespace
                 );
         }
 
-        return bgfx::isValid(tex->id) ? tex->id.idx : 0;
+        if (!bgfx::isValid(tex->id))
+        {
+            return 0;
+        }
+
+        // NanoVG-created textures retain their existing bgfx-index image IDs.
+        // nvgCreateImageFromHandle uses positive IDs above the uint16_t bgfx handle range.
+        tex->image = static_cast<int>(tex->id.idx);
+        return tex->image;
     }
 
     static int nvgRenderDeleteTexture(void* _userPtr, int image)
@@ -702,6 +719,27 @@ namespace
         encoder->setIndexBuffer(&tib);
     }
 
+    // Gates acquisition of a fresh bgfx view for a canvas draw call. A filtered draw
+    // (blur/etc.) uses intermediate pool framebuffers on higher-id views, so the next
+    // canvas draw must be re-bound to a fresh (higher) view to preserve draw order.
+    // Consecutive non-filtered draws instead share the canvas framebuffer's current
+    // view, preventing view-budget exhaustion ("Too many views") when a DynamicTexture
+    // is painted with thousands of ops in a single device frame.
+    static Babylon::Graphics::FrameBuffer* glnvg__beginFinalFrameBuffer(struct GLNVGcontext* gl, struct GLNVGcall* call)
+    {
+        Babylon::Graphics::FrameBuffer* finalFrameBuffer = gl->frameBuffer;
+        if (call->filterStack.HasFilters() || gl->canvasViewNeedsRefresh)
+        {
+            finalFrameBuffer->Bind();
+        }
+        return finalFrameBuffer;
+    }
+
+    static void glnvg__endFinalFrameBuffer(struct GLNVGcontext* gl, struct GLNVGcall* call)
+    {
+        gl->canvasViewNeedsRefresh = call->filterStack.HasFilters();
+    }
+
     static void glnvg__fill(struct GLNVGcontext* gl, struct GLNVGcall* call)
     {
         bgfx::ProgramHandle firstProg = gl->prog;
@@ -797,10 +835,9 @@ namespace
             screenSpaceQuad(gl->encoder, s_originBottomLeft);
             outBuffer->Submit(*gl->encoder, prog, BGFX_DISCARD_ALL);
         };
-        Babylon::Graphics::FrameBuffer *finalFrameBuffer = gl->frameBuffer;
-        finalFrameBuffer->Bind(); // Should this be bound elsewhere?
-
+        Babylon::Graphics::FrameBuffer *finalFrameBuffer = glnvg__beginFinalFrameBuffer(gl, call);
         call->filterStack.Render(firstProg, setUniform, firstPass, filterPass, finalPass, finalFrameBuffer, gl->frameBufferPool.acquire, gl->frameBufferPool.release);
+        glnvg__endFinalFrameBuffer(gl, call);
     }
 
     static void glnvg__convexFill(struct GLNVGcontext* gl, struct GLNVGcall* call)
@@ -857,10 +894,9 @@ namespace
             screenSpaceQuad(gl->encoder, s_originBottomLeft);
             outBuffer->Submit(*gl->encoder, prog, BGFX_DISCARD_ALL);
         };
-        Babylon::Graphics::FrameBuffer *finalFrameBuffer = gl->frameBuffer;
-        finalFrameBuffer->Bind(); // Should this be bound elsewhere?
-
+        Babylon::Graphics::FrameBuffer *finalFrameBuffer = glnvg__beginFinalFrameBuffer(gl, call);
         call->filterStack.Render(firstProg, setUniform, firstPass, filterPass, finalPass, finalFrameBuffer, gl->frameBufferPool.acquire, gl->frameBufferPool.release);
+        glnvg__endFinalFrameBuffer(gl, call);
     }
 
     static void glnvg__stroke(struct GLNVGcontext* gl, struct GLNVGcall* call)
@@ -900,10 +936,9 @@ namespace
             screenSpaceQuad(gl->encoder, s_originBottomLeft);
             outBuffer->Submit(*gl->encoder, prog, BGFX_DISCARD_ALL);
         };
-        Babylon::Graphics::FrameBuffer *finalFrameBuffer = gl->frameBuffer;
-        finalFrameBuffer->Bind(); // Should this be bound elsewhere?
-
+        Babylon::Graphics::FrameBuffer *finalFrameBuffer = glnvg__beginFinalFrameBuffer(gl, call);
         call->filterStack.Render(firstProg, setUniform, firstPass, filterPass, finalPass, finalFrameBuffer, gl->frameBufferPool.acquire, gl->frameBufferPool.release);
+        glnvg__endFinalFrameBuffer(gl, call);
     }
 
     static void glnvg__triangles(struct GLNVGcontext* gl, struct GLNVGcall* call)
@@ -938,10 +973,9 @@ namespace
                 screenSpaceQuad(gl->encoder, s_originBottomLeft);
                 outBuffer->Submit(*gl->encoder, prog, BGFX_DISCARD_ALL);
 			};
-            Babylon::Graphics::FrameBuffer *finalFrameBuffer = gl->frameBuffer;
-            finalFrameBuffer->Bind(); // Should this be bound elsewhere?
-
+            Babylon::Graphics::FrameBuffer *finalFrameBuffer = glnvg__beginFinalFrameBuffer(gl, call);
             call->filterStack.Render(firstProg, setUniform, firstPass, filterPass, finalPass, finalFrameBuffer, gl->frameBufferPool.acquire, gl->frameBufferPool.release);
+            glnvg__endFinalFrameBuffer(gl, call);
         }
     }
 
@@ -988,7 +1022,10 @@ namespace
     {
         struct GLNVGcontext* gl = (struct GLNVGcontext*)_userPtr;
         //gl->frameBuffer->SetViewPort(gl->encoder, 0.f, 0.f, gl->view[0], gl->view[1]);
-        if (!gl->prog.idx)
+        // The canvas framebuffer is bound with a fresh view by Context::Flush before this
+        // flush runs, so the first draw call can reuse that view without re-binding.
+        gl->canvasViewNeedsRefresh = false;
+        if (!bgfx::isValid(gl->prog))
         {
             bgfx::RendererType::Enum type = bgfx::getRendererType();
             gl->prog = bgfx::createProgram(
@@ -1003,44 +1040,57 @@ namespace
 
         if (gl->ncalls > 0)
         {
-            bgfx::allocTransientVertexBuffer(&gl->tvb, gl->nverts, s_nvgLayout);
+            // bgfx asserts inside allocTransientVertexBuffer when the request exceeds what
+            // remains of this frame's transient buffer, so the request must be checked
+            // *before* the call - inspecting gl->tvb afterwards (as this code used to) is
+            // unreachable in an assert-enabled build. A canvas painted with a very large
+            // number of ops, or several canvases sharing one frame, can legitimately exceed
+            // the budget.
+            //
+            // The draw calls below index the buffer using offsets recorded while the geometry
+            // was built, so a partial allocation cannot be rendered: every draw past the
+            // truncation point would read outside the buffer. That is not merely wrong
+            // visually - it makes the D3D11 debug layer emit an oversized diagnostic per draw
+            // call, which is slow enough to stall a validation run for the better part of an
+            // hour. Drop the whole flush instead, so the frame is simply missing this canvas
+            // content rather than issuing out-of-bounds draws or aborting the process.
+            const uint32_t availVerts = bgfx::getAvailTransientVertexBuffer(uint32_t(gl->nverts), s_nvgLayout);
+            const bool vertsFit = availVerts >= uint32_t(gl->nverts);
+            BX_WARN(vertsFit, "Canvas draw skipped: transient vertex buffer exhausted (%d requested, %u available)", gl->nverts, availVerts);
 
-            int allocated = gl->tvb.size/gl->tvb.stride;
-
-            if (allocated < gl->nverts)
+            if (vertsFit && gl->nverts > 0)
             {
-                gl->nverts = allocated;
-                BX_WARN(true, "Vertex number truncated due to transient vertex buffer overflow");
-            }
+                bgfx::allocTransientVertexBuffer(&gl->tvb, uint32_t(gl->nverts), s_nvgLayout);
 
-            bx::memCopy(gl->tvb.data, gl->verts, gl->nverts * sizeof(struct NVGvertex) );
+                bx::memCopy(gl->tvb.data, gl->verts, gl->nverts * sizeof(struct NVGvertex) );
 
-            for (uint32_t ii = 0, num = gl->ncalls; ii < num; ++ii)
-            {
-                struct GLNVGcall* call = &gl->calls[ii];
-
-                const GLNVGblend* blend = &call->blendFunc;
-                gl->state = BGFX_STATE_BLEND_FUNC_SEPARATE(blend->srcRGB, blend->dstRGB, blend->srcAlpha, blend->dstAlpha)
-                    | BGFX_STATE_WRITE_RGB
-                    | BGFX_STATE_WRITE_A
-                    ;
-                switch (call->type)
+                for (uint32_t ii = 0, num = gl->ncalls; ii < num; ++ii)
                 {
-                case GLNVG_FILL:
-                    glnvg__fill(gl, call);
-                    break;
+                    struct GLNVGcall* call = &gl->calls[ii];
 
-                case GLNVG_CONVEXFILL:
-                    glnvg__convexFill(gl, call);
-                    break;
+                    const GLNVGblend* blend = &call->blendFunc;
+                    gl->state = BGFX_STATE_BLEND_FUNC_SEPARATE(blend->srcRGB, blend->dstRGB, blend->srcAlpha, blend->dstAlpha)
+                        | BGFX_STATE_WRITE_RGB
+                        | BGFX_STATE_WRITE_A
+                        ;
+                    switch (call->type)
+                    {
+                    case GLNVG_FILL:
+                        glnvg__fill(gl, call);
+                        break;
 
-                case GLNVG_STROKE:
-                    glnvg__stroke(gl, call);
-                    break;
+                    case GLNVG_CONVEXFILL:
+                        glnvg__convexFill(gl, call);
+                        break;
 
-                case GLNVG_TRIANGLES:
-                    glnvg__triangles(gl, call);
-                    break;
+                    case GLNVG_STROKE:
+                        glnvg__stroke(gl, call);
+                        break;
+
+                    case GLNVG_TRIANGLES:
+                        glnvg__triangles(gl, call);
+                        break;
+                    }
                 }
             }
         }
@@ -1303,26 +1353,60 @@ namespace
             return;
         }
 
-        // gl->prog.idx can be 0 is a context is destroyed without a call to flush
-        if (gl->prog.idx)
+        // Handles are initialized to BGFX_INVALID_HANDLE; prog is lazy-created on flush.
+        // Guard every destroy so a partially-initialized or never-flushed context is safe.
+        if (bgfx::isValid(gl->prog))
         {
             bgfx::destroy(gl->prog);
         }
-        bgfx::destroy(gl->texMissing);
+        if (bgfx::isValid(gl->texMissing))
+        {
+            bgfx::destroy(gl->texMissing);
+        }
 
-        bgfx::destroy(gl->u_scissorMat);
-        bgfx::destroy(gl->u_paintMat);
-        bgfx::destroy(gl->u_innerCol);
-        bgfx::destroy(gl->u_outerCol);
-        bgfx::destroy(gl->u_scissorExtScale);
-        bgfx::destroy(gl->u_extentRadius);
-        bgfx::destroy(gl->u_params);
-        bgfx::destroy(gl->u_sdf);
-        bgfx::destroy(gl->s_tex);
-        bgfx::destroy(gl->s_tex2);
+        if (bgfx::isValid(gl->u_scissorMat))
+        {
+            bgfx::destroy(gl->u_scissorMat);
+        }
+        if (bgfx::isValid(gl->u_paintMat))
+        {
+            bgfx::destroy(gl->u_paintMat);
+        }
+        if (bgfx::isValid(gl->u_innerCol))
+        {
+            bgfx::destroy(gl->u_innerCol);
+        }
+        if (bgfx::isValid(gl->u_outerCol))
+        {
+            bgfx::destroy(gl->u_outerCol);
+        }
+        if (bgfx::isValid(gl->u_scissorExtScale))
+        {
+            bgfx::destroy(gl->u_scissorExtScale);
+        }
+        if (bgfx::isValid(gl->u_extentRadius))
+        {
+            bgfx::destroy(gl->u_extentRadius);
+        }
+        if (bgfx::isValid(gl->u_params))
+        {
+            bgfx::destroy(gl->u_params);
+        }
+        if (bgfx::isValid(gl->u_sdf))
+        {
+            bgfx::destroy(gl->u_sdf);
+        }
+        if (bgfx::isValid(gl->s_tex))
+        {
+            bgfx::destroy(gl->s_tex);
+        }
+        if (bgfx::isValid(gl->s_tex2))
+        {
+            bgfx::destroy(gl->s_tex2);
+        }
         nanovg_filterstack::DisposeBgfx();
 
-        if (bgfx::isValid(gl->u_halfTexel) )
+        if (bgfx::isValid(gl->u_halfTexel))
         {
             bgfx::destroy(gl->u_halfTexel);
         }
@@ -1362,6 +1446,24 @@ NVGcontext* nvgCreate(int32_t _edgeaa, bx::AllocatorI* _allocator)
     }
 
     bx::memSet(gl, 0, sizeof(struct GLNVGcontext) );
+    // memSet leaves handle idx at 0; bgfx treats 0 as a valid first handle, so mark
+    // resources invalid until create* runs (prog is also lazy-created on first flush).
+    gl->prog = BGFX_INVALID_HANDLE;
+    gl->u_scissorMat = BGFX_INVALID_HANDLE;
+    gl->u_paintMat = BGFX_INVALID_HANDLE;
+    gl->u_innerCol = BGFX_INVALID_HANDLE;
+    gl->u_outerCol = BGFX_INVALID_HANDLE;
+    gl->u_scissorExtScale = BGFX_INVALID_HANDLE;
+    gl->u_extentRadius = BGFX_INVALID_HANDLE;
+    gl->u_params = BGFX_INVALID_HANDLE;
+    gl->u_halfTexel = BGFX_INVALID_HANDLE;
+    gl->u_sdf = BGFX_INVALID_HANDLE;
+    gl->s_tex = BGFX_INVALID_HANDLE;
+    gl->s_tex2 = BGFX_INVALID_HANDLE;
+    gl->th = BGFX_INVALID_HANDLE;
+    gl->th2 = BGFX_INVALID_HANDLE;
+    gl->texMissing = BGFX_INVALID_HANDLE;
+    gl->textureId = static_cast<int>(bgfx::kInvalidHandle);
 
     bx::memSet(&params, 0, sizeof(params) );
     params.renderCreate         = nvgRenderCreate;
@@ -1422,5 +1524,31 @@ bgfx::TextureHandle nvglImageHandle(NVGcontext* _ctx, int32_t _image)
 {
     GLNVGcontext* gl = (GLNVGcontext*)nvgInternalParams(_ctx)->userPtr;
     GLNVGtexture* tex = glnvg__findTexture(gl, _image);
-    return tex->id;
+    return tex != nullptr ? tex->id : bgfx::TextureHandle{bgfx::kInvalidHandle};
+}
+
+int nvgCreateImageFromHandle(NVGcontext* _ctx, bgfx::TextureHandle _handle, int _width, int _height, int _flags)
+{
+    if (_ctx == nullptr || !bgfx::isValid(_handle) || _width <= 0 || _height <= 0)
+    {
+        return 0;
+    }
+
+    GLNVGcontext* gl = (GLNVGcontext*)nvgInternalParams(_ctx)->userPtr;
+    GLNVGtexture* tex = glnvg__allocTexture(gl);
+    if (tex == nullptr)
+    {
+        return 0;
+    }
+
+    tex->width = _width;
+    tex->height = _height;
+    tex->type = NVG_TEXTURE_RGBA;
+    // Do not destroy the caller's texture when nvgDeleteImage runs.
+    tex->flags = _flags | NVG_IMAGE_NODELETE;
+    tex->id = _handle;
+    // Keep externally registered handles above the uint16_t bgfx handle range,
+    // away from NanoVG's zero sentinel and NanoVG-created texture IDs.
+    tex->image = ++gl->textureId;
+    return tex->image;
 }

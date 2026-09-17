@@ -54,6 +54,8 @@ namespace Babylon::Polyfills
 
 namespace Babylon::Polyfills::Internal
 {
+    class Context;
+
     class NativeCanvas final : public Napi::ObjectWrap<NativeCanvas>, Polyfills::Canvas::Impl::MonitoredResource
     {
     public:
@@ -65,15 +67,22 @@ namespace Babylon::Polyfills::Internal
         uint32_t GetWidth() const { return m_width; }
         uint32_t GetHeight() const { return m_height; }
 
+        Context* GetBoundContext() const { return m_context; }
+        void SetBoundContext(Context* context) { m_context = context; }
+
         static inline std::map<std::string, std::vector<uint8_t>> fontsInfos;
 
         bool UpdateRenderTarget();
+        bool HasFrameBuffer() const { return m_frameBuffer != nullptr; }
         Babylon::Graphics::FrameBuffer& GetFrameBuffer() { return *m_frameBuffer; }
         FrameBufferPool m_frameBufferPool;
 
-        // View id reserved by Context::Flush (right after this canvas' draws) for the
-        // canvas->texture blit issued from NativeEngine::CopyTexture. See Context::Flush.
-        void SetBlitViewId(bgfx::ViewId viewId) { m_blitViewId = viewId; }
+        // Blit view reserved by Context::Flush for CopyTexture ordering.
+        void SetBlitViewId(bgfx::ViewId viewId, uint32_t generation)
+        {
+            m_blitViewId = viewId;
+            m_blitViewIdGeneration = generation;
+        }
 
         Graphics::DeviceContext& GetGraphicsContext()
         {
@@ -87,14 +96,17 @@ namespace Babylon::Polyfills::Internal
         Napi::Value GetHeight(const Napi::CallbackInfo&);
         void SetHeight(const Napi::CallbackInfo&, const Napi::Value& value);
         Napi::Value GetCanvasTexture(const Napi::CallbackInfo& info);
+        Napi::Value ToDataURL(const Napi::CallbackInfo& info);
         static void LoadTTF(const Napi::CallbackInfo& info);
         static Napi::Value LoadTTFAsync(const Napi::CallbackInfo& info);
+        static void LoadTTFCore(const Napi::CallbackInfo& info, const char* methodName);
         static Napi::Value ParseColor(const Napi::CallbackInfo& info);
         void Remove(const Napi::CallbackInfo& info);
         void Dispose(const Napi::CallbackInfo& info);
         void Dispose();
 
         Napi::ObjectReference m_contextObject{};
+        Context* m_context{nullptr};
 
         uint16_t m_width{1};
         uint16_t m_height{1};
@@ -104,6 +116,7 @@ namespace Babylon::Polyfills::Internal
         std::unique_ptr<Graphics::FrameBuffer> m_frameBuffer;
         std::unique_ptr<Graphics::Texture> m_texture{};
         bgfx::ViewId m_blitViewId{UINT16_MAX};
+        uint32_t m_blitViewIdGeneration{0};
         bool m_dirty{};
         bool m_clear{};
 
