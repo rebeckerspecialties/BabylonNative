@@ -1,3 +1,4 @@
+#include <cstdlib>
 #import "ViewController.h"
 
 #import <Babylon/Embedding/Apple/BabylonNativeEmbedding.h>
@@ -336,6 +337,14 @@ namespace
         CommandLine::PrintUsage([[[NSProcessInfo processInfo] processName] UTF8String]);
         [NSApp terminate:nil];
         return;
+    }
+
+    if (playgroundOptions.JscInterpreterOnly)
+    {
+        // JavaScriptCore reads JSC_* options when its first VM is created; this runs before the
+        // runtime below creates one. Mirrors what every Apple mobile platform imposes on third-party
+        // apps, so desktop measurements show the same interpreter-bound bottlenecks.
+        setenv("JSC_useJIT", "false", 1);
     }
 
     BNRuntimeOptions* options = [[BNRuntimeOptions alloc] init];

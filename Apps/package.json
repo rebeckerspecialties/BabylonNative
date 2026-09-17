@@ -13,14 +13,14 @@
     "patch:babylonjs:apply": "node scripts/applyBabylonJsPatchStack.js --apply"
   },
   "dependencies": {
-    "babylonjs": "9.22.1",
-    "babylonjs-addons": "9.22.1",
-    "babylonjs-gltf2interface": "9.22.1",
-    "babylonjs-gui": "9.22.1",
-    "babylonjs-loaders": "9.22.1",
-    "babylonjs-materials": "9.22.1",
-    "babylonjs-procedural-textures": "9.22.1",
-    "babylonjs-serializers": "9.22.1",
+    "babylonjs": "9.26.0",
+    "babylonjs-addons": "9.26.0",
+    "babylonjs-gltf2interface": "9.26.0",
+    "babylonjs-gui": "9.26.0",
+    "babylonjs-loaders": "9.26.0",
+    "babylonjs-materials": "9.26.0",
+    "babylonjs-procedural-textures": "9.26.0",
+    "babylonjs-serializers": "9.26.0",
     "earcut": "^2.2.4",
     "jsc-android": "^241213.1.0",
     "v8-android": "^7.8.2"

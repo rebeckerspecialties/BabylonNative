@@ -821,18 +821,6 @@
                 srcValue = String(value || "");
                 image.complete = false;
 
-                if (isValidationObjectUrl(srcValue)) {
-                    const blob = validationObjectUrls[srcValue];
-                    blobToArrayBuffer(blob).then(function (buffer) {
-                        const bytes = toUint8Array(buffer);
-                        const dataUrl = "data:" + (blob.type || "application/octet-stream") + ";base64," + bytesToBase64(bytes);
-                        setNativeSrc(dataUrl);
-                    }).catch(function (error) {
-                        dispatchImageEvent("error", error);
-                    });
-                    return;
-                }
-
                 setNativeSrc(srcValue);
             }
         });
@@ -903,8 +891,9 @@
         return validationWebGPUDevice.queue.onSubmittedWorkDone();
     }
 
+    // Blob, File and URL.createObjectURL/revokeObjectURL come from the host runtime (JsRuntimeHost's
+    // polyfills, with blob: URLs served through UrlLib's scheme resolver); nothing here stands in for them.
     function installValidationBrowserShims() {
-        installValidationBlobShim();
         installValidationWebGPUDeviceCapture();
 
         globalThis.window = globalThis.window || globalThis;
@@ -988,13 +977,6 @@
         }
     }
 
-    const validationObjectUrls = {};
-    let nextValidationObjectUrlId = 1;
-
-    function isValidationObjectUrl(url) {
-        return typeof url === "string" && Object.prototype.hasOwnProperty.call(validationObjectUrls, url);
-    }
-
     function toUint8Array(input) {
         if (input instanceof ArrayBuffer) {
             return new Uint8Array(input);
@@ -1003,46 +985,6 @@
             return new Uint8Array(input.buffer, input.byteOffset, input.byteLength);
         }
         return input;
-    }
-
-    function encodeUtf8(text) {
-        const value = String(text);
-        if (typeof TextEncoder !== "undefined") {
-            return new TextEncoder().encode(value);
-        }
-
-        const bytes = [];
-        for (let i = 0; i < value.length; ++i) {
-            let codePoint = value.charCodeAt(i);
-            if (codePoint >= 0xd800 && codePoint <= 0xdbff && i + 1 < value.length) {
-                const low = value.charCodeAt(++i);
-                codePoint = 0x10000 + ((codePoint - 0xd800) << 10) + (low - 0xdc00);
-            }
-
-            if (codePoint < 0x80) {
-                bytes.push(codePoint);
-            } else if (codePoint < 0x800) {
-                bytes.push(0xc0 | (codePoint >> 6), 0x80 | (codePoint & 0x3f));
-            } else if (codePoint < 0x10000) {
-                bytes.push(0xe0 | (codePoint >> 12), 0x80 | ((codePoint >> 6) & 0x3f), 0x80 | (codePoint & 0x3f));
-            } else {
-                bytes.push(0xf0 | (codePoint >> 18), 0x80 | ((codePoint >> 12) & 0x3f), 0x80 | ((codePoint >> 6) & 0x3f), 0x80 | (codePoint & 0x3f));
-            }
-        }
-        return new Uint8Array(bytes);
-    }
-
-    function decodeUtf8(bytes) {
-        const data = toUint8Array(bytes);
-        if (typeof TextDecoder !== "undefined") {
-            return new TextDecoder().decode(data);
-        }
-
-        let output = "";
-        for (let i = 0; i < data.length; ++i) {
-            output += String.fromCharCode(data[i]);
-        }
-        return output;
     }
 
     function bytesToBase64(bytes) {
@@ -1085,147 +1027,6 @@
             " keys=[" + Object.keys(blob).join(",") + "]."));
     }
 
-    function blobPartToArrayBuffer(part) {
-        if (part && typeof part.then === "function") {
-            return part.then(blobPartToArrayBuffer);
-        }
-        if (part instanceof ArrayBuffer) {
-            return Promise.resolve(part);
-        }
-        if (ArrayBuffer.isView(part)) {
-            return Promise.resolve(part.buffer.slice(part.byteOffset, part.byteOffset + part.byteLength));
-        }
-        if (typeof part === "string") {
-            const bytes = encodeUtf8(part);
-            return Promise.resolve(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength));
-        }
-        if (part && typeof part.arrayBuffer === "function") {
-            return part.arrayBuffer();
-        }
-        if (part && typeof part.bytes === "function") {
-            return part.bytes().then(function (bytes) {
-                const data = toUint8Array(bytes);
-                return data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
-            });
-        }
-        return Promise.reject(new Error("Unsupported BlobPart for validation."));
-    }
-
-    function createValidationBlobConstructor() {
-        function ValidationBlob(parts, options) {
-            const blobParts = Array.isArray(parts) ? parts.slice() : [];
-            const type = options && options.type ? String(options.type) : "";
-            Object.defineProperty(this, "_validationBlobParts", {
-                configurable: false,
-                enumerable: false,
-                value: blobParts
-            });
-            Object.defineProperty(this, "type", {
-                configurable: false,
-                enumerable: true,
-                value: type
-            });
-
-            let size = 0;
-            for (let i = 0; i < blobParts.length; ++i) {
-                const part = blobParts[i];
-                if (part instanceof ArrayBuffer) {
-                    size += part.byteLength;
-                } else if (ArrayBuffer.isView(part)) {
-                    size += part.byteLength;
-                } else if (typeof part === "string") {
-                    size += encodeUtf8(part).byteLength;
-                } else if (part && typeof part.size === "number") {
-                    size += part.size;
-                }
-            }
-            Object.defineProperty(this, "size", {
-                configurable: false,
-                enumerable: true,
-                value: size
-            });
-        }
-
-        ValidationBlob.prototype.arrayBuffer = function () {
-            return Promise.all(this._validationBlobParts.map(blobPartToArrayBuffer)).then(function (buffers) {
-                let byteLength = 0;
-                for (let i = 0; i < buffers.length; ++i) {
-                    byteLength += buffers[i].byteLength;
-                }
-
-                const output = new Uint8Array(byteLength);
-                let offset = 0;
-                for (let i = 0; i < buffers.length; ++i) {
-                    const bytes = new Uint8Array(buffers[i]);
-                    output.set(bytes, offset);
-                    offset += bytes.byteLength;
-                }
-                return output.buffer;
-            });
-        };
-        ValidationBlob.prototype.bytes = function () {
-            return this.arrayBuffer().then(function (buffer) {
-                return new Uint8Array(buffer);
-            });
-        };
-        ValidationBlob.prototype.text = function () {
-            return this.arrayBuffer().then(function (buffer) {
-                return decodeUtf8(new Uint8Array(buffer));
-            });
-        };
-        ValidationBlob.prototype.slice = function (start, end, contentType) {
-            const begin = Math.max(0, start || 0);
-            return new ValidationBlob([this.arrayBuffer().then(function (buffer) {
-                return buffer.slice(begin, end === undefined ? buffer.byteLength : end);
-            })], { type: contentType || this.type });
-        };
-        return ValidationBlob;
-    }
-
-    function tryGetSynchronousValidationBlobBytes(blob) {
-        if (!blob || !Array.isArray(blob._validationBlobParts)) {
-            return null;
-        }
-
-        const buffers = [];
-        let byteLength = 0;
-        for (let i = 0; i < blob._validationBlobParts.length; ++i) {
-            const part = blob._validationBlobParts[i];
-            let bytes;
-            if (part instanceof ArrayBuffer) {
-                bytes = new Uint8Array(part);
-            } else if (ArrayBuffer.isView(part)) {
-                bytes = new Uint8Array(part.buffer, part.byteOffset, part.byteLength);
-            } else if (typeof part === "string") {
-                bytes = encodeUtf8(part);
-            } else {
-                return null;
-            }
-            buffers.push(bytes);
-            byteLength += bytes.byteLength;
-        }
-
-        const output = new Uint8Array(byteLength);
-        let offset = 0;
-        for (let i = 0; i < buffers.length; ++i) {
-            output.set(buffers[i], offset);
-            offset += buffers[i].byteLength;
-        }
-        return output;
-    }
-
-    function tryCreateValidationBlobDataUrl(blob) {
-        const bytes = tryGetSynchronousValidationBlobBytes(blob);
-        if (!bytes) {
-            return null;
-        }
-        return "data:" + (blob.type || "application/octet-stream") + ";base64," + bytesToBase64(bytes);
-    }
-
-    function installValidationBlobShim() {
-        globalThis.Blob = createValidationBlobConstructor();
-    }
-
     function imageFromDataUrl(dataUrl) {
         return new Promise(function (resolve, reject) {
             if (typeof _native === "undefined" || !_native.Image || !_native.Canvas) {
@@ -1260,80 +1061,12 @@
     }
 
     function installValidationImageLoadingShim() {
-        globalThis.URL = globalThis.URL || {};
-        URL.createObjectURL = function (blob) {
-            const dataUrl = tryCreateValidationBlobDataUrl(blob);
-            if (dataUrl) {
-                return dataUrl;
-            }
-
-            const url = "blob:native-validation/" + nextValidationObjectUrlId++;
-            validationObjectUrls[url] = blob;
-            return url;
-        };
-        URL.revokeObjectURL = function (url) {
-            delete validationObjectUrls[url];
-        };
-
+        // Image sources given as URLs (http, app://, blob:) are fetched through Tools.LoadFile as
+        // captured here, before the retry wrapper below is installed.
         const originalLoadFile = BABYLON.Tools.LoadFile;
-        const originalFileToolsLoadFile = BABYLON.FileTools && BABYLON.FileTools.LoadFile;
 
-        function loadFileWithValidationBlobUrls(url, onSuccess, onProgress, offlineProvider, useArrayBuffer, onError, onOpened) {
-            if (isValidationObjectUrl(url)) {
-                const blob = validationObjectUrls[url];
-                const promise = useArrayBuffer && blob.arrayBuffer ? blob.arrayBuffer() : blob.text();
-                promise.then(function (data) {
-                    onSuccess(data, url);
-                }).catch(function (error) {
-                    if (onError) {
-                        onError(undefined, error);
-                    } else {
-                        throw error;
-                    }
-                });
-                return {
-                    abort: function () { },
-                    onCompleteObservable: { add: function () { } }
-                };
-            }
-
-            return originalLoadFile(url, onSuccess, onProgress, offlineProvider, useArrayBuffer, onError, onOpened);
-        }
-
-        BABYLON.Tools.LoadFile = loadFileWithValidationBlobUrls;
-        if (BABYLON.FileTools && originalFileToolsLoadFile) {
-            BABYLON.FileTools.LoadFile = loadFileWithValidationBlobUrls;
-        }
-        if (BABYLON.Engine) {
-            BABYLON.Engine._FileToolsLoadFile = loadFileWithValidationBlobUrls;
-        }
-        if (BABYLON.ThinEngine) {
-            BABYLON.ThinEngine._FileToolsLoadFile = loadFileWithValidationBlobUrls;
-        }
-        if (BABYLON.AbstractEngine) {
-            BABYLON.AbstractEngine._FileToolsLoadFile = loadFileWithValidationBlobUrls;
-        }
-
-        globalThis.createImageBitmap = function (source, options) {
-            if (typeof Blob !== "undefined" && source instanceof Blob) {
-                return blobToArrayBuffer(source).then(function (buffer) {
-                    return imageFromArrayBuffer(buffer, source.type);
-                });
-            }
-            if (source instanceof ArrayBuffer || ArrayBuffer.isView(source)) {
-                return imageFromArrayBuffer(source);
-            }
-            if (source && typeof source._getNativeImageData === "function") {
-                return Promise.resolve(source);
-            }
-            if (source && typeof source.getCanvasTexture === "function") {
-                return Promise.resolve(source);
-            }
-            if (source && typeof source.src === "string") {
-                return imageFromDataUrl(source.src);
-            }
-            return Promise.reject(new Error("Unsupported createImageBitmap source for validation."));
-        };
+        // createImageBitmap comes from the runtime's Canvas polyfill (it accepts Blob, ArrayBuffer,
+        // typed-array, ImageData, canvas and image sources); the harness no longer replaces it.
 
         function loadImageWithNativeCanvas(source, onLoad, onError, offlineProvider, mimeType, imageBitmapOptions, engine) {
             function reportError(message, error) {
@@ -1363,16 +1096,6 @@
             }
 
             if (typeof source === "string") {
-                if (isValidationObjectUrl(source)) {
-                    const blob = validationObjectUrls[source];
-                    blobToArrayBuffer(blob).then(function (buffer) {
-                        decodeBuffer(buffer, blob.type);
-                    }).catch(function (error) {
-                        reportError("Error while trying to load image object URL.", error);
-                    });
-                    return null;
-                }
-
                 if (source.indexOf("data:") === 0) {
                     imageFromDataUrl(source).then(onLoad).catch(function (error) {
                         reportError("Error while trying to load image data URL.", error);

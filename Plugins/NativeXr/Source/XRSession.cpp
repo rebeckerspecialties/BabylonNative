@@ -26,6 +26,10 @@
 #include "XRSession.h"
 #include "XRFrame.h"
 
+#include <cmath>
+#include <cstring>
+#include <limits>
+
 namespace Babylon
 {
     namespace
@@ -257,18 +261,67 @@ namespace Babylon
                     // Pull out native values from the JS object.
                     const auto napiImageRequest{ napiTrackedImages.Get(idx).As<Napi::Object>() };
                     const auto napiImage{ napiImageRequest.Get("image").As<Napi::Object>() };
-                    const auto napiBuffer{ napiImage.Get("data").As<Napi::Uint8Array>() };
-                    const uint32_t bufferSize{ (uint32_t)napiBuffer.ByteLength() };
-                    const uint32_t imageHeight{ napiImage.Get("height").ToNumber().Uint32Value() };
-                    const uint32_t imageWidth{ napiImage.Get("width").ToNumber().Uint32Value() };
-                    const uint32_t imageDepth{ napiImage.Get("depth").ToNumber().Uint32Value() };
-                    const uint32_t stride{ bufferSize / imageHeight };
+                    auto napiImageData{ napiImage };
+                    auto dataValue{ napiImageData.Get("data") };
+                    if (!dataValue.IsTypedArray())
+                    {
+                        const auto getNativeImageData{ napiImage.Get("_getNativeImageData") };
+                        if (!getNativeImageData.IsFunction())
+                        {
+                            throw Napi::TypeError::New(info.Env(), "Tracked image pixel data is unavailable.");
+                        }
+
+                        const auto imageDataValue{ getNativeImageData.As<Napi::Function>().Call(napiImage, {}) };
+                        if (!imageDataValue.IsObject())
+                        {
+                            throw Napi::TypeError::New(info.Env(), "Tracked image pixel data is unavailable.");
+                        }
+                        napiImageData = imageDataValue.As<Napi::Object>();
+                        dataValue = napiImageData.Get("data");
+                    }
+
+                    if (!dataValue.IsTypedArray())
+                    {
+                        throw Napi::TypeError::New(info.Env(), "Tracked image data must be a byte typed array.");
+                    }
+
+                    const auto napiBuffer{ dataValue.As<Napi::TypedArray>() };
+                    const auto bufferSize{ napiBuffer.ByteLength() };
+                    if (napiBuffer.ElementSize() != 1 || bufferSize == 0 || bufferSize > std::numeric_limits<uint32_t>::max())
+                    {
+                        throw Napi::RangeError::New(info.Env(), "Tracked image data must be a non-empty byte typed array smaller than 4 GiB.");
+                    }
+
+                    const uint32_t imageHeight{ napiImageData.Get("height").ToNumber().Uint32Value() };
+                    const uint32_t imageWidth{ napiImageData.Get("width").ToNumber().Uint32Value() };
+                    const auto depthValue{ napiImageData.Get("depth") };
+                    const uint32_t imageDepth{ depthValue.IsNumber() ? depthValue.ToNumber().Uint32Value() : 1u };
+                    if (imageWidth == 0 || imageHeight == 0 || imageDepth == 0 || bufferSize % imageHeight != 0)
+                    {
+                        throw Napi::RangeError::New(info.Env(), "Tracked image dimensions do not match its pixel data.");
+                    }
+
+                    const auto strideSize{ bufferSize / imageHeight };
+                    if (strideSize > std::numeric_limits<uint32_t>::max() || strideSize < imageWidth || strideSize % imageWidth != 0)
+                    {
+                        throw Napi::RangeError::New(info.Env(), "Tracked image rows do not contain a supported tightly packed pixel layout.");
+                    }
+                    const auto stride{ static_cast<uint32_t>(strideSize) };
                     const float estimatedWidth{ napiImageRequest.Get("widthInMeters").ToNumber().FloatValue() };
+                    if (!std::isfinite(estimatedWidth) || estimatedWidth < 0.0f)
+                    {
+                        throw Napi::RangeError::New(info.Env(), "Tracked image widthInMeters must be a finite non-negative number.");
+                    }
+
+                    auto imageData{ std::make_shared<std::vector<uint8_t>>(bufferSize) };
+                    const auto arrayBuffer{ napiBuffer.ArrayBuffer() };
+                    const auto* sourceData{ static_cast<const uint8_t*>(arrayBuffer.Data()) + napiBuffer.ByteOffset() };
+                    std::memcpy(imageData->data(), sourceData, bufferSize);
 
                     // Construct the image tracking request object.
                     session.m_imageTrackingRequests[idx] =
                     {
-                        napiBuffer.Data(),
+                        std::move(imageData),
                         imageWidth,
                         imageHeight,
                         imageDepth,
@@ -718,7 +771,11 @@ namespace Babylon
         {
             Napi::Function callback{ info[0].As<Napi::Function>() };
 
-            m_xr->ScheduleFrame([this, callbackPtr{ std::make_shared<Napi::FunctionReference>(Napi::Persistent(callback)) }](const std::shared_ptr<const xr::System::Session::Frame>& frame) {
+            m_xr->ScheduleFrame([
+                this,
+                callbackPtr{ std::make_shared<Napi::FunctionReference>(Napi::Persistent(callback)) },
+                sessionPtr{ std::make_shared<Napi::ObjectReference>(Napi::Persistent(info.This().As<Napi::Object>())) }](const std::shared_ptr<const xr::System::Session::Frame>& frame) {
+                (void)sessionPtr;
                 ProcessEyeInputSource(*frame.get(), Env());
                 ProcessControllerInputSources(*frame.get(), Env());
 
@@ -849,7 +906,11 @@ namespace Babylon
         {
             auto deferred{ Napi::Promise::Deferred::New(info.Env()) };
             m_xr->EndSessionAsync().then(m_runtimeScheduler, arcana::cancellation::none(),
-                [this, deferred](const arcana::expected<void, std::exception_ptr>& result) {
+                [
+                    this,
+                    deferred,
+                    sessionPtr{ std::make_shared<Napi::ObjectReference>(Napi::Persistent(info.This().As<Napi::Object>())) }](const arcana::expected<void, std::exception_ptr>& result) {
+                    (void)sessionPtr;
                     if (result.has_error())
                     {
                         deferred.Reject(Napi::Error::New(Env(), result.error()).Value());
