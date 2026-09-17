@@ -27,10 +27,12 @@ set_source_files_properties(${TEST_SCRIPTS} PROPERTIES HEADER_FILE_ONLY TRUE)
 set(SOURCES
     "Source/App.h"
     "Source/App.cpp"
-    "Source/Tests.JavaScript.cpp")
+    "Source/Tests.JavaScript.cpp"
+    "Source/Tests.NativeXr.ImageTracking.cpp")
 
 set(UNITTEST_LIBRARIES
     AppRuntime
+    arcana
     Blob
     Canvas
     Compression
@@ -114,7 +116,7 @@ if(APPLE)
             SKIP_EXTERNAL_TEXTURE_TESTS)
     endif()
     find_library(JAVASCRIPTCORE_LIBRARY JavaScriptCore)
-    set(ADDITIONAL_LIBRARIES ${JAVASCRIPTCORE_LIBRARY})
+    set(ADDITIONAL_LIBRARIES ${JAVASCRIPTCORE_LIBRARY} "-framework CoreGraphics")
 elseif(UNIX AND NOT ANDROID)
     set(SOURCES ${SOURCES} "Source/App.X11.cpp")
 elseif(WIN32)
@@ -123,6 +125,7 @@ endif()
 
 add_executable(UnitTests ${BABYLONJS_ASSETS} ${BABYLONJS_MATERIALS_ASSETS} ${TEST_ASSETS} ${TEST_SCRIPTS} ${SOURCES})
 target_include_directories(UnitTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../../Plugins/NativeEngine/Source")
+target_include_directories(UnitTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../../Dependencies/xr/Include")
 target_link_libraries(UnitTests
     PRIVATE ${UNITTEST_LIBRARIES}
     ${ADDITIONAL_LIBRARIES})
