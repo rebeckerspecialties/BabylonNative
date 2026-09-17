@@ -505,9 +505,9 @@ namespace Babylon::Polyfills::Internal
             const auto color = StringToColor(info.Env(), std::get<std::string>(m_fillStyle));
             nvgFillColor(*m_nvg, color);
         }
-        else if (std::holds_alternative<CanvasGradient*>(m_fillStyle))
+        else if (std::holds_alternative<GradientStyle>(m_fillStyle))
         {
-            CanvasGradient* gradient = std::get<CanvasGradient*>(m_fillStyle);
+            CanvasGradient* gradient = CanvasGradient::Unwrap(std::get<GradientStyle>(m_fillStyle)->Value());
             nvgFillPaint(*m_nvg, gradient->Paint(static_cast<uint32_t>(m_canvas->GetWidth()), static_cast<uint32_t>(m_canvas->GetHeight())));
         }
         else
@@ -525,9 +525,9 @@ namespace Babylon::Polyfills::Internal
             const auto color = StringToColor(info.Env(), std::get<std::string>(m_strokeStyle));
             nvgStrokeColor(*m_nvg, color);
         }
-        else if (std::holds_alternative<CanvasGradient*>(m_strokeStyle))
+        else if (std::holds_alternative<GradientStyle>(m_strokeStyle))
         {
-            CanvasGradient* gradient = std::get<CanvasGradient*>(m_strokeStyle);
+            CanvasGradient* gradient = CanvasGradient::Unwrap(std::get<GradientStyle>(m_strokeStyle)->Value());
             nvgStrokePaint(*m_nvg, gradient->Paint(static_cast<uint32_t>(m_canvas->GetWidth()), static_cast<uint32_t>(m_canvas->GetHeight())));
         }
         else
@@ -572,7 +572,7 @@ namespace Babylon::Polyfills::Internal
         }
         else
         {
-            return Napi::External<CanvasGradient>::New(Env(), std::get<CanvasGradient*>(m_fillStyle));
+            return std::get<GradientStyle>(m_fillStyle)->Value();
         }
     }
 
@@ -592,14 +592,9 @@ namespace Babylon::Polyfills::Internal
             m_fillStyle = std::move(string);
             nvgFillColor(*m_nvg, *color);
         }
-        else if (value.IsObject())
+        else if (CanvasGradient::IsInstance(info.Env(), value))
         {
-            CanvasGradient* canvasGradient = CanvasGradient::Unwrap(value.As<Napi::Object>());
-            m_fillStyle = canvasGradient;
-        }
-        else
-        {
-            throw Napi::TypeError::New(info.Env(), "Context2D.fillStyle must be a color string or CanvasGradient.");
+            m_fillStyle = std::make_shared<Napi::ObjectReference>(Napi::Persistent(value.As<Napi::Object>()));
         }
     }
 
@@ -611,7 +606,7 @@ namespace Babylon::Polyfills::Internal
         }
         else
         {
-            return Napi::External<CanvasGradient>::New(Env(), std::get<CanvasGradient*>(m_strokeStyle));
+            return std::get<GradientStyle>(m_strokeStyle)->Value();
         }
     }
 
@@ -631,14 +626,9 @@ namespace Babylon::Polyfills::Internal
             m_strokeStyle = std::move(string);
             nvgStrokeColor(*m_nvg, *color);
         }
-        else if (value.IsObject())
+        else if (CanvasGradient::IsInstance(info.Env(), value))
         {
-            CanvasGradient* canvasGradient = CanvasGradient::Unwrap(value.As<Napi::Object>());
-            m_strokeStyle = canvasGradient;
-        }
-        else
-        {
-            throw Napi::TypeError::New(info.Env(), "Context2D.strokeStyle must be a color string or CanvasGradient.");
+            m_strokeStyle = std::make_shared<Napi::ObjectReference>(Napi::Persistent(value.As<Napi::Object>()));
         }
     }
 
@@ -1206,9 +1196,9 @@ namespace Babylon::Polyfills::Internal
 
         if (SetFontFaceId())
         {
-            if (std::holds_alternative<CanvasGradient*>(m_fillStyle))
+            if (std::holds_alternative<GradientStyle>(m_fillStyle))
             {
-                nvgFillColor(*m_nvg, std::get<CanvasGradient*>(m_fillStyle)->SampleColor(x, y));
+                nvgFillColor(*m_nvg, CanvasGradient::Unwrap(std::get<GradientStyle>(m_fillStyle)->Value())->SampleColor(x, y));
             }
             else
             {
@@ -1667,9 +1657,9 @@ namespace Babylon::Polyfills::Internal
 
         if (SetFontFaceId())
         {
-            if (std::holds_alternative<CanvasGradient*>(m_strokeStyle))
+            if (std::holds_alternative<GradientStyle>(m_strokeStyle))
             {
-                nvgStrokeColor(*m_nvg, std::get<CanvasGradient*>(m_strokeStyle)->SampleColor(x, y));
+                nvgStrokeColor(*m_nvg, CanvasGradient::Unwrap(std::get<GradientStyle>(m_strokeStyle)->Value())->SampleColor(x, y));
             }
             nvgStrokeText(*m_nvg, x, y, text.c_str(), nullptr);
         }
