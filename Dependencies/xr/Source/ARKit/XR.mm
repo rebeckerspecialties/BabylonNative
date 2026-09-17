@@ -12,14 +12,14 @@
 #import <ImageIO/ImageIO.h>
 
 #import "Include/IXrContextARKit.h"
+#include "ImageTrackingData.h"
+#include "ImageTrackingValidationState.h"
 
 #include <cerrno>
 #include <algorithm>
-#include <atomic>
 #include <cstdlib>
 #include <cmath>
 #include <memory>
-#include <mutex>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -28,13 +28,6 @@
 @end
 
 namespace {
-    using ImageTrackingData = std::shared_ptr<const std::vector<uint8_t>>;
-
-    void ReleaseImageTrackingData(void* info, const void*, size_t)
-    {
-        delete static_cast<ImageTrackingData*>(info);
-    }
-
     typedef struct {
         vector_float2 position;
         vector_float2 uv;
@@ -939,14 +932,6 @@ namespace xr {
 
     struct System::Session::Impl {
     public:
-        struct ImageTrackingValidationState
-        {
-            std::mutex Mutex;
-            bool Active{true};
-            std::atomic_bool ScoresValid{false};
-            std::vector<ImageTrackingScore> Scores;
-        };
-
         const System::Impl& SystemImpl;
         std::vector<Frame::View> ActiveFrameViews{ {} };
         std::vector<Frame::InputSource> InputSources;
@@ -1050,10 +1035,7 @@ namespace xr {
         }
 
         ~Impl() {
-            {
-                std::scoped_lock lock{imageTrackingValidationState->Mutex};
-                imageTrackingValidationState->Active = false;
-            }
+            imageTrackingValidationState->Deactivate();
 
             if (currentCommandBuffer != nil) {
                 [currentCommandBuffer waitUntilCompleted];
@@ -1786,11 +1768,7 @@ namespace xr {
         }
         
         std::vector<ImageTrackingScore>* GetImageTrackingScores() {
-            if (imageTrackingValidationState->ScoresValid.load(std::memory_order_acquire)) {
-                return &imageTrackingValidationState->Scores;
-            } else {
-                return nil;
-            }
+            return imageTrackingValidationState->GetScores();
         }
         
         void CreateAugmentedImageDatabase(const std::vector<ImageTrackingRequest>& requests) {
@@ -1799,10 +1777,7 @@ namespace xr {
             }
 
             // Create and resize vectors to hold request results.
-            {
-                std::scoped_lock lock{imageTrackingValidationState->Mutex};
-                imageTrackingValidationState->Active = false;
-            }
+            imageTrackingValidationState->Deactivate();
             auto validationState{std::make_shared<ImageTrackingValidationState>()};
             imageTrackingValidationState = validationState;
 
@@ -1816,20 +1791,10 @@ namespace xr {
                 const ImageTrackingRequest& request{requests[i]};
                 
                 // Convert each image request from a bitmap to a CGImage, and prepare to pass that to the ARKit configuration.
-                const size_t imageBytes{request.stride * request.height};
                 const size_t pixelStride{request.stride / request.width};
                 const size_t bitsPerComponent{static_cast<size_t>(pixelStride == 2 || pixelStride == 6 || pixelStride == 8 ? 16 : 8)};
                 const CGColorSpaceRef colorSpace{pixelStride > 2 ? CGColorSpaceCreateDeviceRGB() : CGColorSpaceCreateDeviceGray()};
-                auto providerData{std::make_unique<ImageTrackingData>(request.data)};
-                const CGDataProviderRef provider{CGDataProviderCreateWithData(
-                    providerData.get(),
-                    request.data->data(),
-                    imageBytes,
-                    ReleaseImageTrackingData)};
-                if (provider != nil)
-                {
-                    providerData.release();
-                }
+                const CGDataProviderRef provider{CreateImageTrackingDataProvider(request.data)};
                 const CGImageRef image{
                     CGImageCreate(
                        request.width,
@@ -1883,12 +1848,7 @@ namespace xr {
             SessionDelegate* imageSessionDelegate{sessionDelegate};
             arcana::when_all(gsl::make_span(validationTasks))
                 .then(arcana::inline_scheduler, arcana::cancellation::none(), [validationState, arSession, imageSessionDelegate, retainedReferenceImages](std::vector<NSInteger> referenceImageIndices) {
-                    std::scoped_lock lock{validationState->Mutex};
-                    if (!validationState->Active)
-                    {
-                        return;
-                    }
-
+                  validationState->Complete([&] {
                     size_t imageCount{0};
                     NSMutableSet<ARReferenceImage*>* imageSet{[NSMutableSet<ARReferenceImage*> setWithCapacity:validationState->Scores.size()]};
                     for (NSInteger referenceImageIndex : referenceImageIndices) {
@@ -1913,8 +1873,8 @@ namespace xr {
                         configuration.maximumNumberOfTrackedImages = imageCount > 4 ? 4 : imageCount;
                         [arSession runWithConfiguration: configuration];
                         [imageSessionDelegate SetImageDetectionEnabled:true];
-                        validationState->ScoresValid.store(true, std::memory_order_release);
                     }
+                  });
             });
         }
 
