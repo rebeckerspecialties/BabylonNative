@@ -1198,6 +1198,13 @@
             linearGradient.addColorStop(0.51, "hsl(240, 100%, 50%)");
             linearGradient.addColorStop(1, "hsl(240, 100%, 50%)");
             linearContext.fillStyle = linearGradient;
+            expectEqual(linearContext.fillStyle, linearGradient, "fillStyle should retain and return the assigned gradient");
+            linearContext.save();
+            linearContext.fillStyle = "rgb(0, 255, 0)";
+            linearContext.restore();
+            expectEqual(linearContext.fillStyle, linearGradient, "restore should retain the saved gradient");
+            linearContext.fillStyle = {};
+            expectEqual(linearContext.fillStyle, linearGradient, "invalid fillStyle objects should preserve the gradient");
             linearContext.fillRect(0, 0, 8, 4);
 
             expectPixel(await readCanvasPixel(linear, 8, 4, 1, 2), [255, 0, 0, 255], "linear gradient left stop");
@@ -1212,7 +1219,9 @@
             radialGradient.addColorStop(0.49, "hsla(120, 100%, 50%, 1)");
             radialGradient.addColorStop(0.51, "rgba(0, 0, 0, 255)");
             radialGradient.addColorStop(1, "rgba(0, 0, 0, 255)");
-            radialContext.fillStyle = radialGradient;
+            radialContext.strokeStyle = radialGradient;
+            expectEqual(radialContext.strokeStyle, radialGradient, "strokeStyle should retain and return the assigned gradient");
+            radialContext.fillStyle = radialContext.strokeStyle;
             radialContext.fillRect(0, 0, 8, 8);
 
             expectPixel(await readCanvasPixel(radial, 8, 8, 4, 4), [0, 255, 0, 255], "radial gradient center stop");

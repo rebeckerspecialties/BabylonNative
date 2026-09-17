@@ -15,6 +15,7 @@ namespace Babylon::Polyfills::Internal
         static void Initialize(Napi::Env);
         static Napi::Object CreateLinear(Napi::Env env, const std::shared_ptr<NVGcontext*>& context, float x0, float y0, float x1, float y1);
         static Napi::Object CreateRadial(Napi::Env env, const std::shared_ptr<NVGcontext*>& context, float x0, float y0, float r0, float x1, float y1, float r1);
+        static bool IsInstance(Napi::Env env, const Napi::Value& value);
 
         explicit CanvasGradient(const Napi::CallbackInfo& info);
         virtual ~CanvasGradient();

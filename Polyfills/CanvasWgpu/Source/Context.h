@@ -3,6 +3,7 @@
 #include <Babylon/Polyfills/Canvas.h>
 #include <Babylon/JsRuntimeScheduler.h>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <unordered_map>
 #include <variant>
@@ -16,6 +17,7 @@
 namespace Babylon::Polyfills::Internal
 {
     class CanvasGradient;
+    using GradientStyle = std::shared_ptr<Napi::ObjectReference>;
 
     class Context final : public Napi::ObjectWrap<Context>, Polyfills::Canvas::Impl::MonitoredResource
     {
@@ -113,8 +115,8 @@ namespace Babylon::Polyfills::Internal
         std::shared_ptr<NVGcontext*> m_nvg;
 
         Font m_font;
-        std::variant<std::string, CanvasGradient*> m_fillStyle{};
-        std::variant<std::string, CanvasGradient*> m_strokeStyle{};
+        std::variant<std::string, GradientStyle> m_fillStyle{};
+        std::variant<std::string, GradientStyle> m_strokeStyle{};
         NVGlineCap m_lineCap{NVG_BUTT};
         NVGlineCap m_lineJoin{NVG_MITER};
         std::string m_filter{};
@@ -152,8 +154,8 @@ namespace Babylon::Polyfills::Internal
         struct DrawingState
         {
             Font font;
-            std::variant<std::string, CanvasGradient*> fillStyle;
-            std::variant<std::string, CanvasGradient*> strokeStyle;
+            std::variant<std::string, GradientStyle> fillStyle;
+            std::variant<std::string, GradientStyle> strokeStyle;
             NVGlineCap lineCap;
             NVGlineCap lineJoin;
             std::string filter;
