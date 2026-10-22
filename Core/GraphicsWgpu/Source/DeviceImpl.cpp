@@ -1,4 +1,5 @@
 #include "DeviceImpl.h"
+#include "WgpuInterop.h"
 
 #include <Babylon/JsRuntime.h>
 #include <napi/napi.h>
@@ -399,6 +400,11 @@ namespace Babylon::Graphics
             pendingScreenShots.front()({});
             pendingScreenShots.pop();
         }
+    }
+
+    bool DeviceImpl::IsDeviceLost() const
+    {
+        return babylon_wgpu_native_is_device_lost();
     }
 
     SafeTimespanGuarantor& DeviceImpl::GetSafeTimespanGuarantor(const char* updateName)

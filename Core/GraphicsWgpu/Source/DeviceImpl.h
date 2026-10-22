@@ -55,6 +55,10 @@ namespace Babylon::Graphics
         void EnableRendering();
         void DisableRendering();
 
+        // Thread-safe. True once the wgpu device reported loss (other than an explicit destroy)
+        // until a replacement device is bootstrapped.
+        bool IsDeviceLost() const;
+
         SafeTimespanGuarantor& GetSafeTimespanGuarantor(const char* updateName);
 
         void SetDiagnosticOutput(std::function<void(const char* output)> diagnosticOutput);

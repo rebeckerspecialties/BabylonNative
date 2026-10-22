@@ -56,6 +56,11 @@ namespace Babylon::Graphics
         m_graphicsImpl.RequestScreenShot(std::move(callback));
     }
 
+    void DeviceContext::UpdateMSAA(uint8_t value)
+    {
+        m_graphicsImpl.UpdateMSAA(value);
+    }
+
     void DeviceContext::SetRenderResetCallback(std::function<void()> callback)
     {
         m_graphicsImpl.SetRenderResetCallback(std::move(callback));

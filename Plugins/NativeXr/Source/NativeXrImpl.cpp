@@ -242,6 +242,7 @@ namespace Babylon
                     assert(m_sessionState == nullptr);
 
                     m_sessionState = std::make_unique<SessionState>(context);
+                    m_sessionEnding = false;
 
                     if (!m_system.IsInitialized() &&
                         !m_system.TryInitialize())
@@ -267,8 +268,18 @@ namespace Babylon
 
         arcana::task<void, std::exception_ptr> NativeXr::Impl::EndSessionAsync()
         {
+            if (m_sessionEnding || !m_beginTask)
+            {
+                return m_endTask;
+            }
+
             assert(m_beginTask);
             assert(m_sessionState != nullptr);
+
+            // Publish the shared task before cancellation can synchronously request another end.
+            arcana::task_completion_source<void, std::exception_ptr> endCompletion{};
+            m_endTask = endCompletion.as_task();
+            m_sessionEnding = true;
 
             m_sessionState->CancellationSource.cancel();
 
@@ -295,7 +306,7 @@ namespace Babylon
             m_sessionState->DestroyRenderTexture.Reset();
 
             // Don't try to end the session while it is still starting.
-            m_endTask = m_beginTask->then(arcana::inline_scheduler, arcana::cancellation::none(), [this, thisRef{shared_from_this()}] {
+            m_beginTask->then(arcana::inline_scheduler, arcana::cancellation::none(), [this, thisRef{shared_from_this()}] {
                                        // Also don't try to end the session while a frame is in progress.
                                        return m_sessionState->FrameTask;
                                    })
@@ -320,6 +331,9 @@ namespace Babylon
                                 m_sessionState.reset();
                                 m_beginTask.reset();
                                 NotifySessionStateChanged(false);
+                            })
+                            .then(arcana::inline_scheduler, arcana::cancellation::none(), [endCompletion](const arcana::expected<void, std::exception_ptr>& result) mutable {
+                                endCompletion.complete(result);
                             });
 
             return m_endTask;

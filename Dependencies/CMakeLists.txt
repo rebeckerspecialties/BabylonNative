@@ -45,51 +45,44 @@ target_include_directories(base-n INTERFACE "${base-n_SOURCE_DIR}/include")
 if(BABYLON_NATIVE_PLUGIN_NATIVEENGINE)
 set(BGFX_BUILD_EXAMPLES OFF)
 set(BGFX_BUILD_TOOLS OFF)
+set(BGFX_CONFIG_C99_API 0)
+set(BGFX_CONFIG_DEFAULT_MAX_ENCODERS 2)
+set(BGFX_CONFIG_MAX_VERTEX_STREAMS 18)
+set(BGFX_CONFIG_MIN_RESOURCE_COMMAND_BUFFER_SIZE 16)
 set(BGFX_CONFIG_MULTITHREADED ON)
+set(BGFX_CONFIG_VIDEO OFF)
 set(BGFX_CUSTOM_TARGETS OFF)
 set(BGFX_INSTALL OFF)
 set(BGFX_OPENGL_USE_EGL ON)
 set(BGFX_USE_DEBUG_SUFFIX OFF)
 
-# Keep AVIF opt-in, including caches with bgfx.cmake's empty (inherit) default.
-if(NOT DEFINED BIMG_CONFIG_PARSE_AVIF OR "${BIMG_CONFIG_PARSE_AVIF}" STREQUAL "")
-    set(BIMG_CONFIG_PARSE_AVIF OFF)
+# Canvas workloads can exceed bgfx's default of 128 framebuffer handles.
+if(NOT BGFX_CONFIG_MAX_FRAME_BUFFERS)
+    set(BGFX_CONFIG_MAX_FRAME_BUFFERS 2048)
 endif()
 
-FetchContent_MakeAvailable_With_Message(bgfx.cmake)
+# These formats have neither browser image support nor Babylon.js texture loaders.
+set(BIMG_CONFIG_PARSE_PIC OFF)
+set(BIMG_CONFIG_PARSE_PNM OFF)
+set(BIMG_CONFIG_PARSE_PSD OFF)
+
+if(WIN32 AND NOT DEFINED BIMG_CONFIG_USE_WIC)
+    set(BIMG_CONFIG_USE_WIC ON)
+endif()
+
+include(bgfx.cmake/cmake/babylon-native.cmake)
 
 # Turn off debug annotations as it causes an access violation in D3D12.
 # This flag is set using compile definitions because the bgfx.cmake option is ignored in debug configuration.
 # See https://github.com/BabylonJS/bgfx.cmake/blob/0af3c9865a66aff1748a51bb466b24f05a123043/cmake/bgfx/bgfx.cmake#L126.
 target_compile_definitions(bgfx PRIVATE BGFX_CONFIG_DEBUG_ANNOTATION=0)
 
-target_compile_definitions(bgfx PRIVATE BGFX_CONFIG_DEFAULT_MAX_ENCODERS=2)
-target_compile_definitions(bgfx PRIVATE BGFX_CONFIG_MAX_VERTEX_STREAMS=18)
-target_compile_definitions(bgfx PRIVATE BGFX_CONFIG_MIN_RESOURCE_COMMAND_BUFFER_SIZE=16)
-
 target_compile_definitions(bgfx PUBLIC BGFX_PLATFORM_SUPPORTS_WGSL=0)
 
 # bgfx bundles the Khronos GLES headers but adds them as a PRIVATE include
 # directory, and Windows has no system copy the way Linux and Android do.
 # Expose the path so the OpenGL backends of our own targets can use it.
-set(BGFX_KHRONOS_INCLUDE_DIR "${bgfx.cmake_SOURCE_DIR}/bgfx/3rdparty/khronos" CACHE INTERNAL "")
-
-# The Canvas polyfill holds a bgfx framebuffer per JS Canvas object and per
-# text-rendering operation, releasing them only on GC finalize, so a long
-# playground sweep exceeds bgfx's default of 128.
-if(NOT BGFX_CONFIG_MAX_FRAME_BUFFERS)
-    set(BGFX_CONFIG_MAX_FRAME_BUFFERS 2048)
-endif()
-target_compile_definitions(bgfx PRIVATE BGFX_CONFIG_MAX_FRAME_BUFFERS=${BGFX_CONFIG_MAX_FRAME_BUFFERS})
-
-# Temporary disable uniform debug.
-target_compile_definitions(bgfx PRIVATE BGFX_CONFIG_DEBUG_UNIFORM=0)
-
-# Disable video decoding support (not used by Babylon Native).
-target_compile_definitions(bgfx PRIVATE BGFX_CONFIG_VIDEO=0)
-
-# Disable the C99 API (Babylon Native uses the C++ API only); saves binary size.
-target_compile_definitions(bgfx PRIVATE BGFX_CONFIG_C99_API=0)
+set(BGFX_KHRONOS_INCLUDE_DIR "${BGFX_DIR}/3rdparty/khronos" CACHE INTERNAL "" FORCE)
 
 if(GRAPHICS_API STREQUAL "D3D11")
     target_compile_definitions(bgfx PRIVATE BGFX_CONFIG_RENDERER_DIRECT3D11=1)
@@ -107,7 +100,6 @@ endif()
 set_property(TARGET bimg PROPERTY FOLDER Dependencies/bgfx/3rdparty)
 set_property(TARGET bimg_encode PROPERTY FOLDER Dependencies/bgfx/3rdparty)
 set_property(TARGET bimg_decode PROPERTY FOLDER Dependencies/bgfx/3rdparty)
-set_property(TARGET minz PROPERTY FOLDER Dependencies/bgfx/3rdparty)
 if(TARGET tinyexr)
     set_property(TARGET tinyexr PROPERTY FOLDER Dependencies/bgfx/3rdparty)
 endif()
@@ -121,13 +113,6 @@ foreach(_bimg_target IN ITEMS bimg_decode bimg_encode tinyexr)
         target_compile_definitions(${_bimg_target} PRIVATE _CRT_SECURE_NO_WARNINGS)
     endif()
 endforeach()
-
-# WebP parsing is provided by bimg's bundled simplewebp decoder. Toggle it
-# through bimg's own config macro so disabling the option compiles the parser
-# out of bimg_decode instead of pulling in a separate libwebp dependency.
-if(NOT BABYLON_NATIVE_PLUGIN_NATIVEENGINE_WEBP AND TARGET bimg_decode)
-    target_compile_definitions(bimg_decode PRIVATE BIMG_CONFIG_PARSE_WEBP=0)
-endif()
 
 if(NOT APPLE AND NOT ANDROID AND CMAKE_SYSTEM_PROCESSOR MATCHES "(x86_64|amd64|AMD64)" AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     # The new bx requires SSE4.2 on x86_64 (see bx scripts/toolchain.lua and
@@ -369,7 +354,9 @@ if(BABYLON_NATIVE_PLUGIN_SHADERCOMPILER)
     else()
         set(SPIRV_CROSS_ENABLE_WEBMIN ON)
     endif()
-    if(NOT GRAPHICS_API STREQUAL "OpenGL")
+    # Vulkan's ShaderCompiler still uses the GLSL backend for reflection and
+    # binding rewrites even though its output is SPIR-V.
+    if(NOT GRAPHICS_API STREQUAL "OpenGL" AND NOT GRAPHICS_API STREQUAL "Vulkan")
         set(SPIRV_CROSS_ENABLE_GLSL OFF)
     endif()
     if(NOT GRAPHICS_API STREQUAL "Metal")

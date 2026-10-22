@@ -26,6 +26,7 @@ struct PoolInterface
 {
     std::function<Babylon::Graphics::FrameBuffer*()> acquire;
     std::function<void(Babylon::Graphics::FrameBuffer*)> release;
+    std::function<uint32_t()> samplerFlags;
 };
 
 void nvgSetFrameBufferPool(NVGcontext* _ctx, PoolInterface pool);
@@ -33,5 +34,9 @@ void nvgSetFrameBufferAndEncoder(NVGcontext* _ctx, Babylon::Graphics::FrameBuffe
 
 ///
 void nvgDelete(NVGcontext* _ctx);
+
+/// Register an existing bgfx texture as an NVG image without taking ownership
+/// (NVG_IMAGE_NODELETE). Returns the image id, or 0 on failure.
+int nvgCreateImageFromHandle(NVGcontext* _ctx, bgfx::TextureHandle _handle, int _width, int _height, int _flags);
 
 #endif // NANOVG_BABYLON_H_HEADER_GUARD

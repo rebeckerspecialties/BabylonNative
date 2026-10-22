@@ -77,6 +77,7 @@ extern "C"
         uint32_t z);
     void babylon_wgpu_mark_webgpu_draw_requested();
     bool babylon_wgpu_is_webgpu_draw_enabled();
+    bool babylon_wgpu_native_is_device_lost();
     uint64_t babylon_wgpu_get_render_frame_count();
     uint64_t babylon_wgpu_get_canvas_texture_hash();
     uint32_t babylon_wgpu_get_canvas_texture_width();

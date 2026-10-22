@@ -13,6 +13,7 @@
     "patch:babylonjs:apply": "node scripts/applyBabylonJsPatchStack.js --apply"
   },
   "dependencies": {
+    "@babylonjs/havok": "1.3.12",
     "babylonjs": "9.22.1",
     "babylonjs-addons": "9.22.1",
     "babylonjs-gltf2interface": "9.22.1",

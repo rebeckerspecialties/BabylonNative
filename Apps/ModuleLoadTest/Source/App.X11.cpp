@@ -63,6 +63,7 @@ namespace ModuleLoadTest
             "libsensors.so.5",
             "libtinfo.so.6",
             "libwayland-client.so.0",
+            "libwayland-server.so.0",
             "libx11-xcb.so.1",
             "libxcb-dri3.so.0",
             "libxcb-present.so.0",
@@ -105,8 +106,9 @@ namespace ModuleLoadTest
             // AMD proprietary
             "libamdgpu",
             "libdrm_amdgpu",
-            // Vulkan ICD loaders
+            // Vulkan loader and implicit/explicit layers
             "libvulkan",
+            "libvklayer_",
             // Mesa shared renderer shim (libgallium-<mesa>-<ubuntu>.so) and
             // the LLVM library it uses for shader compilation — both carry a
             // version suffix that drifts with Ubuntu image updates.

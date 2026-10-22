@@ -33,7 +33,7 @@ std::regex noneRegex(R"(^\s*none\s*$)");
 
 #define BLUR_MAX_PX 1000
 #define BLUR_TAPS 13
-#define BLUR_UNIFORM_SIZE 5 // fit into vec4: ceil(BLUR_TAPS / 4)
+#define BLUR_UNIFORM_SIZE 5 // Matches u_weights[5] in fs_gaussblur.sc.
 
 static const bgfx::EmbeddedShader s_embeddedShadersFilterStack[] =
 {
@@ -49,11 +49,15 @@ nanovg_filterstack::nanovg_filterstack()
 
 void nanovg_filterstack::InitBgfx()
 {
+    if (s_bgfxRefCount++ > 0)
+    {
+        return;
+    }
+
     m_uniforms.u_strength = bgfx::createUniform("u_strength", bgfx::UniformType::Vec4);
     m_uniforms.u_direction = bgfx::createUniform("u_direction", bgfx::UniformType::Vec4);
     m_uniforms.u_weights = bgfx::createUniform("u_weights", bgfx::UniformType::Vec4, BLUR_UNIFORM_SIZE);
 
-    // create shaders used by the different elements
     bgfx::RendererType::Enum type = bgfx::getRendererType();
     s_gaussBlurProg = bgfx::createProgram(
         bgfx::createEmbeddedShader(s_embeddedShadersFilterStack, type, "vs_fspass")
@@ -68,17 +72,42 @@ void nanovg_filterstack::InitBgfx()
 
 void nanovg_filterstack::DisposeBgfx()
 {
-    // check if uniforms + programs are valid before destroying
-    if (m_uniforms.u_strength.idx != bgfx::kInvalidHandle)
+    if (s_bgfxRefCount <= 0)
+    {
+        return;
+    }
+    if (--s_bgfxRefCount > 0)
+    {
+        return;
+    }
+
+    // Destroy only on the last live canvas/NVG context, then clear handles so a
+    // later InitBgfx starts clean and stale handles are never double-destroyed.
+    if (bgfx::isValid(m_uniforms.u_strength))
+    {
         bgfx::destroy(m_uniforms.u_strength);
-    if (m_uniforms.u_direction.idx != bgfx::kInvalidHandle)
+        m_uniforms.u_strength = BGFX_INVALID_HANDLE;
+    }
+    if (bgfx::isValid(m_uniforms.u_direction))
+    {
         bgfx::destroy(m_uniforms.u_direction);
-    if (m_uniforms.u_weights.idx != bgfx::kInvalidHandle)
+        m_uniforms.u_direction = BGFX_INVALID_HANDLE;
+    }
+    if (bgfx::isValid(m_uniforms.u_weights))
+    {
         bgfx::destroy(m_uniforms.u_weights);
-    if (s_gaussBlurProg.idx != bgfx::kInvalidHandle)
+        m_uniforms.u_weights = BGFX_INVALID_HANDLE;
+    }
+    if (bgfx::isValid(s_gaussBlurProg))
+    {
         bgfx::destroy(s_gaussBlurProg);
-    if (s_boxBlurProg.idx != bgfx::kInvalidHandle)
+        s_gaussBlurProg = BGFX_INVALID_HANDLE;
+    }
+    if (bgfx::isValid(s_boxBlurProg))
+    {
         bgfx::destroy(s_boxBlurProg);
+        s_boxBlurProg = BGFX_INVALID_HANDLE;
+    }
 }
 
 bool nanovg_filterstack::ValidString(const std::string& string)
@@ -166,7 +195,8 @@ void nanovg_filterstack::Render(
     std::function<void(bgfx::ProgramHandle, Babylon::Graphics::FrameBuffer*, Babylon::Graphics::FrameBuffer*)> finalPass,
     Babylon::Graphics::FrameBuffer* finalFrameBuffer,
     std::function<Babylon::Graphics::FrameBuffer*()> acquire,
-    std::function<void(Babylon::Graphics::FrameBuffer*)> release
+    std::function<void(Babylon::Graphics::FrameBuffer*)> release,
+    bool separateComposite
 )
 {
     if (!stackElementCount)
@@ -204,13 +234,14 @@ void nanovg_filterstack::Render(
                 for (int i = 0; i < 2; i++)
                 {
                     const std::array<float, 4>& direction = directions[i];
-                    bool last = lastElement && i == 1;
+                    bool last = lastElement && i == 1 && !separateComposite;
                     float sigma = i == 0 ? element.blurElement.horizontal : element.blurElement.vertical;
 
                     // use gaussian blur for sigma < 2, box blur for sigma >= 2
                     if (sigma < 2)
                     {
                         std::vector<float> kernel = CalculateGaussianKernel(sigma, BLUR_TAPS);
+                        kernel.resize(BLUR_UNIFORM_SIZE * 4, 0.0f);
                         setUniform(m_uniforms.u_direction, &direction, 1);
                         setUniform(m_uniforms.u_weights, kernel.data(), BLUR_UNIFORM_SIZE);
 

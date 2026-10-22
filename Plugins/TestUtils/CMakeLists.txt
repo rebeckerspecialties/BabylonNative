@@ -37,7 +37,9 @@ if(APPLE AND TARGET babylon_graphics_backend AND NOT BABYLON_NATIVE_PLUGIN_NATIV
         PRIVATE "-framework ImageIO")
 endif()
 
-target_compile_definitions(TestUtils PRIVATE GRAPHICS_API=${GRAPHICS_API})
+target_compile_definitions(TestUtils PRIVATE
+    GRAPHICS_API=${GRAPHICS_API}
+    NAPI_JAVASCRIPT_ENGINE=${NAPI_JAVASCRIPT_ENGINE})
 
 if(APPLE)
     enable_objc_arc(TestUtils)

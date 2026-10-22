@@ -1,5 +1,11 @@
 cmake_minimum_required(VERSION 3.21)
 
+# Use these vendored copies for every declaration of these names, including those
+# in fetched dependencies such as JsRuntimeHost. Override parent source-package
+# paths because _deps/*-src copies are no longer produced for these dependencies.
+set(FETCHCONTENT_SOURCE_DIR_ANDROIDEXTENSIONS "${CMAKE_CURRENT_SOURCE_DIR}/Dependencies/AndroidExtensions")
+set(FETCHCONTENT_SOURCE_DIR_CMAKEEXTENSIONS "${CMAKE_CURRENT_SOURCE_DIR}/Dependencies/CMakeExtensions")
+
 if(POLICY CMP0135)
     cmake_policy(SET CMP0135 NEW)
 endif()
@@ -18,11 +24,7 @@ include(FetchContent)
 # targets that are part of the Babylon Native contract.
 
 FetchContent_Declare(AndroidExtensions
-    URL https://github.com/BabylonJS/AndroidExtensions/archive/5fe60c8634dd9a5df76888e73e69202875e894f0.tar.gz
-    URL_HASH SHA256=a5af89378b6c9922ffbebc68674fa781963cb148f2c5b87b91eb4f032ad6dc5a
-    PATCH_COMMAND ${CMAKE_COMMAND}
-        "-DPATCH_FILE=${CMAKE_CURRENT_LIST_DIR}/Patches/AndroidExtensions/0001-use-jni-string-region.patch"
-        -P "${CMAKE_CURRENT_LIST_DIR}/Patches/apply_patch_if_needed.cmake"
+    SOURCE_DIR "${FETCHCONTENT_SOURCE_DIR_ANDROIDEXTENSIONS}"
     EXCLUDE_FROM_ALL)
 FetchContent_Declare(arcana.cpp
     GIT_REPOSITORY https://github.com/microsoft/arcana.cpp.git
@@ -36,22 +38,24 @@ FetchContent_Declare(base-n
     GIT_REPOSITORY https://github.com/azawadzki/base-n.git
     GIT_TAG 7573e77c0b9b0e8a5fb63d96dbde212c921993b4
     EXCLUDE_FROM_ALL)
-FetchContent_Declare(bgfx.cmake
-    GIT_REPOSITORY https://github.com/BabylonJS/bgfx.cmake.git
-    GIT_TAG edf5822dd98a21cf52bfc4a940cd9ad5faba9633
-    EXCLUDE_FROM_ALL)
 FetchContent_Declare(CMakeExtensions
-    GIT_REPOSITORY https://github.com/BabylonJS/CMakeExtensions.git
-    GIT_TAG 631780e42886e5f12bfd1a5568c7395f1d657f43
+    SOURCE_DIR "${FETCHCONTENT_SOURCE_DIR_CMAKEEXTENSIONS}"
     EXCLUDE_FROM_ALL)
 FetchContent_Declare(glslang
     GIT_REPOSITORY https://github.com/BabylonJS/glslang.git
     GIT_TAG 284e4301e5a6b44b279635276588db7cdd942624
     EXCLUDE_FROM_ALL)
+# The codec does not use the transcoder's external dependencies.
+set(_draco_submodules "")
+if(DRACO_TRANSCODER_SUPPORTED)
+    set(_draco_submodules third_party/eigen third_party/filesystem third_party/tinygltf)
+endif()
 FetchContent_Declare(draco
     GIT_REPOSITORY https://github.com/google/draco.git
     GIT_TAG 1.5.7
+    GIT_SUBMODULES "${_draco_submodules}"
     EXCLUDE_FROM_ALL)
+unset(_draco_submodules)
 FetchContent_Declare(meshoptimizer
     GIT_REPOSITORY https://github.com/zeux/meshoptimizer.git
     GIT_TAG v0.22
@@ -65,7 +69,7 @@ FetchContent_Declare(ios-cmake
     EXCLUDE_FROM_ALL)
 FetchContent_Declare(JsRuntimeHost
     GIT_REPOSITORY https://github.com/rebeckerspecialties/JsRuntimeHost.git
-    GIT_TAG c490defcd703c732c111debb5e6ba470502d2c77)
+    GIT_TAG bfeea28bcdcd2bb10c06e464b9010c1edf0be37a)
 FetchContent_Declare(libwebp
     GIT_REPOSITORY https://github.com/webmproject/libwebp.git
     GIT_TAG baff2c8980970f58e2aa88622c6575bdee2f876a
@@ -89,7 +93,7 @@ FetchContent_Declare(metal-cpp
     EXCLUDE_FROM_ALL)
 FetchContent_Declare(SPIRV-Cross
     GIT_REPOSITORY https://github.com/BabylonJS/SPIRV-Cross.git
-    GIT_TAG 7c8705749fc1e234119c20695f82179b30d90914
+    GIT_TAG 2b078efc3ca2ca3f6ce0069339ac409c643b0136
     EXCLUDE_FROM_ALL)
 
 # --------------------------------------------------
@@ -100,8 +104,12 @@ FetchContent_MakeAvailable(CMakeExtensions)
 # CMake script is run twice. At package creation, BABYLON_NATIVE_BUILD_SOURCETREE is ON
 # which makes all dependencies to be fetched and packaged.
 # At build time, cmake is run again on BabylonNative root but FETCHCONTENT_FULLY_DISCONNECTED is ON
-# and FetchContent_MakeAvailable_With_Message will use provided local folder provided to cmake command line
-# like '-DFETCHCONTENT_SOURCE_DIR_JSRUNTIMEHOST=../shared/Babylon/....'
+# and FetchContent uses the provided local source overrides.
+# bgfx.cmake itself is tracked locally; source-tree mode stages that wrapper beside
+# its three selected child trees in _deps/bgfx.cmake-src for existing packagers.
+# FETCHCONTENT_SOURCE_DIR_BGFX.CMAKE remains a local wrapper override.
+# AndroidExtensions and CMakeExtensions are vendored and always resolve from Dependencies/;
+# no _deps/*-src copies are produced for them.
 
 if(DEFINED PLATFORM AND PLATFORM MATCHES "TVOS")
     set(TVOS ON CACHE BOOL "Build for tvOS." FORCE)
@@ -174,13 +182,13 @@ option(BABYLON_NATIVE_PLUGIN_NATIVECAPTURE "Include Babylon Native Plugin Native
 option(BABYLON_NATIVE_PLUGIN_NATIVEDRACO "Include Babylon Native Plugin NativeDraco." OFF)
 option(BABYLON_NATIVE_PLUGIN_NATIVEENCODING "Include Babylon Native Plugin NativeEncoding." ON)
 option(BABYLON_NATIVE_PLUGIN_NATIVEENGINE "Include Babylon Native Plugin NativeEngine." ON)
-option(BABYLON_NATIVE_PLUGIN_NATIVEENGINE_WEBP "Enable WebP image parsing in NativeEngine (via bimg)." ON)
 option(BABYLON_NATIVE_PLUGIN_NATIVEENGINE_LOAD_IMAGES "Enable image loading in NativeEngine (LoadTexture, image bitmap, bimg)." ON)
-if(NOT BABYLON_NATIVE_PLUGIN_NATIVEENGINE_LOAD_IMAGES)
-    # WebP support relies on image loading code paths; force it off when image loading is disabled.
-    set(BABYLON_NATIVE_PLUGIN_NATIVEENGINE_WEBP OFF CACHE BOOL "Enable WebP image parsing in NativeEngine (via bimg)." FORCE)
-endif()
 option(BABYLON_NATIVE_PLUGIN_NATIVEENGINE_COMPILESHADERS "Include Babylon Native Plugin NativeEngine - Compile Shaders." ON)
+# Disable WebMin in glslang and SPIRV-Cross. WebMin strips those libraries down to the
+# WebGL2 GLSL subset, which excludes compute shaders: referencing any compute built-in
+# (e.g. gl_GlobalInvocationID) crashes the WebMin glslang. Compute support (GPUParticleSystem
+# on the native path) requires the full builds, so this defaults ON here.
+option(BABYLON_NATIVE_DISABLE_WEBMIN "Disable WebMin minimization in glslang and SPIRV-Cross (required for compute shaders)." ON)
 option(BABYLON_NATIVE_PLUGIN_NATIVEINPUT "Include Babylon Native Plugin NativeInput." ON)
 option(BABYLON_NATIVE_PLUGIN_NATIVEMESHOPT "Include Babylon Native Plugin NativeMeshopt." OFF)
 option(BABYLON_NATIVE_PLUGIN_NATIVEOPTIMIZATIONS "Include Babylon Native Plugin NativeOptimizations." ON)
@@ -201,12 +209,8 @@ option(BABYLON_NATIVE_ENABLE_UNSAFE_WEBGPU "Expose non-standard unsafe WebGPU ho
 option(BABYLON_NATIVE_LTO_BITCODE_STATIC_LIBS "Compile native static libraries as LLVM bitcode and use Rust linker-plugin LTO for final whole-program optimization." OFF)
 
 # Polyfills
-option(BABYLON_NATIVE_POLYFILL_ABORTCONTROLLER "Include Babylon Native Polyfill AbortController." ON)
 option(BABYLON_NATIVE_POLYFILL_CANVAS "Include Babylon Native Polyfill Canvas." OFF)
 option(BABYLON_NATIVE_POLYFILL_CANVAS_WGPU "Use the wgpu/femtovg Canvas backend when Canvas polyfill is enabled." OFF)
-option(BABYLON_NATIVE_POLYFILL_SCHEDULING "Include Babylon Native Polyfill Scheduling." ON)
-option(BABYLON_NATIVE_POLYFILL_URL "Include Babylon Native Polyfill URL." ON)
-option(BABYLON_NATIVE_POLYFILL_WEBSOCKET "Include Babylon Native Polyfill WebSocket." ON)
 option(BABYLON_NATIVE_POLYFILL_WINDOW "Include Babylon Native Polyfill Window." ON)
 option(BABYLON_NATIVE_POLYFILL_CUBETEXTURE "Include Babylon Native Polyfill CubeTexture (.dds/.ktx/.ktx2 -> .env fallback for NativeEngine.createCubeTexture)." ON)
 

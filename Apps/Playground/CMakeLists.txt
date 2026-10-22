@@ -2,6 +2,8 @@ FILE(GLOB REFERENCE_IMAGES CONFIGURE_DEPENDS RELATIVE "${CMAKE_CURRENT_SOURCE_DI
 FILE(GLOB_RECURSE NATIVE_XR_PORTAL_ASSETS CONFIGURE_DEPENDS RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}" "Scripts/native_xr_portal_assets/*")
 
 set(BABYLON_SCRIPTS
+    "../node_modules/@babylonjs/havok/lib/umd/HavokPhysics_umd.js"
+    "../node_modules/@babylonjs/havok/lib/umd/HavokPhysics.wasm"
     "../node_modules/babylonjs-addons/babylonjs.addons.js"
     "../node_modules/babylonjs-loaders/babylonjs.loaders.js"
     "../node_modules/babylonjs/babylon.max.js"
@@ -12,11 +14,18 @@ set(BABYLON_SCRIPTS
     "../node_modules/earcut/dist/earcut.min.js")
 
 set(DEPENDENCIES
+    "../Dependencies/Arimo-Regular.ttf"
+    "../Dependencies/Arimo-OFL.txt"
+    "../Dependencies/Arimo-PROVENANCE.txt"
+    "../Dependencies/DroidSans.ttf"
+    "../Dependencies/DroidSans-APACHE-2.0.txt"
+    "../Dependencies/DroidSans-PROVENANCE.txt"
     "../Dependencies/ammo.js"
     "../Dependencies/meshwriter.min.js"
     "../Dependencies/recast.js")
 
 set(SCRIPTS
+    "Scripts/native_env.js"
     "Scripts/experience.js"
     "Scripts/gltf-roundtrip-down.png"
     "Scripts/gltf-roundtrip-grass.jpg"

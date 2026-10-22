@@ -66,17 +66,9 @@ namespace Babylon::Graphics
         m_impl->DisableRendering();
     }
 
-    DeviceUpdate Device::GetUpdate(const char* updateName)
+    bool Device::IsDeviceLost() const
     {
-        auto& guarantor = m_impl->GetSafeTimespanGuarantor(updateName);
-        return {
-            [&guarantor] {
-                guarantor.Open();
-            },
-            [&guarantor](std::function<void()> callback) {
-                guarantor.CloseScheduler()(std::move(callback));
-                guarantor.RequestClose();
-            }};
+        return m_impl->IsDeviceLost();
     }
 
     void Device::StartRenderingCurrentFrame()

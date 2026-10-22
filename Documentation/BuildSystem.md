@@ -1,21 +1,21 @@
 # The Babylon Native Build System
 
+**Current layout:** the discussion below describes the original submodule-based
+design. Most external sources are now acquired with CMake FetchContent.
+`Dependencies/bgfx.cmake` is tracked wrapper code with imported file history;
+its bgfx, bx and bimg sources remain pinned external FetchContent acquisitions.
+AndroidExtensions and CMakeExtensions are vendored with imported history under
+`Dependencies/`; root source overrides make all FetchContent declarations use them.
+Targets and lateral dependency relationships are unchanged. The legacy
+`_deps/bgfx.cmake-src` source-package and `_deps/bgfx.cmake-build` binary layouts
+remain supported; see [Building](../BUILDING.md) for local/offline overrides.
+
 The Babylon Native build system is founded on a lateral dependency management strategy 
 implemented using Git Submodules and CMake build targets. This system is designed to be
 as extensible and flexible as possible: it should be easy to add new features/extensions,
 and it should be easy to incorporate Babylon Native into other existing projects. This 
 document provides an overview of the concepts underpinning the Babylon Native build system
 and outlines some of the reasoning and intent behind them.
-
-## Image Format Parsing
-
-Native AVIF image decoding is disabled by default. This excludes the libavif and
-dav1d sources from the bimg decoder build; other image-format defaults are unchanged.
-
-To enable AVIF support, configure Babylon Native with `-DBIMG_CONFIG_PARSE_AVIF=ON`.
-An explicit setting from a parent CMake project is also respected. Unset or empty
-values use Babylon Native's disabled default, including empty cache entries left by
-earlier configurations.
 
 ## Lateral Dependency Management
 

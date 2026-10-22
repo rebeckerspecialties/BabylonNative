@@ -19,6 +19,9 @@ use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 static WEBGPU_DRAW_ENABLED: AtomicBool = AtomicBool::new(false);
+/// Set by the wgpu device-lost callback for any reason other than an explicit destroy; cleared
+/// when a new device is bootstrapped. Backs `Device::IsDeviceLost` on the WebGPU backend.
+static DEVICE_LOST: AtomicBool = AtomicBool::new(false);
 static RENDER_FRAME_COUNTER: AtomicU64 = AtomicU64::new(0);
 static UPSTREAM_WGPU_NATIVE_VERSION: AtomicU32 = AtomicU32::new(0);
 static ESTIMATED_GPU_MEMORY_BYTES: AtomicU64 = AtomicU64::new(0);
@@ -204,6 +207,11 @@ impl BackendContext {
 #[no_mangle]
 pub extern "C" fn babylon_wgpu_mark_webgpu_draw_requested() {
     WEBGPU_DRAW_ENABLED.store(true, Ordering::Release);
+}
+
+#[no_mangle]
+pub extern "C" fn babylon_wgpu_native_is_device_lost() -> bool {
+    DEVICE_LOST.load(Ordering::Acquire)
 }
 
 #[no_mangle]
@@ -8585,10 +8593,12 @@ mod upstream_wgpu_native {
         })?;
 
         crate::error_bridge::install(&device);
+        crate::DEVICE_LOST.store(false, Ordering::Release);
         device.set_device_lost_callback(|reason, message| {
             if reason == wgpu::DeviceLostReason::Destroyed {
                 return;
             }
+            crate::DEVICE_LOST.store(true, Ordering::Release);
             let error = format!("NativeWebGPU device lost ({reason:?}): {message}");
             eprintln!("{error}");
             crate::set_last_error(&error);

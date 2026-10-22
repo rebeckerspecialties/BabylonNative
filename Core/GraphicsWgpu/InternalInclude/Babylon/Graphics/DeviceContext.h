@@ -73,6 +73,7 @@ namespace Babylon::Graphics
         Update GetUpdate(const char* updateName);
 
         void RequestScreenShot(std::function<void(std::vector<uint8_t>)> callback);
+        void UpdateMSAA(uint8_t value);
         void SetRenderResetCallback(std::function<void()> callback);
 
         float GetHardwareScalingLevel();
