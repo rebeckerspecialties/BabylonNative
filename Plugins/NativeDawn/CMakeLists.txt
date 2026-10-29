@@ -11,7 +11,9 @@ set(SOURCES
     "Source/ImageDataDawn.cpp"
     "Source/ImageDataDawn.h"
     "Source/ImageDecode.cpp"
-    "Source/NativeDawn.cpp")
+    "Source/NativeDawn.cpp"
+    "Source/RenderPassCommandStream.cpp"
+    "Source/RenderPassCommandStream.h")
 
 add_library(NativeDawn ${SOURCES})
 

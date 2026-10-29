@@ -14,6 +14,8 @@
 
 #include <webgpu/webgpu.h>
 
+#include <napi/env.h>
+
 // jsruntimehost's V8 N-API enqueues GC finalizers into napi_env__::pending_finalizers
 // but, unlike real Node's event-loop-backed env, never drains that queue at runtime.
 // NativeDawn creates many short-lived N-API wrappers per frame (one per WebGPU object:
@@ -51,6 +53,7 @@
 
 #include "CanvasDawn.h"
 #include "CanvasEncoding.h"
+#include "RenderPassCommandStream.h"
 
 namespace Babylon::Plugins::NativeDawn
 {
@@ -628,12 +631,62 @@ namespace Babylon::Plugins::NativeDawn
         // reference directly. Wrapping a *borrowed* handle (one this code did
         // not just create, e.g. g_state.device) requires an explicit
         // WgpuOps<T>::AddRef at the call site.
+        // Resources the Babylon.js render-pass command stream can reference by id
+        // (webgpuRenderPassCommandStream.ts). Every wrapper of these types gets a
+        // registry id, exposed on the JS object as __babylonNativeWebGPUHandleId; the
+        // entry is removed by the wrapper's finalizer, so the registry never holds a
+        // handle longer than the JS object that owns the reference.
+        CommandStream::ResourceRegistry g_streamResources;
+        std::string g_streamLastError;
+        uint64_t g_streamBatchCount = 0;
+        uint64_t g_streamWordCount = 0;
+        uint64_t g_streamDisabledCount = 0;
+        std::string g_streamDisabledReason;
+        constexpr const char* kStreamHandleIdName = "__babylonNativeWebGPUHandleId";
+
         template <typename T>
-        Napi::External<T> MakeExt(Napi::Env env, const T& h)
+        struct StreamKind
+        {
+            static constexpr bool Registered = false;
+        };
+        template <>
+        struct StreamKind<WGPURenderPipeline>
+        {
+            static constexpr bool Registered = true;
+            static constexpr CommandStream::ResourceKind Kind = CommandStream::ResourceKind::RenderPipeline;
+        };
+        template <>
+        struct StreamKind<WGPUBuffer>
+        {
+            static constexpr bool Registered = true;
+            static constexpr CommandStream::ResourceKind Kind = CommandStream::ResourceKind::Buffer;
+        };
+        template <>
+        struct StreamKind<WGPUBindGroup>
+        {
+            static constexpr bool Registered = true;
+            static constexpr CommandStream::ResourceKind Kind = CommandStream::ResourceKind::BindGroup;
+        };
+
+        // Payload of the "_h" External: the owned handle plus its command-stream id
+        // (0 when the type is not referenced by the stream).
+        template <typename T>
+        struct HandleBox
+        {
+            T Handle;
+            uint64_t StreamId;
+        };
+
+        template <typename T>
+        Napi::External<HandleBox<T>> MakeExt(Napi::Env env, const T& h, uint64_t streamId)
         {
             ++g_wrappersCreated;
-            return Napi::External<T>::New(env, new T(h), [](Napi::Env, T* p) {
-                WgpuOps<T>::Release(*p);
+            return Napi::External<HandleBox<T>>::New(env, new HandleBox<T>{h, streamId}, [](Napi::Env, HandleBox<T>* p) {
+                if (p->StreamId != 0)
+                {
+                    g_streamResources.Unregister(p->StreamId);
+                }
+                WgpuOps<T>::Release(p->Handle);
                 delete p;
             });
         }
@@ -641,7 +694,13 @@ namespace Babylon::Plugins::NativeDawn
         template <typename T>
         void SetHandle(Napi::Object o, const T& h)
         {
-            o.Set("_h", MakeExt<T>(o.Env(), h));
+            uint64_t streamId = 0;
+            if constexpr (StreamKind<T>::Registered)
+            {
+                streamId = g_streamResources.Register(StreamKind<T>::Kind, h);
+                o.Set(kStreamHandleIdName, Napi::Number::New(o.Env(), static_cast<double>(streamId)));
+            }
+            o.Set("_h", MakeExt<T>(o.Env(), h, streamId));
         }
 
         // Wraps a handle this code does not own (e.g. a long-lived g_state
@@ -661,7 +720,7 @@ namespace Babylon::Plugins::NativeDawn
             if (!o.Has("_h")) return nullptr;
             Napi::Value h = o.Get("_h");
             if (!h.IsExternal()) return nullptr;
-            return h.As<Napi::External<T>>().Data();
+            return &h.As<Napi::External<HandleBox<T>>>().Data()->Handle;
         }
 
         // The C API takes strings as an explicit (data, length) pair rather
@@ -2329,6 +2388,29 @@ namespace Babylon::Plugins::NativeDawn
                 if (b != nullptr) wgpuRenderPassEncoderDrawIndexedIndirect(h, *b, ArgU64(info, 1, 0));
                 return info.Env().Undefined();
             });
+            // Babylon.js render-pass command stream: records a whole batch of state and
+            // draw commands in one call. All-or-nothing: false means nothing was recorded
+            // and the engine replays the batch through the methods above.
+            SetMethod(o, "_recordCommands", [h](const Napi::CallbackInfo& info) -> Napi::Value {
+                Napi::Env env = info.Env();
+                if (info.Length() == 0 || !info[0].IsTypedArray() || info[0].As<Napi::TypedArray>().TypedArrayType() != napi_uint32_array)
+                {
+                    g_streamLastError = "render pass command stream: commands must be a Uint32Array";
+                    return Napi::Boolean::New(env, false);
+                }
+                const auto commands = info[0].As<Napi::Uint32Array>();
+                const size_t available = commands.ElementLength();
+                const size_t wordCount = (info.Length() > 4 && info[4].IsNumber()) ? std::min<size_t>(available, ArgU32(info, 4, 0)) : available;
+                std::string error;
+                if (!CommandStream::RecordRenderPassCommands(h, g_streamResources, commands.Data(), wordCount, error))
+                {
+                    g_streamLastError = error;
+                    return Napi::Boolean::New(env, false);
+                }
+                ++g_streamBatchCount;
+                g_streamWordCount += wordCount;
+                return Napi::Boolean::New(env, true);
+            });
             SetMethod(o, "setViewport", [h](const Napi::CallbackInfo& info) -> Napi::Value {
                 wgpuRenderPassEncoderSetViewport(h, static_cast<float>(ArgF64(info, 0, 0)), static_cast<float>(ArgF64(info, 1, 0)),
                     static_cast<float>(ArgF64(info, 2, 0)), static_cast<float>(ArgF64(info, 3, 0)),
@@ -3578,6 +3660,75 @@ namespace Babylon::Plugins::NativeDawn
 
         // __WGPU_BUILDERS__
 
+        // Implements Babylon.js' IWebGPURenderPassCommandRecorderProvider for this
+        // plugin. Applications install it with
+        //   engine.renderPassCommandRecorderProvider =
+        //       navigator.gpu.__babylonNativeRenderPassCommandRecorderProvider;
+        // It is plain JavaScript on purpose: isEnabled and getResourceId run once per
+        // draw and must not cross into native; only the one-time failure report does.
+        constexpr const char* kRecorderProviderSource = R"javascript(
+(function () {
+    "use strict";
+    const gpu = navigator.gpu;
+    const handleIdName = "__babylonNativeWebGPUHandleId";
+    let enabled = true;
+    const provider = {
+        protocolVersion: gpu._renderPassCommandStreamProtocolVersion,
+        isEnabled: function () {
+            return enabled;
+        },
+        getResourceId: function (resource) {
+            const id = resource ? resource[handleIdName] : 0;
+            return typeof id === "number" && id > 0 ? id : 0;
+        },
+        getLastError: function () {
+            const error = gpu._renderPassCommandStreamLastError();
+            return typeof error === "string" && error.length > 0 ? error : undefined;
+        },
+        onDisabled: function (info) {
+            enabled = false;
+            gpu._reportRenderPassCommandStreamDisabled(String(info.reason), String(info.message), Number(info.replayedDrawCount) || 0);
+        }
+    };
+    Object.defineProperty(gpu, "__babylonNativeRenderPassCommandRecorderProvider", {
+        value: Object.freeze(provider),
+        enumerable: false,
+        configurable: true,
+        writable: false
+    });
+})();
+)javascript";
+        constexpr const char* kRecorderProviderSourceUrl = "babylon-native://plugins/NativeDawn/renderPassCommandRecorderProvider.js";
+
+        void InstallRenderPassCommandStream(Napi::Env env, Napi::Object gpu)
+        {
+            gpu.Set("_renderPassCommandStreamProtocolVersion", Napi::Number::New(env, CommandStream::ProtocolVersion));
+            SetMethod(gpu, "_renderPassCommandStreamLastError", [](const Napi::CallbackInfo& info) -> Napi::Value {
+                return Napi::String::New(info.Env(), g_streamLastError);
+            });
+            SetMethod(gpu, "_renderPassCommandStreamStats", [](const Napi::CallbackInfo& info) -> Napi::Value {
+                Napi::Object stats = Napi::Object::New(info.Env());
+                stats.Set("batchCount", Napi::Number::New(info.Env(), static_cast<double>(g_streamBatchCount)));
+                stats.Set("wordCount", Napi::Number::New(info.Env(), static_cast<double>(g_streamWordCount)));
+                stats.Set("disabledCount", Napi::Number::New(info.Env(), static_cast<double>(g_streamDisabledCount)));
+                stats.Set("disabledReason", Napi::String::New(info.Env(), g_streamDisabledReason));
+                stats.Set("registeredResources", Napi::Number::New(info.Env(), static_cast<double>(g_streamResources.Size())));
+                return stats;
+            });
+            SetMethod(gpu, "_reportRenderPassCommandStreamDisabled", [](const Napi::CallbackInfo& info) -> Napi::Value {
+                // One-time report from the engine when it stops recording batches (see the
+                // provider's onDisabled); kept for diagnostics and logged like other errors.
+                const std::string reason = info.Length() > 0 && info[0].IsString() ? info[0].As<Napi::String>().Utf8Value() : std::string{"unknown"};
+                const std::string message = info.Length() > 1 && info[1].IsString() ? info[1].As<Napi::String>().Utf8Value() : std::string{};
+                const uint32_t replayedDrawCount = ArgU32(info, 2, 0);
+                ++g_streamDisabledCount;
+                g_streamDisabledReason = reason;
+                DawnLog(LogLevel::Error, "render pass command stream disabled (" + reason + ", " + std::to_string(replayedDrawCount) + " draws replayed): " + message);
+                return info.Env().Undefined();
+            });
+            Napi::Eval(env, kRecorderProviderSource, kRecorderProviderSourceUrl);
+        }
+
         // ---- top-level installation -----------------------------------------
         void InstallWebGPU(Napi::Env env)
         {
@@ -3612,6 +3763,7 @@ namespace Babylon::Plugins::NativeDawn
             wlf.Set("size", Napi::Number::New(env, 0));
             gpu.Set("wgslLanguageFeatures", wlf);
             navigator.Set("gpu", gpu);
+            InstallRenderPassCommandStream(env, gpu);
 
             SetMethod(global, "_nativeDawnGetContext", [](const Napi::CallbackInfo& info) -> Napi::Value {
                 return MakeCanvasContext(info.Env());

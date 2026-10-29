@@ -33,6 +33,14 @@
     engine.disableManifestCheck = true;
     globalThis._playgroundWebGPUEngine = engine;
     globalThis._playgroundWebGPUReady = engine.initAsync().then(function () {
+        // Batch compatibility-mode draws into the native command stream (one bridge
+        // crossing per batch instead of one per encoder call). Babylon.js releases
+        // before 9.33.0 have no recorder provider and keep using direct calls.
+        const recorderProvider = navigator.gpu.__babylonNativeRenderPassCommandRecorderProvider;
+        if (recorderProvider && "renderPassCommandRecorderProvider" in engine) {
+            engine.renderPassCommandRecorderProvider = recorderProvider;
+        }
+
         let width = canvas.width;
         let height = canvas.height;
         engine.onResizeObservable.add(function () {
