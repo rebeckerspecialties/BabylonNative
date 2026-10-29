@@ -143,11 +143,16 @@ namespace
             "                              Columns: index, title, referenceImage,\n"
             "                              exclusionReason, workarounds. exclusionReason\n"
             "                              reflects config state (ignores\n"
-            "                              --include-excluded).\n",
-            [](PlaygroundOptions& o, std::string_view, std::string&) { o.ListTests = true; }},
+            "                              --include-excluded). Implies --headless\n"
+            "                              and, without a script, loads\n"
+            "                              validation_native.js.\n",
+            [](PlaygroundOptions& o, std::string_view, std::string&) {
+                o.ListTests = true;
+                o.Headless = true;
+            }},
 
         FlagSpec{"--headless", "", FlagKind::Boolean, "",
-            "Don't show a window (still creates HWND).",
+            "Don't show a window (keeps a render surface).",
             "                              Disables the JavaScript debugger listener.\n",
             [](PlaygroundOptions& o, std::string_view, std::string&) { o.Headless = true; }},
 
@@ -429,6 +434,11 @@ namespace CommandLine
 
             // Positional argument (script path / URL).
             opt.Scripts.emplace_back(arg);
+        }
+
+        if (opt.ListTests && opt.Scripts.empty())
+        {
+            opt.Scripts.emplace_back("app:///Scripts/validation_native.js");
         }
 
         return opt;

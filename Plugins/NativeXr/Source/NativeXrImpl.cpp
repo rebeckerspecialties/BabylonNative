@@ -370,7 +370,7 @@ namespace Babylon
             m_sessionState->FrameTask = arcana::make_task(m_sessionState->Update.Scheduler(), m_sessionState->CancellationSource, [this, thisRef{shared_from_this()}] {
                 BeginFrame();
 
-                return arcana::make_task(m_runtimeScheduler, m_sessionState->CancellationSource, [this, updateToken{m_sessionState->Update.GetUpdateToken()}, thisRef{shared_from_this()}]() {
+                arcana::make_task(m_runtimeScheduler, m_sessionState->CancellationSource, [this, updateToken{m_sessionState->Update.GetUpdateToken()}, thisRef{shared_from_this()}]() {
                     BeginUpdate();
 
                     {
@@ -388,7 +388,14 @@ namespace Babylon
                       {
                           Napi::Error::New(m_env, result.error()).ThrowAsJavaScriptException();
                       }
-                  }).then(m_sessionState->GraphicsContext.AfterRenderScheduler(), arcana::cancellation::none(), [this, thisRef{shared_from_this()}](const arcana::expected<void, std::exception_ptr>&) {
+                  });
+
+                // Queue EndFrame on this frame's AfterRender tick now, rather than as a continuation of the JS task.
+                // The frame completion scope acquired above keeps that tick from running until the JS task is done,
+                // but arcana releases the scope before running the task's continuations. A continuation could
+                // therefore be queued after the render thread drained AfterRender, and EndFrame would then consume the
+                // next frame and leave that frame's EndFrame without an active frame.
+                return arcana::make_task(m_sessionState->GraphicsContext.AfterRenderScheduler(), arcana::cancellation::none(), [this, thisRef{shared_from_this()}] {
                     EndFrame();
                     m_sessionState->FrameScheduled = false;
                     SchedulePendingFrame();
