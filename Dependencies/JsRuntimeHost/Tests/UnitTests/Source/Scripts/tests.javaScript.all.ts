@@ -15,6 +15,13 @@ import "./tests.textEncoder";
 import "./tests.file";
 import "./tests.fileReader";
 import "./tests.webAssembly";
+import "./tests.fetchClasses";
+import "./tests.fetchDataUrls";
+import "./tests.streams";
+import "./tests.compressionStreams";
+import "./tests.blobStreaming";
+import "./tests.textDecoderUtf16";
+import "./tests.fileStreaming";
 
 declare const setExitCode: (code: number) => void;
 

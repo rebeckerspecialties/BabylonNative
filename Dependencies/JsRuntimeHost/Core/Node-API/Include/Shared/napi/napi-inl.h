@@ -1986,13 +1986,13 @@ inline size_t ArrayBuffer::ByteLength() const {
 
 // [BABYLON-NATIVE-ADDITION]
 inline void ArrayBuffer::EnsureInfo() const {
-  // The ArrayBuffer instance may have been constructed from a napi_value whose
-  // length/data are not yet known. Fetch and cache these values just once,
-  // since they can never change during the lifetime of the ArrayBuffer.
-  if (_data == nullptr) {
-    napi_status status = napi_get_arraybuffer_info(_env, _value, &_data, &_length);
-    NAPI_THROW_IF_FAILED_VOID(_env, status);
-  }
+  // Detachment can change both the backing pointer and byte length, including
+  // when JavaScript transfers the buffer without going through this wrapper.
+  // Re-query Node-API on every observation instead of returning stale cached
+  // metadata. New()/the private constructor still seed these fields so callers
+  // that never observe the buffer do not pay an extra query.
+  napi_status status = napi_get_arraybuffer_info(_env, _value, &_data, &_length);
+  NAPI_THROW_IF_FAILED_VOID(_env, status);
 }
 
 #if NAPI_VERSION >= 7
@@ -2006,6 +2006,8 @@ inline bool ArrayBuffer::IsDetached() const {
 inline void ArrayBuffer::Detach() {
   napi_status status = napi_detach_arraybuffer(_env, _value);
   NAPI_THROW_IF_FAILED_VOID(_env, status);
+  _data = nullptr;
+  _length = 0;
 }
 #endif  // NAPI_VERSION >= 7
 

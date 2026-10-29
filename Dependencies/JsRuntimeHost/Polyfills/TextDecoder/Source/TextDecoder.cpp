@@ -3,9 +3,17 @@
 #include <napi/napi.h>
 #include <cstring>
 #include <string>
+#include <vector>
 
 namespace
 {
+    enum class Encoding
+    {
+        Utf8,
+        Utf16Le,
+        Utf16Be,
+    };
+
     // Normalize an encoding label per the WHATWG Encoding Standard "get an encoding"
     // algorithm: strip leading/trailing ASCII whitespace and ASCII-lowercase the result.
     std::string NormalizeEncodingLabel(const std::string& encoding)
@@ -36,18 +44,29 @@ namespace
         return label;
     }
 
+    Encoding ParseEncoding(const std::string& encoding, Napi::Env env)
+    {
+        const auto label = NormalizeEncodingLabel(encoding);
+        if (label == "utf-8" || label == "utf8" || label == "unicode-1-1-utf-8" ||
+            label == "unicode11utf8" || label == "unicode20utf8" || label == "x-unicode20utf8")
+        {
+            return Encoding::Utf8;
+        }
+        if (label == "csunicode" || label == "iso-10646-ucs-2" || label == "ucs-2" ||
+            label == "unicode" || label == "unicodefeff" || label == "utf-16" || label == "utf-16le")
+        {
+            return Encoding::Utf16Le;
+        }
+        if (label == "unicodefffe" || label == "utf-16be")
+        {
+            return Encoding::Utf16Be;
+        }
+
+        throw Napi::RangeError::New(env, "TextDecoder: unsupported encoding '" + encoding + "'");
+    }
+
     class TextDecoder final : public Napi::ObjectWrap<TextDecoder>
     {
-        // Only the encodings the runtime actually needs. UTF-16 shows up in Emscripten output
-        // (UTF16ToString creates a `new TextDecoder('utf-16le')` at module scope), so refusing
-        // it makes whole WebAssembly modules unloadable.
-        enum class Encoding
-        {
-            Utf8,
-            Utf16LittleEndian,
-            Utf16BigEndian
-        };
-
     public:
         static void Initialize(Napi::Env env)
         {
@@ -60,6 +79,7 @@ namespace
                     env,
                     JS_TEXTDECODER_CONSTRUCTOR_NAME,
                     {
+                        InstanceAccessor("encoding", &TextDecoder::EncodingName, nullptr),
                         InstanceMethod("decode", &TextDecoder::Decode),
                     });
 
@@ -72,113 +92,22 @@ namespace
         {
             if (info.Length() > 0 && info[0].IsString())
             {
-                auto encoding = info[0].As<Napi::String>().Utf8Value();
-
-                // Several labels (e.g. "utf8", "unicode-1-1-utf-8") all map to UTF-8 after
-                // normalization; callers such as the glTF/Draco loader pass "utf8".
-                const std::string label = NormalizeEncodingLabel(encoding);
-                if (label == "utf-8" ||
-                    label == "utf8" ||
-                    label == "unicode-1-1-utf-8" ||
-                    label == "unicode11utf8" ||
-                    label == "unicode20utf8" ||
-                    label == "x-unicode20utf8")
-                {
-                    m_encoding = Encoding::Utf8;
-                }
-                else if (label == "utf-16" ||
-                         label == "utf-16le" ||
-                         label == "ucs-2" ||
-                         label == "unicode" ||
-                         label == "unicodefeff" ||
-                         label == "csunicode" ||
-                         label == "iso-10646-ucs-2")
-                {
-                    m_encoding = Encoding::Utf16LittleEndian;
-                }
-                else if (label == "utf-16be" ||
-                         label == "unicodefffe")
-                {
-                    m_encoding = Encoding::Utf16BigEndian;
-                }
-                else
-                {
-                    throw Napi::Error::New(Env(), "TextDecoder: unsupported encoding '" + encoding + "', only UTF-8 and UTF-16 are supported");
-                }
+                m_encoding = ParseEncoding(info[0].As<Napi::String>().Utf8Value(), Env());
             }
         }
 
     private:
-        Encoding m_encoding{Encoding::Utf8};
-
-        Napi::Value DecodeUtf16(Napi::Env env, const std::string& data) const
+        Napi::Value EncodingName(const Napi::CallbackInfo& info)
         {
-            // WHATWG UTF-16 decoder in replacement mode: unpaired surrogates and a
-            // leftover odd byte become U+FFFD. A lead surrogate followed by a
-            // non-trail is one replacement, then the second unit is reprocessed.
-            const bool littleEndian = m_encoding == Encoding::Utf16LittleEndian;
-            std::u16string units;
-            units.reserve(data.size() / 2 + 1);
-
-            constexpr char16_t LEAD_MIN = 0xD800;
-            constexpr char16_t LEAD_MAX = 0xDBFF;
-            constexpr char16_t TRAIL_MIN = 0xDC00;
-            constexpr char16_t TRAIL_MAX = 0xDFFF;
-            constexpr char16_t REPLACEMENT = 0xFFFD;
-
-            bool pendingLead = false;
-            char16_t lead = 0;
-            size_t byteIndex = 0;
-            while (byteIndex + 1 < data.size())
+            switch (m_encoding)
             {
-                const auto first = static_cast<unsigned char>(data[byteIndex]);
-                const auto second = static_cast<unsigned char>(data[byteIndex + 1]);
-                byteIndex += 2;
-                const auto unit = littleEndian
-                    ? static_cast<char16_t>(first | (second << 8))
-                    : static_cast<char16_t>(second | (first << 8));
-
-                if (pendingLead)
-                {
-                    pendingLead = false;
-                    if (unit >= TRAIL_MIN && unit <= TRAIL_MAX)
-                    {
-                        units.push_back(lead);
-                        units.push_back(unit);
-                        continue;
-                    }
-
-                    units.push_back(REPLACEMENT);
-                    // Fall through and reprocess `unit` as a standalone code unit.
-                }
-
-                if (unit >= LEAD_MIN && unit <= LEAD_MAX)
-                {
-                    pendingLead = true;
-                    lead = unit;
-                }
-                else if (unit >= TRAIL_MIN && unit <= TRAIL_MAX)
-                {
-                    units.push_back(REPLACEMENT);
-                }
-                else
-                {
-                    units.push_back(unit);
-                }
+                case Encoding::Utf16Le:
+                    return Napi::String::New(info.Env(), "utf-16le");
+                case Encoding::Utf16Be:
+                    return Napi::String::New(info.Env(), "utf-16be");
+                default:
+                    return Napi::String::New(info.Env(), "utf-8");
             }
-
-            // End-of-queue: an unpaired lead and/or leftover odd byte is one error.
-            if (pendingLead || byteIndex < data.size())
-            {
-                units.push_back(REPLACEMENT);
-            }
-
-            if (!units.empty() && units.front() == u'\uFEFF')
-            {
-                units.erase(0, 1);
-            }
-
-            return Napi::String::New(env, units);
         }
 
         Napi::Value Decode(const Napi::CallbackInfo& info)
@@ -188,7 +117,7 @@ namespace
                 return Napi::String::New(info.Env(), "");
             }
 
-            std::string data;
+            std::vector<uint8_t> data;
 
             if (info[0].IsTypedArray())
             {
@@ -217,8 +146,71 @@ namespace
                 throw Napi::TypeError::New(Env(), "TextDecoder.decode: input must be a BufferSource (ArrayBuffer or TypedArray)");
             }
 
-            return m_encoding == Encoding::Utf8 ? Napi::String::New(info.Env(), data) : DecodeUtf16(info.Env(), data);
+            if (m_encoding == Encoding::Utf8)
+            {
+                const size_t offset = data.size() >= 3 && data[0] == 0xEF && data[1] == 0xBB && data[2] == 0xBF ? 3 : 0;
+                const char* bytes = data.empty() ? "" : reinterpret_cast<const char*>(data.data() + offset);
+                return Napi::String::New(info.Env(), bytes, data.size() - offset);
+            }
+
+            const auto readCodeUnit = [this, &data](size_t offset) {
+                if (m_encoding == Encoding::Utf16Be)
+                {
+                    return static_cast<char16_t>((static_cast<uint16_t>(data[offset]) << 8) | data[offset + 1]);
+                }
+                return static_cast<char16_t>(data[offset] | (static_cast<uint16_t>(data[offset + 1]) << 8));
+            };
+
+            std::u16string decoded;
+            decoded.reserve((data.size() + 1) / 2);
+            for (size_t index = 0; index < data.size();)
+            {
+                if (index + 1 >= data.size())
+                {
+                    decoded.push_back(static_cast<char16_t>(0xFFFD));
+                    break;
+                }
+
+                const auto codeUnit = readCodeUnit(index);
+                index += 2;
+                if (decoded.empty() && codeUnit == static_cast<char16_t>(0xFEFF))
+                {
+                    continue;
+                }
+                if (codeUnit >= static_cast<char16_t>(0xD800) && codeUnit <= static_cast<char16_t>(0xDBFF))
+                {
+                    if (index + 1 < data.size())
+                    {
+                        const auto trailing = readCodeUnit(index);
+                        if (trailing >= static_cast<char16_t>(0xDC00) && trailing <= static_cast<char16_t>(0xDFFF))
+                        {
+                            decoded.push_back(codeUnit);
+                            decoded.push_back(trailing);
+                            index += 2;
+                            continue;
+                        }
+                    }
+                    decoded.push_back(static_cast<char16_t>(0xFFFD));
+                    if (index < data.size() && index + 1 >= data.size())
+                    {
+                        // WHATWG end-of-queue: an unpaired lead surrogate and a leftover odd byte
+                        // are a single error, not one each.
+                        break;
+                    }
+                    continue;
+                }
+                if (codeUnit >= static_cast<char16_t>(0xDC00) && codeUnit <= static_cast<char16_t>(0xDFFF))
+                {
+                    decoded.push_back(static_cast<char16_t>(0xFFFD));
+                    continue;
+                }
+                decoded.push_back(codeUnit);
+            }
+
+            return Napi::String::New(info.Env(), decoded);
         }
+
+        Encoding m_encoding{Encoding::Utf8};
     };
 }
 

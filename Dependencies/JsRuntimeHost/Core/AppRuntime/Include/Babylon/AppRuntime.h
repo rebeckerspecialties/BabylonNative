@@ -48,6 +48,12 @@ namespace Babylon
         void Suspend();
         void Resume();
 
+        // Permanently stop accepting work and request interruption of any
+        // JavaScript currently executing. The interruption is immediate on
+        // engines with an interrupt hook (including system JavaScriptCore) and
+        // cooperative between dispatches on the remaining engines.
+        void Terminate();
+
         void Dispatch(Dispatchable<void(Napi::Env)> callback);
 
         // Default unhandled exception handler that outputs the error message to the program output.
@@ -85,6 +91,9 @@ namespace Babylon
         // queue explicitly (Napi::DrainJobs / JS_ExecutePendingJob).
         void DrainMicrotasks(Napi::Env env);
 
+        // Engine tiers may query the shared termination flag without exposing
+        // engine types in the public API.
+        bool IsTerminationRequested() const noexcept;
         Internal::DelayedTaskScheduler& GetDelayedTaskScheduler();
 
         Options m_options;

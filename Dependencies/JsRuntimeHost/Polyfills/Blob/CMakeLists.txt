@@ -1,5 +1,6 @@
 set(SOURCES 
     "Include/Babylon/Polyfills/Blob.h"
+    "README.md"
     "InternalInclude/Babylon/Polyfills/BlobInternal.h"
     "Source/Blob.cpp"
     "Source/Blob.h")

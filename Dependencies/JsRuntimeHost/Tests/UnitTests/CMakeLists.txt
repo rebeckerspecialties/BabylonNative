@@ -24,6 +24,7 @@ set(SOURCES
     "Source/App.cpp"
     "Source/App.h"
     "Source/Tests.AppRuntime.cpp"
+    "Source/Tests.BrowserPolyfills.cpp"
     "Source/Tests.Console.cpp"
     "Source/Tests.DelayedTaskScheduler.cpp"
     "Source/Tests.JavaScript.cpp"
@@ -95,6 +96,10 @@ if(NAPI_JAVASCRIPT_ENGINE STREQUAL "JSI")
     target_compile_definitions(${_jsruntimehost_unit_tests_target} PRIVATE JSRUNTIMEHOST_NAPI_ENGINE_JSI)
 endif()
 
+if(APPLE AND NAPI_JAVASCRIPT_ENGINE STREQUAL "JavaScriptCore")
+    target_compile_definitions(${_jsruntimehost_unit_tests_target} PRIVATE JSRUNTIMEHOST_APPLE_JAVASCRIPTCORE)
+endif()
+
 target_link_libraries(${_jsruntimehost_unit_tests_target}
     PRIVATE AppRuntime
     PRIVATE Console
@@ -113,12 +118,27 @@ target_link_libraries(${_jsruntimehost_unit_tests_target}
     PRIVATE Performance
     PRIVATE TextDecoder
     PRIVATE TextEncoder
+    PRIVATE Streams
+    PRIVATE Compression
     ${ADDITIONAL_LIBRARIES})
+
+if(TARGET Worker)
+    target_link_libraries(${_jsruntimehost_unit_tests_target} PRIVATE Worker)
+    target_compile_definitions(${_jsruntimehost_unit_tests_target} PRIVATE JSRUNTIMEHOST_TEST_WORKER=1)
+endif()
 
 # See https://gitlab.kitware.com/cmake/cmake/-/issues/23543
 # If we can set minimum required to 3.26+, then we can use the `copy -t` syntax instead.
 add_custom_command(TARGET ${_jsruntimehost_unit_tests_target} POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E $<IF:$<BOOL:$<TARGET_RUNTIME_DLLS:${_jsruntimehost_unit_tests_target}>>,copy,true> $<TARGET_RUNTIME_DLLS:${_jsruntimehost_unit_tests_target}> $<TARGET_FILE_DIR:${_jsruntimehost_unit_tests_target}> COMMAND_EXPAND_LISTS)
+
+if(TARGET Worker)
+    add_custom_command(TARGET ${_jsruntimehost_unit_tests_target} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${CMAKE_CURRENT_SOURCE_DIR}/WebPlatformTests"
+            "$<TARGET_FILE_DIR:${_jsruntimehost_unit_tests_target}>/WebPlatformTests"
+        COMMENT "Copying focused Worker conformance regressions")
+endif()
 
 if(APPLE)
     enable_objc_arc(${_jsruntimehost_unit_tests_target})

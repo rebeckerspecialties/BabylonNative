@@ -13,6 +13,12 @@
 #include <Babylon/Polyfills/File.h>
 #include <Babylon/Polyfills/TextDecoder.h>
 #include <Babylon/Polyfills/TextEncoder.h>
+#include <Babylon/Polyfills/Streams.h>
+#include <Babylon/Polyfills/Compression.h>
+#if defined(JSRUNTIMEHOST_TEST_WORKER)
+#include <Babylon/Polyfills/Worker.h>
+#endif
+#include <filesystem>
 #include <cstdint>
 #include <future>
 #include <iostream>
@@ -81,11 +87,19 @@ TEST(JavaScript, All)
         Babylon::Polyfills::URL::Initialize(env);
         Babylon::Polyfills::WebSocket::Initialize(env);
         Babylon::Polyfills::XMLHttpRequest::Initialize(env);
+        Babylon::Polyfills::Streams::Initialize(env);
         Babylon::Polyfills::Fetch::Initialize(env);
+        Babylon::Polyfills::Compression::Initialize(env);
         Babylon::Polyfills::Blob::Initialize(env);
         Babylon::Polyfills::File::Initialize(env);
         Babylon::Polyfills::TextDecoder::Initialize(env);
         Babylon::Polyfills::TextEncoder::Initialize(env);
+
+#if defined(JSRUNTIMEHOST_TEST_WORKER)
+        Babylon::Polyfills::Worker::Options workerOptions{};
+        workerOptions.ScriptRoot = std::filesystem::current_path().string();
+        Babylon::Polyfills::Worker::Initialize(env, std::move(workerOptions));
+#endif
 
         auto setExitCodeCallback = Napi::Function::New(
             env, [&exitCodePromise](const Napi::CallbackInfo& info) {
