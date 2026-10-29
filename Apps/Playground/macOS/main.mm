@@ -107,7 +107,9 @@ int main(int argc, const char* argv[])
         CommandLine::PrintUsage(argv[0]);
         return 0;
     }
-    if (options.Headless || options.ListTests)
+    // --list runs without a window. --headless keeps the windowed host on this branch: its view
+    // controller selects the validation scripts for the WebGPU harness and pumps frames for it.
+    if (options.ListTests)
     {
         @autoreleasepool
         {
