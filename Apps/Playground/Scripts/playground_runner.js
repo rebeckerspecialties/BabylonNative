@@ -197,6 +197,12 @@ var engine = null;
             adaptToDeviceRatio: true
         });
         await webgpuEngine.initAsync();
+        const recorderProvider = globalThis.navigator && navigator.gpu && navigator.gpu.__babylonNativeRenderPassCommandRecorderProvider;
+        if (recorderProvider && "renderPassCommandRecorderProvider" in webgpuEngine) {
+            // Batch compatibility-mode draws into the native command stream (one bridge
+            // crossing per batch instead of one per encoder call).
+            webgpuEngine.renderPassCommandRecorderProvider = recorderProvider;
+        }
         reportStatus("runner:using-webgpu-engine");
         return webgpuEngine;
     }

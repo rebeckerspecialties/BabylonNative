@@ -910,6 +910,17 @@
                     " failed=" + failedCount +
                     " missingRef=" + missingRefCount +
                     " skipped=" + skippedCount);
+        if (engine && engine.isWebGPU && navigator.gpu && typeof navigator.gpu._backendStats === "function") {
+            try {
+                const stats = navigator.gpu._backendStats();
+                console.log("Render pass command stream: batches=" + stats.renderPassCommandStreamCount +
+                            " words=" + stats.renderPassCommandStreamWordCount +
+                            " disabled=" + stats.renderPassCommandStreamDisabledCount +
+                            (stats.renderPassCommandStreamDisabledReason ? " reason=" + stats.renderPassCommandStreamDisabledReason : ""));
+            } catch (e) {
+                // Stats are diagnostic-only.
+            }
+        }
         if (failedTitles.length > 0) {
             console.log("Failed tests (" + failedTitles.length + "):");
             for (let n = 0; n < failedTitles.length; n++) {
@@ -2821,6 +2832,12 @@ fragmentOutputs.color=color;
             adaptToDeviceRatio: false
         });
         await webgpuEngine.initAsync();
+        const recorderProvider = globalThis.navigator && navigator.gpu && navigator.gpu.__babylonNativeRenderPassCommandRecorderProvider;
+        if (recorderProvider && "renderPassCommandRecorderProvider" in webgpuEngine) {
+            // Batch compatibility-mode draws into the native command stream (one bridge
+            // crossing per batch instead of one per encoder call).
+            webgpuEngine.renderPassCommandRecorderProvider = recorderProvider;
+        }
         return {
             engine: webgpuEngine,
             canvas: webgpuCanvas
