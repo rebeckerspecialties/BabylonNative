@@ -1,0 +1,12 @@
+[package]
+name = "webxr-idl-gen"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Generates Core/WebXr/wit from the vendored W3C WebXR WebIDL (Core/WebXr/idl)."
+
+[dependencies]
+anyhow = "1"
+weedle = "0.13.1"
+webidl2wit = "=0.1.1"
+wit-parser = "0.248"

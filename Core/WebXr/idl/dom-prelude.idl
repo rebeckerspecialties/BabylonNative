@@ -1,0 +1,38 @@
+// Declarations the WebXR specifications import from other Web platform specifications
+// (HTML, DOM, WebGL, Geometry, HR-Time, Gamepad, Permissions). Only what the WebXR
+// IDL set references is declared here, as empty shells where the shape is irrelevant
+// to the native core.
+typedef double DOMHighResTimeStamp;
+typedef unsigned long GLenum;
+typedef long GLint;
+typedef long GLsizei;
+typedef unsigned long GLuint;
+typedef unsigned long GLbitfield;
+
+interface DOMException {};
+interface Event {};
+dictionary EventInit {};
+interface EventTarget {};
+interface Element {};
+interface Navigator {};
+interface Gamepad {};
+interface DOMPointReadOnly {};
+dictionary DOMPointInit {};
+interface WebGLRenderingContext {};
+interface WebGL2RenderingContext {};
+interface WebGLTexture {};
+interface WebGLFramebuffer {};
+interface mixin GlobalEventHandlers {};
+// Permissions, HTML and WebCodecs types referenced by the WebXR and WebGPU IDL.
+dictionary PermissionDescriptor {};
+interface PermissionStatus {};
+interface WorkerNavigator {};
+enum PredefinedColorSpace { "srgb", "display-p3" };
+typedef (ArrayBuffer or ArrayBufferView) AllowSharedBufferSource;
+interface HTMLCanvasElement {};
+interface HTMLImageElement {};
+interface HTMLVideoElement {};
+interface ImageBitmap {};
+interface ImageData {};
+interface OffscreenCanvas {};
+interface VideoFrame {};
