@@ -14,11 +14,37 @@ interface webxr {
   resource dom-exception {
     as-gpu-pipeline-error: func() -> option<gpu-pipeline-error>;
   }
+  resource gamepad-button {
+    pressed: func() -> bool;
+    touched: func() -> bool;
+    value: func() -> f64;
+  }
+  enum gamepad-mapping-type {
+    default,
+    standard,
+    xr-standard,
+  }
   resource gamepad {
+    id: func() -> string;
+    index: func() -> s32;
+    connected: func() -> bool;
+    timestamp: func() -> dom-high-res-time-stamp;
+    mapping: func() -> gamepad-mapping-type;
+    axes: func() -> list<f64>;
+    buttons: func() -> list<gamepad-button>;
   }
   resource dom-point-read-only {
+    x: func() -> f64;
+    y: func() -> f64;
+    z: func() -> f64;
+    w: func() -> f64;
   }
-  record dom-point-init {  }
+  record dom-point-init {
+    x: option<f64>,
+    y: option<f64>,
+    z: option<f64>,
+    w: option<f64>,
+  }
   enum predefined-color-space {
     srgb,
     display-p3,
@@ -766,7 +792,10 @@ interface webxr {
     format: gpu-texture-format,
     view-dimension: option<gpu-texture-view-dimension>,
   }
-  record gpu-external-texture-binding-layout {  }
+  /// WebIDL dictionary without members. A record needs at least one field, so this single case stands for the empty dictionary.
+  enum gpu-external-texture-binding-layout {
+    empty,
+  }
   resource gpu-bind-group {
     label: func() -> string;
     set-label: func(label: string);

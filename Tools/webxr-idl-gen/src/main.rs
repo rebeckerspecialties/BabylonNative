@@ -27,6 +27,12 @@ fn main() -> Result<()> {
             generated.placeholder_callbacks.join(", ")
         );
     }
+    if !generated.empty_dictionaries.is_empty() {
+        println!(
+            "single-case enums for empty dictionaries: {}",
+            generated.empty_dictionaries.join(", ")
+        );
+    }
 
     let wit_dir = out_path
         .parent()

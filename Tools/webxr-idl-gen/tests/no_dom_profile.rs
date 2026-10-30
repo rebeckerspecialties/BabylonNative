@@ -112,9 +112,39 @@ fn reports_what_it_removed() {
 }
 
 #[test]
-fn no_dom_output_resolves_against_wasi_io() {
+fn no_dom_output_resolves_against_wasi_io_and_encodes() {
     let generated = generated_no_dom();
-    validate(&generated.wit, &deps_dir()).expect("WIT resolves");
+    validate(&generated.wit, &deps_dir()).expect("WIT resolves and encodes");
+}
+
+#[test]
+fn empty_dictionaries_become_single_case_enums() {
+    let generated = generated_no_dom();
+    assert_eq!(
+        generated.empty_dictionaries,
+        vec!["gpu-external-texture-binding-layout".to_string()]
+    );
+    assert!(!generated.wit.contains("{  }"), "no record without fields");
+    assert!(generated
+        .wit
+        .contains("  enum gpu-external-texture-binding-layout {\n    empty,\n  }\n"));
+}
+
+#[test]
+fn geometry_and_gamepad_shells_carry_their_members() {
+    let generated = generated_no_dom();
+    assert!(generated
+        .wit
+        .contains("  record dom-point-init {\n    x: option<f64>,\n    y: option<f64>,\n    z: option<f64>,\n    w: option<f64>,\n  }\n"));
+    assert!(generated
+        .wit
+        .contains("  resource dom-point-read-only {\n    x: func() -> f64;\n    y: func() -> f64;\n    z: func() -> f64;\n    w: func() -> f64;\n  }\n"));
+    assert!(generated
+        .wit
+        .contains("    buttons: func() -> list<gamepad-button>;\n"));
+    assert!(generated.wit.contains(
+        "  enum gamepad-mapping-type {\n    default,\n    standard,\n    xr-standard,\n  }\n"
+    ));
 }
 
 #[test]

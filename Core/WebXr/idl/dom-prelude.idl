@@ -1,7 +1,8 @@
 // Declarations the WebXR specifications import from other Web platform specifications
 // (HTML, DOM, WebGL, Geometry, HR-Time, Gamepad, Permissions). Only what the WebXR
-// IDL set references is declared here, as empty shells where the shape is irrelevant
-// to the native core.
+// IDL set references is declared here. Types whose contents the native core and the
+// guests read (Geometry points, Gamepad state) carry their specified members; the
+// rest are empty shells because their shape is irrelevant to the native core.
 typedef double DOMHighResTimeStamp;
 typedef unsigned long GLenum;
 typedef long GLint;
@@ -15,9 +16,38 @@ dictionary EventInit {};
 interface EventTarget {};
 interface Element {};
 interface Navigator {};
-interface Gamepad {};
-interface DOMPointReadOnly {};
-dictionary DOMPointInit {};
+// Gamepad (https://w3c.github.io/gamepad/): the WebXR Gamepads Module reads these
+// members through XRInputSource.gamepad. The specification types the arrays as
+// FrozenArray; sequence converts to the same WIT list.
+interface GamepadButton {
+  readonly attribute boolean pressed;
+  readonly attribute boolean touched;
+  readonly attribute double value;
+};
+enum GamepadMappingType { "", "standard", "xr-standard" };
+interface Gamepad {
+  readonly attribute DOMString id;
+  readonly attribute long index;
+  readonly attribute boolean connected;
+  readonly attribute DOMHighResTimeStamp timestamp;
+  readonly attribute GamepadMappingType mapping;
+  readonly attribute sequence<double> axes;
+  readonly attribute sequence<GamepadButton> buttons;
+};
+// Geometry Interfaces (https://drafts.fxtf.org/geometry/): XRRigidTransform exposes
+// its position and orientation as DOMPointReadOnly and takes DOMPointInit values.
+interface DOMPointReadOnly {
+  readonly attribute unrestricted double x;
+  readonly attribute unrestricted double y;
+  readonly attribute unrestricted double z;
+  readonly attribute unrestricted double w;
+};
+dictionary DOMPointInit {
+  unrestricted double x = 0;
+  unrestricted double y = 0;
+  unrestricted double z = 0;
+  unrestricted double w = 1;
+};
 interface WebGLRenderingContext {};
 interface WebGL2RenderingContext {};
 interface WebGLTexture {};
