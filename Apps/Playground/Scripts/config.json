@@ -157,12 +157,13 @@
         },
         {
             "title": "GUI3D SpherePanel",
-            "playgroundId": "#AMM2WB#0",
+            "playgroundId": "#HB4C01#9",
             "referenceImage": "spherepanel.png",
             "renderCount": 50,
             "workarounds": [
                 "wait-for-readiness"
-            ]
+            ],
+            "reason": "Snippet #AMM2WB#0 calls a class constructor without new; it only runs on upstream's ES5-downleveled bundle, this branch runs the ES2015 bundles."
         },
         {
             "title": "Kernel Blur",
