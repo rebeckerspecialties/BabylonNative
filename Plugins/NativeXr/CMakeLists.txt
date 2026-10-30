@@ -13,6 +13,7 @@ target_link_libraries(NativeXr
     PRIVATE GraphicsDeviceContext
     PRIVATE JsRuntimeInternal
     PRIVATE NativeWebGPU
+    PRIVATE babylon_webxr_core
     PRIVATE xr)
 
 set_property(TARGET NativeXr PROPERTY FOLDER Plugins)

@@ -11,7 +11,14 @@ extern "C"
 {
 #endif
 
-    // XRSessionMode: 0 inline, 1 immersive-vr, 2 immersive-ar.
+    // XRSessionMode values stored by babylon_webxr_session_mode_parse.
+    enum babylon_webxr_session_mode
+    {
+        BABYLON_WEBXR_SESSION_MODE_INLINE = 0,
+        BABYLON_WEBXR_SESSION_MODE_IMMERSIVE_VR = 1,
+        BABYLON_WEBXR_SESSION_MODE_IMMERSIVE_AR = 2
+    };
+
     bool babylon_webxr_session_mode_parse(const uint8_t* name, size_t length, uint32_t* outMode);
 
     // Feature descriptors as the WebXR Device API and its modules define them.

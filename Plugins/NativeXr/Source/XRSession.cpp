@@ -302,8 +302,9 @@ namespace Babylon
             , m_jsInputSources{ Napi::Persistent(Napi::Array::New(info.Env())) }
         {
             // Currently only immersive VR and immersive AR are supported.
-            const auto sessionType = info[0].As<Napi::String>().Utf8Value();
-            assert(sessionType == XRSessionType::IMMERSIVE_VR || sessionType == XRSessionType::IMMERSIVE_AR);
+            const auto sessionMode = ParseXRSessionMode(info[0].As<Napi::String>().Utf8Value());
+            assert(sessionMode == XRSessionMode::ImmersiveVr || sessionMode == XRSessionMode::ImmersiveAr);
+            const bool immersiveAr = sessionMode == XRSessionMode::ImmersiveAr;
 
             m_renderState.Set("depthNear", Napi::Number::New(info.Env(), m_depthNear));
             m_renderState.Set("depthFar", Napi::Number::New(info.Env(), m_depthFar));
@@ -312,8 +313,8 @@ namespace Babylon
 
             auto session = info.This().As<Napi::Object>();
             session.Set("renderState", m_renderState.Value());
-            session.Set("environmentBlendMode", sessionType == XRSessionType::IMMERSIVE_AR ? "alpha-blend" : "opaque");
-            session.Set("interactionMode", sessionType == XRSessionType::IMMERSIVE_AR ? "screen-space" : "world-space");
+            session.Set("environmentBlendMode", immersiveAr ? "alpha-blend" : "opaque");
+            session.Set("interactionMode", immersiveAr ? "screen-space" : "world-space");
             session.Set("visibilityState", "visible");
 
             auto enabledFeatures = Napi::Array::New(info.Env());
@@ -337,6 +338,12 @@ namespace Babylon
                         }
 
                         const auto feature = featureList.Get(index).As<Napi::String>().Utf8Value();
+                        if (!IsXRFeatureDescriptor(feature))
+                        {
+                            // Not a descriptor the WebXR specifications define: nothing to enable.
+                            continue;
+                        }
+
                         bool alreadyEnabled{};
                         for (uint32_t enabledIndex = 0; enabledIndex < enabledFeatureCount; ++enabledIndex)
                         {

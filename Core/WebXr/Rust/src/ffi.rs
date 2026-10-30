@@ -110,4 +110,23 @@ mod tests {
             std::ptr::null_mut()
         ));
     }
+
+    #[test]
+    fn session_mode_values_match_header() {
+        for (name, value) in [("inline", 0u32), ("immersive-vr", 1), ("immersive-ar", 2)] {
+            let mut out = u32::MAX;
+            assert!(babylon_webxr_session_mode_parse(
+                name.as_ptr(),
+                name.len(),
+                &mut out
+            ));
+            assert_eq!(out, value, "{name}");
+        }
+        let unknown = "immersive";
+        assert!(!babylon_webxr_session_mode_parse(
+            unknown.as_ptr(),
+            unknown.len(),
+            std::ptr::null_mut()
+        ));
+    }
 }

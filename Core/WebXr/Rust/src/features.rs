@@ -3,12 +3,14 @@
 //! `optionalFeatures`; both bindings map their public surface to these values so the set of
 //! supported features is the same by construction.
 
-/// `XRSessionMode` (WebXR Device API).
+/// `XRSessionMode` (WebXR Device API). The discriminants are the values of the C ABI
+/// (`babylon_webxr_session_mode_parse` and the `babylon_webxr_session_mode` enum in Core.h).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[repr(u32)]
 pub enum SessionMode {
-    Inline,
-    ImmersiveVr,
-    ImmersiveAr,
+    Inline = 0,
+    ImmersiveVr = 1,
+    ImmersiveAr = 2,
 }
 
 impl SessionMode {
