@@ -79,6 +79,16 @@ Types the WebXR specifications import from other specifications are declared as 
 in `idl/dom-prelude.idl` so the set converts as a closed world. The generated package imports
 `wasi:io/poll@0.2.0`, vendored under `wit/deps` for validation.
 
+## Upstream contributions staged
+
+The generator gaps above are fixed on branches of the `rebeckerspecialties/webidl2wit` fork,
+each as a pull request there with a fixture test in the maintainers' style, ready to send to
+`wasi-gfx/webidl2wit` (bug fixes directly, features after an issue, as its CONTRIBUTING asks):
+unknown parents reported instead of a panic (upstream issue #55), members that refer to skipped
+definitions skipped so the output parses, partial dictionaries merged into their dictionary,
+and `iterable` mapped to `values`/`entries` list accessors. Getters, setters and deleters and
+`partial interface mixin` are still open.
+
 ## Specification coverage targeted first
 
 WebXR Device API, AR module, Layers, WebGPU binding, depth sensing, lighting estimation,
