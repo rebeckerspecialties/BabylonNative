@@ -45,6 +45,20 @@ the Node-API symbols BabylonNative's JsRuntimeHost provides statically, and the 
 `napi_register_module_v1(env, exports)` itself instead of loading a module; it needs the
 `napi7` feature level, which the JsRuntimeHost fork implements.
 
+## The no-DOM profile
+
+Neither deployment target has a document object model: snqr is a bespoke WebAssembly host and
+BabylonNative is a JavaScript runtime with W3C graphics APIs but no browser plumbing. Before
+conversion, `Tools/webxr-idl-gen` applies `dom_profile::Profile::no_dom()` to the parsed IDL:
+DOM, HTML media, Permissions and WebGL definitions are removed, members whose types refer to
+them are removed, and inheritance from `Event`/`EventTarget` is cleared so the WebXR interfaces
+become root resources. `EventHandler` attributes stay, because the converter maps each one to a
+`<name>-subscribe: func() -> pollable`, which is the event model both hosts implement. The pass
+reports every removed definition and member; `Tools/webxr-idl-gen/tests/no_dom_profile.rs`
+pins the surfaces that must disappear (EventTarget, HTMLCanvasElement, WebGL layers and
+bindings, DOM overlays, Permissions) and the ones that must survive (XRSystem, XRSession,
+XRFrame, projection layers, the WebGPU binding, hit test, anchors, depth, lighting, planes).
+
 ## Generator gaps found on the WebXR set (webidl2wit 0.1.1)
 
 Running the converter over the vendored set shows where upstream work is needed; the
