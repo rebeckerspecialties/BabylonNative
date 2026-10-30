@@ -72,8 +72,21 @@
         // Babylon.js 9.29 scene readiness skips the clustered-light proxy shader, so lit
         // materials can all report not-ready on the first frame and draw nothing.
         "wait-for-clustered-lights": "prepare clustered-light proxies before rendering",
+        // Babylon.js material readiness checks area-light LTC data only once AREALIGHTUSED is in
+        // the defines; a cached effect can make the first check pass, so whenReadyAsync resolves
+        // before the LTC download and area-lit surfaces render black.
+        "wait-for-area-light-ltc": "wait for area-light LTC textures before rendering",
         // Example relies on XMLHttpRequest events the native polyfill does not raise.
         "xhr-events": "raise XMLHttpRequest load events, and report URL-open failures as asynchronous error/loadend events",
+        // Example loads an ES module (e.g. the SPZ decoder) through Tools.LoadScript's module path;
+        // the native script host has no ES module loader.
+        "es-module-import": "evaluate default imports of single-export ES modules for Tools.LoadScript module loads",
+        // Example reaches code that uses the browser/worker global `self` (e.g. GUI InputText
+        // focus registers clipboard listeners on self); the native host does not define it.
+        "global-self": "define the global self as window while the test runs",
+        // Example loads Basis textures; the Basis transcoder runs in a Web Worker created from a
+        // Blob URL, and the native host has no Worker.
+        "basis-worker": "run Blob URL worker scripts (the Basis transcoder) in-process while the test runs",
     };
     let appliedWorkarounds = [];
 
@@ -765,6 +778,13 @@
         // A test that leaves the stencil test enabled or a scissor rect set would otherwise
         // corrupt later tests (e.g. the glow-layer test).
         engine.setStencilBuffer(false);
+        engine.setStencilMask(0xFF);
+        engine.setStencilFunction(BABYLON.Constants.ALWAYS);
+        engine.setStencilFunctionReference(1);
+        engine.setStencilFunctionMask(0xFF);
+        engine.setStencilOperationFail(BABYLON.Constants.KEEP);
+        engine.setStencilOperationDepthFail(BABYLON.Constants.KEEP);
+        engine.setStencilOperationPass(BABYLON.Constants.REPLACE);
         engine.disableScissor();
 
         // This is necessary because of https://github.com/BabylonJS/Babylon.js/pull/15217 so that each test starts fresh.
@@ -867,6 +887,9 @@
         }
     }
     const failedTitles = [];
+    // Native cancels framebuffer readbacks once the graphics device is lost. Later tests
+    // cannot render or validate, and some wait forever, so the run stops instead.
+    let readbackCanceled = false;
 
     function getExclusionReason(t) {
         const isNativeWebGPU = !!globalThis.__babylonNativeValidationUseWebGPU ||
@@ -910,6 +933,17 @@
                     " failed=" + failedCount +
                     " missingRef=" + missingRefCount +
                     " skipped=" + skippedCount);
+        if (engine && engine.isWebGPU && navigator.gpu && typeof navigator.gpu._backendStats === "function") {
+            try {
+                const stats = navigator.gpu._backendStats();
+                console.log("Render pass command stream: batches=" + stats.renderPassCommandStreamCount +
+                            " words=" + stats.renderPassCommandStreamWordCount +
+                            " disabled=" + stats.renderPassCommandStreamDisabledCount +
+                            (stats.renderPassCommandStreamDisabledReason ? " reason=" + stats.renderPassCommandStreamDisabledReason : ""));
+            } catch (e) {
+                // Stats are diagnostic-only.
+            }
+        }
         if (failedTitles.length > 0) {
             console.log("Failed tests (" + failedTitles.length + "):");
             for (let n = 0; n < failedTitles.length; n++) {
@@ -2821,6 +2855,12 @@ fragmentOutputs.color=color;
             adaptToDeviceRatio: false
         });
         await webgpuEngine.initAsync();
+        const recorderProvider = globalThis.navigator && navigator.gpu && navigator.gpu.__babylonNativeRenderPassCommandRecorderProvider;
+        if (recorderProvider && "renderPassCommandRecorderProvider" in webgpuEngine) {
+            // Batch compatibility-mode draws into the native command stream (one bridge
+            // crossing per batch instead of one per encoder call).
+            webgpuEngine.renderPassCommandRecorderProvider = recorderProvider;
+        }
         return {
             engine: webgpuEngine,
             canvas: webgpuCanvas

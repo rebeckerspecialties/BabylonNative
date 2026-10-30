@@ -2,7 +2,7 @@
 
 This directory contains the local Babylon.js source patches needed for
 NativeWebGPU and NativeXR portal validation in this BabylonNative branch.
-The stack is maintained against the Babylon.js `9.22.1` release used by this
+The stack is maintained against the Babylon.js `9.33.0` release used by this
 branch.
 
 The patches are source-oriented on purpose. Avoid patching generated UMD files
@@ -11,10 +11,14 @@ hard to review, and hide the real upstreamable changes.
 
 ## Included Patches
 
-- `0002-add-webgpu-render-command-batching.patch`
-  - Adds a backend-neutral render command batcher and WebGPU render-pass
-    lowering path, with fallback replay and focused unit tests for
-    compatibility boundaries.
+- `0002-webgpu-render-command-stream-contract.patch`
+  - BabylonJS/Babylon.js#19076 and #19084 on top of 9.33.0 (which already ships
+    the render-pass command stream of #19075): direct draws stay on the default
+    path when no recorder provider is installed, and the stream retains the
+    objects referenced by pending command words, replays a rejected batch
+    through direct encoder calls, reports the fallback through
+    `provider.onDisabled`, and bounds batches to 1024 draws. Drop this patch
+    once a Babylon.js release contains both PRs.
 
 The native WebXR-WebGPU projection-layer enablement (formerly `0001-enable-webgpu-layers-for-native-xr.patch`) landed upstream in the `[WebGPU-XR]` series (`BabylonJS/Babylon.js#18711`, `#18773`, `#18779`) and is part of 9.22.1, so it is no longer carried here. The KTX compressed-sRGB fix (`BabylonJS/Babylon.js#18538`), SSAO2 world-space
 normal fix (`BabylonJS/Babylon.js#18539`), DOM-free font offset fallback

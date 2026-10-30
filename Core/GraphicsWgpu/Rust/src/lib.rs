@@ -1236,6 +1236,24 @@ pub extern "C" fn babylon_wgpu_native_render_pass_record_commands(
             unsafe { std::slice::from_raw_parts(commands, command_word_count) }
         };
 
+        // The engine-side contract (Babylon.js webgpuRenderPassCommandStream.ts) is
+        // all-or-nothing: on failure nothing of the batch may remain recorded, so the
+        // engine can replay the whole batch through direct encoder calls.
+        let recorded_before = backend.render_pass_command_count(pass_id)?;
+        if let Err(error) = decode_render_pass_command_stream(backend, pass_id, words) {
+            backend.render_pass_truncate_commands(pass_id, recorded_before);
+            return Err(error);
+        }
+        Ok(true)
+    })
+}
+
+fn decode_render_pass_command_stream(
+    backend: &mut upstream_wgpu_native::InteropBackendContext,
+    pass_id: u64,
+    words: &[u32],
+) -> Result<(), String> {
+    {
         let mut cursor = 0usize;
         let read_u32 = |cursor: &mut usize| -> Result<u32, String> {
             let value = *words.get(*cursor).ok_or_else(|| {
@@ -1432,8 +1450,8 @@ pub extern "C" fn babylon_wgpu_native_render_pass_record_commands(
             }
         }
 
-        Ok(true)
-    })
+        Ok(())
+    }
 }
 
 #[no_mangle]
@@ -5179,6 +5197,22 @@ mod upstream_wgpu_native {
                 .ok_or_else(|| format!("GPURenderPassEncoder {pass_id} was not found"))?;
             pass.commands.push(command);
             Ok(())
+        }
+
+        pub fn render_pass_command_count(&self, pass_id: u64) -> Result<usize, String> {
+            self.resources
+                .render_passes
+                .get(&pass_id)
+                .map(|pass| pass.commands.len())
+                .ok_or_else(|| format!("GPURenderPassEncoder {pass_id} was not found"))
+        }
+
+        /// Drops every command recorded after `len`, restoring the pass to the state it had
+        /// before a rejected command-stream batch started applying.
+        pub fn render_pass_truncate_commands(&mut self, pass_id: u64, len: usize) {
+            if let Some(pass) = self.resources.render_passes.get_mut(&pass_id) {
+                pass.commands.truncate(len);
+            }
         }
 
         pub fn render_pass_draw_indirect(
