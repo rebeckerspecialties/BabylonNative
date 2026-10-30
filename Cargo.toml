@@ -1,6 +1,8 @@
 [workspace]
 members = [
     "Core/GraphicsWgpu/Rust",
+    "Core/WebXr/Rust",
+    "Tools/webxr-idl-gen",
 ]
 resolver = "2"
 

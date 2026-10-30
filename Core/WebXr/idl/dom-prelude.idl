@@ -1,0 +1,68 @@
+// Declarations the WebXR specifications import from other Web platform specifications
+// (HTML, DOM, WebGL, Geometry, HR-Time, Gamepad, Permissions). Only what the WebXR
+// IDL set references is declared here. Types whose contents the native core and the
+// guests read (Geometry points, Gamepad state) carry their specified members; the
+// rest are empty shells because their shape is irrelevant to the native core.
+typedef double DOMHighResTimeStamp;
+typedef unsigned long GLenum;
+typedef long GLint;
+typedef long GLsizei;
+typedef unsigned long GLuint;
+typedef unsigned long GLbitfield;
+
+interface DOMException {};
+interface Event {};
+dictionary EventInit {};
+interface EventTarget {};
+interface Element {};
+interface Navigator {};
+// Gamepad (https://w3c.github.io/gamepad/): the WebXR Gamepads Module reads these
+// members through XRInputSource.gamepad. The specification types the arrays as
+// FrozenArray; sequence converts to the same WIT list.
+interface GamepadButton {
+  readonly attribute boolean pressed;
+  readonly attribute boolean touched;
+  readonly attribute double value;
+};
+enum GamepadMappingType { "", "standard", "xr-standard" };
+interface Gamepad {
+  readonly attribute DOMString id;
+  readonly attribute long index;
+  readonly attribute boolean connected;
+  readonly attribute DOMHighResTimeStamp timestamp;
+  readonly attribute GamepadMappingType mapping;
+  readonly attribute sequence<double> axes;
+  readonly attribute sequence<GamepadButton> buttons;
+};
+// Geometry Interfaces (https://drafts.fxtf.org/geometry/): XRRigidTransform exposes
+// its position and orientation as DOMPointReadOnly and takes DOMPointInit values.
+interface DOMPointReadOnly {
+  readonly attribute unrestricted double x;
+  readonly attribute unrestricted double y;
+  readonly attribute unrestricted double z;
+  readonly attribute unrestricted double w;
+};
+dictionary DOMPointInit {
+  unrestricted double x = 0;
+  unrestricted double y = 0;
+  unrestricted double z = 0;
+  unrestricted double w = 1;
+};
+interface WebGLRenderingContext {};
+interface WebGL2RenderingContext {};
+interface WebGLTexture {};
+interface WebGLFramebuffer {};
+interface mixin GlobalEventHandlers {};
+// Permissions, HTML and WebCodecs types referenced by the WebXR and WebGPU IDL.
+dictionary PermissionDescriptor {};
+interface PermissionStatus {};
+interface WorkerNavigator {};
+enum PredefinedColorSpace { "srgb", "display-p3" };
+typedef (ArrayBuffer or ArrayBufferView) AllowSharedBufferSource;
+interface HTMLCanvasElement {};
+interface HTMLImageElement {};
+interface HTMLVideoElement {};
+interface ImageBitmap {};
+interface ImageData {};
+interface OffscreenCanvas {};
+interface VideoFrame {};

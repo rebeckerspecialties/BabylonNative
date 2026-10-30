@@ -59,18 +59,18 @@ namespace Babylon
 
         Napi::Value IsSessionSupported(const Napi::CallbackInfo& info)
         {
-            std::string sessionTypeString = info[0].As<Napi::String>().Utf8Value();
+            const auto sessionMode = ParseXRSessionMode(info[0].As<Napi::String>().Utf8Value());
             xr::SessionType sessionType{ xr::SessionType::INVALID };
 
-            if (sessionTypeString == XRSessionType::IMMERSIVE_VR)
+            if (sessionMode == XRSessionMode::ImmersiveVr)
             {
                 sessionType = xr::SessionType::IMMERSIVE_VR;
             }
-            else if (sessionTypeString == XRSessionType::IMMERSIVE_AR)
+            else if (sessionMode == XRSessionMode::ImmersiveAr)
             {
                 sessionType = xr::SessionType::IMMERSIVE_AR;
             }
-            else if (sessionTypeString == XRSessionType::INLINE)
+            else if (sessionMode == XRSessionMode::Inline)
             {
                 sessionType = xr::SessionType::INLINE;
             }
