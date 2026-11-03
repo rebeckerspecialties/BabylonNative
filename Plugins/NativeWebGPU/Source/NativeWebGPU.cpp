@@ -70,6 +70,9 @@ namespace Babylon::Plugins::NativeWebGPU
     let enabled = true;
     const provider = {
         protocolVersion: protocolVersion,
+        // The decoder records each batch all-or-nothing: a rejected batch has recorded
+        // nothing, so the engine may replay it through direct encoder calls.
+        recordsAtomically: true,
         isEnabled: function () {
             return enabled;
         },
