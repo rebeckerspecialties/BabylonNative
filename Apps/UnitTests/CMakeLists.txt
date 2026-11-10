@@ -107,7 +107,6 @@ if(TARGET NativeEngine)
         "Source/Tests.NativeEngine.Teardown.cpp"
         "Source/Tests.NativeEngine.TransformFeedback.cpp"
         "Source/Tests.NativeEngine.TextureFormats.cpp"
-        "Source/Tests.NativeOptimizations.cpp"
         "Source/Tests.NativeEngine.VertexArray.cpp"
         "Source/Tests.ShaderCache.cpp"
         "Source/Tests.ShaderCache.TransformFeedback.cpp"
@@ -230,6 +229,7 @@ if(BABYLON_NATIVE_PLUGIN_NATIVEMESHOPT)
 endif()
 
 if(BABYLON_NATIVE_PLUGIN_NATIVEOPTIMIZATIONS)
+    target_sources(UnitTests PRIVATE "Source/Tests.NativeOptimizations.cpp")
     target_link_libraries(UnitTests PRIVATE NativeOptimizations)
     target_compile_definitions(UnitTests PRIVATE HAS_NATIVE_OPTIMIZATIONS)
 endif()

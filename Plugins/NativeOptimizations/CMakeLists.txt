@@ -1,3 +1,12 @@
+if(NOT TARGET bx)
+    # WebGPU-only builds still need bx's reviewed radix sort, but not bgfx or bimg.
+    FetchContent_MakeAvailable_With_Message(bx)
+    FetchContent_GetProperties(bx SOURCE_DIR BX_DIR)
+    set(BGFX_INSTALL OFF)
+    include("${CMAKE_CURRENT_LIST_DIR}/../../Dependencies/bgfx.cmake/cmake/bx/bx.cmake")
+    set_target_properties(bx PROPERTIES POSITION_INDEPENDENT_CODE ON FOLDER "Dependencies/bx")
+endif()
+
 set(SOURCES
     "Include/Babylon/Plugins/NativeOptimizations.h"
     "Source/NativeOptimizations.cpp")
@@ -13,6 +22,7 @@ target_include_directories(NativeOptimizations PUBLIC "Include")
 
 target_link_libraries(NativeOptimizations
     PUBLIC napi
+    PRIVATE bx
     PRIVATE JsRuntimeInternal)
 
 set_property(TARGET NativeOptimizations PROPERTY FOLDER Plugins)
