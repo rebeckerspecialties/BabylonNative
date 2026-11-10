@@ -354,6 +354,101 @@ namespace Babylon::Plugins::NativeWebGPU
             objectConstructor.Get("setPrototypeOf").As<Napi::Function>().Call(objectConstructor, {object, prototype});
         }
 
+        // Version of the render-pass command stream decoded by
+        // babylon_wgpu_native_render_pass_record_commands (Core/GraphicsWgpu/Rust/src/lib.rs).
+        // Babylon.js disables the stream when this differs from its
+        // WebGPURenderPassCommandStreamProtocolVersion, so bump both together.
+        constexpr uint32_t RENDER_PASS_COMMAND_STREAM_PROTOCOL_VERSION = 1;
+
+        // Babylon.js only batches render-pass commands into GPURenderPassEncoder._recordCommands
+        // when the host installs an IWebGPURenderPassCommandRecorderProvider on the engine
+        // (WebGPUEngine.renderPassCommandRecorderProvider). Expose the provider for this backend as
+        // navigator.gpu._renderPassCommandRecorderProvider and install it on every WebGPUEngine by
+        // default, so hosts do not have to opt in per engine:
+        //   - engines loaded through the BABYLON UMD global are covered automatically, as long as
+        //     this plugin is initialized before the Babylon.js bundle is evaluated;
+        //   - module-bundled apps (no BABYLON global) assign the provider themselves, or call
+        //     navigator.gpu._installRenderPassCommandRecorderProvider(WebGPUEngine).
+        // An application turns recording off for an engine by setting its
+        // renderPassCommandRecorderProvider back to null (e.g. for A/B measurements).
+        // Babylon.js builds without the provider property are left untouched.
+        void InstallRenderPassCommandRecorderProvider(Napi::Env env, Napi::Object gpu)
+        {
+            const auto install = Napi::Eval(env, R"JS(
+                ((gpu, protocolVersion, handleIdName) => {
+                    const provider = Object.freeze({
+                        protocolVersion,
+                        isEnabled: () => true,
+                        getResourceId: (resource) => {
+                            const id = resource ? resource[handleIdName] : 0;
+                            return typeof id === "number" ? id : 0;
+                        },
+                        getLastError: () => {
+                            const error = gpu._backendStats().lastError;
+                            return error ? String(error) : undefined;
+                        },
+                    });
+                    const patched = new WeakSet();
+                    const installOnEngineClass = (engineClass) => {
+                        const prototype = engineClass && engineClass.prototype;
+                        if (!prototype || typeof prototype.initAsync !== "function" || patched.has(prototype)) {
+                            return false;
+                        }
+                        // Only Babylon.js builds that carry the command-stream lowering have the accessor.
+                        if (!("renderPassCommandRecorderProvider" in prototype)) {
+                            return false;
+                        }
+                        patched.add(prototype);
+                        const initAsync = prototype.initAsync;
+                        prototype.initAsync = function (...args) {
+                            return initAsync.apply(this, args).then((result) => {
+                                // Leave a provider the application installed itself in place.
+                                if (!this.renderPassCommandRecorderProvider) {
+                                    this.renderPassCommandRecorderProvider = provider;
+                                }
+                                return result;
+                            });
+                        };
+                        return true;
+                    };
+                    Object.defineProperty(gpu, "_renderPassCommandRecorderProvider", { value: provider, configurable: true });
+                    Object.defineProperty(gpu, "_installRenderPassCommandRecorderProvider", { value: installOnEngineClass, configurable: true });
+
+                    // The UMD bundle assigns an empty globalThis.BABYLON namespace and then fills it
+                    // with plain assignments (BABYLON.WebGPUEngine = ...). Observe both assignments,
+                    // turning each accessor back into an ordinary data property as it fires, so
+                    // nothing remains visible once Babylon.js has loaded. A bundle that exports
+                    // differently just replaces the accessor and is left without a provider.
+                    const observeAssignment = (target, name, onValue) => {
+                        const existing = Object.getOwnPropertyDescriptor(target, name);
+                        if (existing && existing.value) {
+                            return onValue(existing.value);
+                        }
+                        if (existing && !existing.configurable) {
+                            return;
+                        }
+                        Object.defineProperty(target, name, {
+                            configurable: true,
+                            enumerable: true,
+                            get: () => undefined,
+                            set: (value) => {
+                                Object.defineProperty(target, name, { value, writable: true, enumerable: true, configurable: true });
+                                if (value) {
+                                    onValue(value);
+                                }
+                            },
+                        });
+                    };
+                    observeAssignment(globalThis, "BABYLON", (babylon) => {
+                        if (typeof babylon === "object" || typeof babylon === "function") {
+                            observeAssignment(babylon, "WebGPUEngine", installOnEngineClass);
+                        }
+                    });
+                })
+            )JS", "native-webgpu-render-pass-command-recorder-provider.js").As<Napi::Function>();
+            install.Call({gpu, Napi::Number::New(env, RENDER_PASS_COMMAND_STREAM_PROTOCOL_VERSION), Napi::String::New(env, JS_NATIVE_HANDLE_ID_NAME)});
+        }
+
         void InstallGpuInterfaces(Napi::Env env)
         {
             Napi::Eval(env, R"JS(
@@ -4045,6 +4140,8 @@ namespace Babylon::Plugins::NativeWebGPU
             gpu.Set("_backendStats", backendStats);
             // Back-compat alias kept for existing tests/scripts.
             gpu.Set("_debugStats", backendStats);
+
+            InstallRenderPassCommandRecorderProvider(env, gpu);
 
             if (developerFeaturesEnabled)
             {
