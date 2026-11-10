@@ -8,6 +8,7 @@
 #include <glslang/Public/ShaderLang.h>
 #include <map>
 #include <string>
+#include <unordered_set>
 
 namespace Babylon::ShaderCompilerCommon
 {
@@ -27,7 +28,8 @@ namespace Babylon::ShaderCompilerCommon
     TransformFeedbackShader GenerateTransformFeedbackShader(std::string_view vertexSource, const std::vector<std::string>& varyings);
 
     // Returns compiled uniform names mapped to the names supplied by the application.
-    std::map<std::string, std::string> RenameShaderUniforms(std::string& source, std::string* pairedSource = nullptr);
+    // Uniforms named in reservedNames (e.g. target language keywords) are renamed as well.
+    std::map<std::string, std::string> RenameShaderUniforms(std::string& source, std::string* pairedSource = nullptr, const std::unordered_set<std::string>* reservedNames = nullptr);
 
     std::string ProcessShaderCoordinates(std::string_view source);
 
@@ -124,12 +126,15 @@ namespace Babylon::ShaderCompilerCommon
     Graphics::BgfxShaderInfo CreateBgfxShader(ShaderInfo vertexShaderInfo, ShaderInfo fragmentShaderInfo, std::map<std::string, uint32_t> builtInInstanceDataSlots);
 
     // Explicit sampler resource set + appender (used by Vulkan for separate_images + v12 binding model).
+    // compactVertexInputLocations rewrites vertex input locations to the dense layout bgfx's Vulkan
+    // backend binds (attribute table index, then instance-data slots).
     Graphics::BgfxShaderInfo CreateBgfxShader(
         ShaderInfo vertexShaderInfo,
         ShaderInfo fragmentShaderInfo,
         std::map<std::string, uint32_t> builtInInstanceDataSlots,
         SamplerResourceSet samplerResources,
-        AppendSamplersFn appendSamplers);
+        AppendSamplersFn appendSamplers,
+        bool compactVertexInputLocations = false);
 
     /// Assembles a bgfx CSH (compute) shader binary from a compiled compute shader. The binary
     /// layout mirrors the per-shader block of CreateBgfxShader (fourcc 'CSH' + hashes + uniform

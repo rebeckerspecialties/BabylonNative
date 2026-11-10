@@ -108,6 +108,17 @@ TEST(NativeOptimizations, SplatSortingAcceptsTypedAndNumberArrayMatrices)
                                         ", rightHanded=" + rightHanded + ", index=" + index);
                                 }
                             }
+                            // Babylon.js pads the index buffer to a multiple of 16; padding must
+                            // point one past the last splat rather than read past the positions.
+                            const padded = new Float32Array(16).fill(-1);
+                            _native.sortSplats(modelView, positions, padded, rightHanded);
+                            for (let index = 0; index < padded.length; ++index) {
+                                const want = index < expected.length ? expected[index] : expected.length;
+                                if (padded[index] !== want) {
+                                    throw new Error("Unexpected padded splat index for typed=" + typed +
+                                        ", rightHanded=" + rightHanded + ", index=" + index + ": " + padded[index]);
+                                }
+                            }
                             const single = new Float32Array([99]);
                             _native.sortSplats(modelView, positions.subarray(0, 4), single, rightHanded);
                             if (single[0] !== 0) {
@@ -141,6 +152,47 @@ TEST(NativeOptimizations, SplatSortingAcceptsTypedAndNumberArrayMatrices)
                             matrix[component] = value;
                             expectMatrixError(matrix, "sortSplats requires modelView._m[2], [6], [10] to be numbers.");
                         }
+                    }
+                    // The sort is stable (equal depths keep their index order) and orders depths on
+                    // both sides of zero: depth = 10000 +/- 3z gives [-5000, 10003 x3, 25000].
+                    {
+                        const stablePositions = new Float32Array([
+                            0, 0,     1, 1,
+                            0, 0,     1, 1,
+                            0, 0, -5000, 1,
+                            0, 0,     1, 1,
+                            0, 0,  5000, 1
+                        ]);
+                        const matrix = new Float32Array(16);
+                        matrix[10] = 3;
+                        for (const rightHanded of [false, true]) {
+                            const indices = new Float32Array(5);
+                            _native.sortSplats({ _m: matrix }, stablePositions, indices, rightHanded);
+                            const expected = rightHanded ? [2, 0, 1, 3, 4] : [4, 0, 1, 3, 2];
+                            for (let index = 0; index < indices.length; ++index) {
+                                if (indices[index] !== expected[index]) {
+                                    throw new Error("Unstable or misordered splat sort for rightHanded=" + rightHanded +
+                                        ": " + Array.from(indices).join(","));
+                                }
+                            }
+                        }
+                    }
+                    function expectBufferError(positionsArgument, indicesArgument) {
+                        const message = "sortSplats requires positions and indices to be Float32Arrays.";
+                        let error;
+                        try {
+                            _native.sortSplats({ _m: new Float32Array(16) }, positionsArgument, indicesArgument, false);
+                        } catch (caught) {
+                            error = caught;
+                        }
+                        if (!(error instanceof Error) ||
+                            (error.message !== message && error.message !== "Exception in HostFunction: " + message)) {
+                            throw new Error("Invalid buffers must report: " + message + "; received: " + String(error));
+                        }
+                    }
+                    for (const invalid of [undefined, null, {}, [0, 0, 0, 1], new Float64Array(4), new Uint32Array(4)]) {
+                        expectBufferError(invalid, new Float32Array(1));
+                        expectBufferError(new Float32Array(4), invalid);
                     }
                 })();
             )", "native-splat-matrix-storage.js");
