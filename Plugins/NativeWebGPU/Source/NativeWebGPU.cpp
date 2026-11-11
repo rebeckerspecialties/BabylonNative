@@ -1803,7 +1803,9 @@ namespace Babylon::Plugins::NativeWebGPU
             bool detachSucceeded = true;
             std::vector<BabylonWgpuMappedRangeWrite> writes;
             std::vector<Napi::ArrayBuffer> transferredRanges;
+            std::vector<std::vector<uint8_t>> copiedRanges;
             transferredRanges.reserve(state.MappedRanges.size());
+            copiedRanges.reserve(state.MappedRanges.size());
             if (writeBack && state.MappedForWrite)
             {
                 writes.reserve(state.MappedRanges.size());
@@ -1817,20 +1819,43 @@ namespace Babylon::Plugins::NativeWebGPU
                 }
 
                 auto arrayBuffer = range.ArrayBuffer.Value();
-                auto transferred = TransferMappedArrayBuffer(env, arrayBuffer, operationName);
-                if (transferred.IsEmpty())
+                const auto transferValue = arrayBuffer.Get("transfer");
+                if (!transferValue.IsFunction())
                 {
-                    detachSucceeded = false;
+                    // Older JavaScriptCore builds do not expose the ES2024
+                    // ArrayBuffer transfer/detach operation. Preserve mapped
+                    // writes by copying before releasing our reference. The
+                    // original JS ArrayBuffer remains attached, which is a
+                    // known conformance gap for the WebWorker/runtime work.
+                    if (writeBack && state.MappedForWrite)
+                    {
+                        const auto copySize = std::min(range.Size, arrayBuffer.ByteLength());
+                        copiedRanges.emplace_back(copySize);
+                        std::memcpy(copiedRanges.back().data(), arrayBuffer.Data(), copySize);
+                        writes.push_back(BabylonWgpuMappedRangeWrite{
+                            static_cast<uint64_t>(range.Offset),
+                            copiedRanges.back().data(),
+                            copySize,
+                        });
+                    }
                 }
-                else if (writeBack && state.MappedForWrite)
+                else
                 {
-                    transferredRanges.push_back(transferred);
-                    auto& writeData = transferredRanges.back();
-                    writes.push_back(BabylonWgpuMappedRangeWrite{
-                        static_cast<uint64_t>(range.Offset),
-                        static_cast<const uint8_t*>(writeData.Data()),
-                        std::min(range.Size, writeData.ByteLength()),
-                    });
+                    auto transferred = TransferMappedArrayBuffer(env, arrayBuffer, operationName);
+                    if (transferred.IsEmpty())
+                    {
+                        detachSucceeded = false;
+                    }
+                    else if (writeBack && state.MappedForWrite)
+                    {
+                        transferredRanges.push_back(transferred);
+                        auto& writeData = transferredRanges.back();
+                        writes.push_back(BabylonWgpuMappedRangeWrite{
+                            static_cast<uint64_t>(range.Offset),
+                            static_cast<const uint8_t*>(writeData.Data()),
+                            std::min(range.Size, writeData.ByteLength()),
+                        });
+                    }
                 }
 
                 range.ArrayBuffer.Reset();
