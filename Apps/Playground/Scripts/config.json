@@ -628,10 +628,10 @@
             "workarounds": [
                 "es-module-import"
             ],
-            "excludedJavaScriptEngines": [
-                "JavaScriptCore"
+            "excludedPlatforms": [
+                "Unix"
             ],
-            "reason": "Linux JavaScriptCore: the SPZ decoder module never finishes loading, so createScene times out after 600s (passes on V8)."
+            "reason": "Linux JavaScriptCore: async WebAssembly.instantiate never settles (the JS thread does not pump the run loop JSC uses to complete it), so the SPZ decoder WebAssembly module never loads and createScene times out. Passes on V8 and Apple JavaScriptCore."
         },
         {
             "title": "Gaussian Splatting Projected Size",
@@ -640,10 +640,10 @@
             "workarounds": [
                 "es-module-import"
             ],
-            "excludedJavaScriptEngines": [
-                "JavaScriptCore"
+            "excludedPlatforms": [
+                "Unix"
             ],
-            "reason": "Linux JavaScriptCore: the SPZ loader fails with \"Loading a script as an ES module is not supported in Babylon Native\" (passes on V8)."
+            "reason": "Linux JavaScriptCore: async WebAssembly.instantiate never settles (the JS thread does not pump the run loop JSC uses to complete it), so the SPZ decoder WebAssembly module never loads and createScene times out. Passes on V8 and Apple JavaScriptCore."
         },
         {
             "title": "Gaussian Splatting Overdraw",
@@ -652,10 +652,10 @@
             "workarounds": [
                 "es-module-import"
             ],
-            "excludedJavaScriptEngines": [
-                "JavaScriptCore"
+            "excludedPlatforms": [
+                "Unix"
             ],
-            "reason": "Linux JavaScriptCore: the SPZ loader fails with \"Loading a script as an ES module is not supported in Babylon Native\" (passes on V8)."
+            "reason": "Linux JavaScriptCore: async WebAssembly.instantiate never settles (the JS thread does not pump the run loop JSC uses to complete it), so the SPZ decoder WebAssembly module never loads and createScene times out. Passes on V8 and Apple JavaScriptCore."
         },
         {
             "title": "Gaussian Splatting SPZ SH No WASM",
@@ -671,10 +671,10 @@
             "workarounds": [
                 "es-module-import"
             ],
-            "excludedJavaScriptEngines": [
-                "JavaScriptCore"
+            "excludedPlatforms": [
+                "Unix"
             ],
-            "reason": "Linux JavaScriptCore: the SPZ decoder module never finishes loading, so createScene times out (passes on V8)."
+            "reason": "Linux JavaScriptCore: async WebAssembly.instantiate never settles (the JS thread does not pump the run loop JSC uses to complete it), so the SPZ decoder WebAssembly module never loads and createScene times out. Passes on V8 and Apple JavaScriptCore."
         },
         {
             "title": "Gaussian Splatting SPZ V4 Extensions",
@@ -683,10 +683,10 @@
             "workarounds": [
                 "es-module-import"
             ],
-            "excludedJavaScriptEngines": [
-                "JavaScriptCore"
+            "excludedPlatforms": [
+                "Unix"
             ],
-            "reason": "Linux JavaScriptCore: the SPZ decoder module never finishes loading, so createScene times out (passes on V8)."
+            "reason": "Linux JavaScriptCore: async WebAssembly.instantiate never settles (the JS thread does not pump the run loop JSC uses to complete it), so the SPZ decoder WebAssembly module never loads and createScene times out. Passes on V8 and Apple JavaScriptCore."
         },
         {
             "title": "Gaussian Splatting glTF SPZ Compression",
@@ -712,10 +712,10 @@
             "workarounds": [
                 "es-module-import"
             ],
-            "excludedJavaScriptEngines": [
-                "JavaScriptCore"
+            "excludedPlatforms": [
+                "Unix"
             ],
-            "reason": "Linux JavaScriptCore: the SPZ decoder module never finishes loading, so createScene times out (passes on V8)."
+            "reason": "Linux JavaScriptCore: async WebAssembly.instantiate never settles (the JS thread does not pump the run loop JSC uses to complete it), so the SPZ decoder WebAssembly module never loads and createScene times out. Passes on V8 and Apple JavaScriptCore."
         },
         {
             "title": "Gaussian Splatting SPZ SH Order 4 No WASM",
@@ -731,10 +731,10 @@
             "workarounds": [
                 "es-module-import"
             ],
-            "excludedJavaScriptEngines": [
-                "JavaScriptCore"
+            "excludedPlatforms": [
+                "Unix"
             ],
-            "reason": "Linux JavaScriptCore: the SPZ decoder module never finishes loading, so createScene times out (passes on V8)."
+            "reason": "Linux JavaScriptCore: async WebAssembly.instantiate never settles (the JS thread does not pump the run loop JSC uses to complete it), so the SPZ decoder WebAssembly module never loads and createScene times out. Passes on V8 and Apple JavaScriptCore."
         },
         {
             "title": "Gaussian Splatting SPZ Detailed Splat No WASM",
@@ -772,10 +772,10 @@
             "workarounds": [
                 "es-module-import"
             ],
-            "excludedJavaScriptEngines": [
-                "JavaScriptCore"
+            "excludedPlatforms": [
+                "Unix"
             ],
-            "reason": "Linux JavaScriptCore: the SPZ decoder module never finishes loading, so createScene times out (passes on V8)."
+            "reason": "Linux JavaScriptCore: async WebAssembly.instantiate never settles (the JS thread does not pump the run loop JSC uses to complete it), so the SPZ decoder WebAssembly module never loads and createScene times out. Passes on V8 and Apple JavaScriptCore."
         },
         {
             "title": "Gaussian Splatting Debug Opacity Saturate",
@@ -784,10 +784,10 @@
             "workarounds": [
                 "es-module-import"
             ],
-            "excludedJavaScriptEngines": [
-                "JavaScriptCore"
+            "excludedPlatforms": [
+                "Unix"
             ],
-            "reason": "Linux JavaScriptCore: the SPZ decoder module never finishes loading, so createScene times out (passes on V8)."
+            "reason": "Linux JavaScriptCore: async WebAssembly.instantiate never settles (the JS thread does not pump the run loop JSC uses to complete it), so the SPZ decoder WebAssembly module never loads and createScene times out. Passes on V8 and Apple JavaScriptCore."
         },
         {
             "title": "Gaussian Splatting Debug Size Culling",
@@ -796,10 +796,10 @@
             "workarounds": [
                 "es-module-import"
             ],
-            "excludedJavaScriptEngines": [
-                "JavaScriptCore"
+            "excludedPlatforms": [
+                "Unix"
             ],
-            "reason": "Linux JavaScriptCore: the SPZ decoder module never finishes loading, so createScene times out (passes on V8)."
+            "reason": "Linux JavaScriptCore: async WebAssembly.instantiate never settles (the JS thread does not pump the run loop JSC uses to complete it), so the SPZ decoder WebAssembly module never loads and createScene times out. Passes on V8 and Apple JavaScriptCore."
         },
         {
             "title": "Gaussian Splatting Debug Opacity Culling",
@@ -808,10 +808,10 @@
             "workarounds": [
                 "es-module-import"
             ],
-            "excludedJavaScriptEngines": [
-                "JavaScriptCore"
+            "excludedPlatforms": [
+                "Unix"
             ],
-            "reason": "Linux JavaScriptCore: the SPZ decoder module never finishes loading, so createScene times out (passes on V8)."
+            "reason": "Linux JavaScriptCore: async WebAssembly.instantiate never settles (the JS thread does not pump the run loop JSC uses to complete it), so the SPZ decoder WebAssembly module never loads and createScene times out. Passes on V8 and Apple JavaScriptCore."
         },
         {
             "title": "Gaussian Splatting Debug Clipping Box",
@@ -820,10 +820,10 @@
             "workarounds": [
                 "es-module-import"
             ],
-            "excludedJavaScriptEngines": [
-                "JavaScriptCore"
+            "excludedPlatforms": [
+                "Unix"
             ],
-            "reason": "Linux JavaScriptCore: the SPZ decoder module never finishes loading, so createScene times out (passes on V8)."
+            "reason": "Linux JavaScriptCore: async WebAssembly.instantiate never settles (the JS thread does not pump the run loop JSC uses to complete it), so the SPZ decoder WebAssembly module never loads and createScene times out. Passes on V8 and Apple JavaScriptCore."
         },
         {
             "title": "Gaussian Splatting Debug Diffuse Only",
@@ -832,10 +832,10 @@
             "workarounds": [
                 "es-module-import"
             ],
-            "excludedJavaScriptEngines": [
-                "JavaScriptCore"
+            "excludedPlatforms": [
+                "Unix"
             ],
-            "reason": "Linux JavaScriptCore: the SPZ decoder module never finishes loading, so createScene times out (passes on V8)."
+            "reason": "Linux JavaScriptCore: async WebAssembly.instantiate never settles (the JS thread does not pump the run loop JSC uses to complete it), so the SPZ decoder WebAssembly module never loads and createScene times out. Passes on V8 and Apple JavaScriptCore."
         },
         {
             "title": "Gaussian Splatting Debug SH4 Only",
@@ -844,10 +844,10 @@
             "workarounds": [
                 "es-module-import"
             ],
-            "excludedJavaScriptEngines": [
-                "JavaScriptCore"
+            "excludedPlatforms": [
+                "Unix"
             ],
-            "reason": "Linux JavaScriptCore: the SPZ decoder module never finishes loading, so createScene times out (passes on V8)."
+            "reason": "Linux JavaScriptCore: async WebAssembly.instantiate never settles (the JS thread does not pump the run loop JSC uses to complete it), so the SPZ decoder WebAssembly module never loads and createScene times out. Passes on V8 and Apple JavaScriptCore."
         },
         {
             "title": "Gaussian Splatting Compound Incremental Update",
@@ -956,10 +956,10 @@
             "workarounds": [
                 "es-module-import"
             ],
-            "excludedJavaScriptEngines": [
-                "JavaScriptCore"
+            "excludedPlatforms": [
+                "Unix"
             ],
-            "reason": "Linux JavaScriptCore: the SPZ decoder module never finishes loading, so createScene times out after 600s (passes on V8)."
+            "reason": "Linux JavaScriptCore: async WebAssembly.instantiate never settles (the JS thread does not pump the run loop JSC uses to complete it), so the SPZ decoder WebAssembly module never loads and createScene times out. Passes on V8 and Apple JavaScriptCore."
         },
         {
             "title": "SOGS with SH",
@@ -1324,10 +1324,10 @@
         {
             "title": "CSGVertColor",
             "playgroundId": "#R0H1IX#4",
-            "excludedJavaScriptEngines": [
-                "JavaScriptCore"
+            "excludedPlatforms": [
+                "Unix"
             ],
-            "reason": "Linux JavaScriptCore/OpenGL CI: createScene does not resolve within 600s",
+            "reason": "Linux JavaScriptCore: async WebAssembly.instantiate never settles (the JS thread does not pump the run loop JSC uses to complete it), so the Manifold (CSG2) WebAssembly module never loads and createScene times out. Passes on V8 and Apple JavaScriptCore.",
             "referenceImage": "csgVertColor.png",
             "workarounds": [
                 "es-module-import"
@@ -1521,10 +1521,10 @@
         {
             "title": "CSG",
             "playgroundId": "#R0H1IX#8",
-            "excludedJavaScriptEngines": [
-                "JavaScriptCore"
+            "excludedPlatforms": [
+                "Unix"
             ],
-            "reason": "Linux JavaScriptCore/OpenGL CI: createScene does not resolve within 600s",
+            "reason": "Linux JavaScriptCore: async WebAssembly.instantiate never settles (the JS thread does not pump the run loop JSC uses to complete it), so the Manifold (CSG2) WebAssembly module never loads and createScene times out. Passes on V8 and Apple JavaScriptCore.",
             "referenceImage": "csg.png",
             "workarounds": [
                 "es-module-import"
@@ -3672,10 +3672,10 @@
             "workarounds": [
                 "es-module-import"
             ],
-            "excludedJavaScriptEngines": [
-                "JavaScriptCore"
+            "excludedPlatforms": [
+                "Unix"
             ],
-            "reason": "Linux JavaScriptCore: the SPZ decoder module never finishes loading, so createScene times out (passes on V8)."
+            "reason": "Linux JavaScriptCore: async WebAssembly.instantiate never settles (the JS thread does not pump the run loop JSC uses to complete it), so the SPZ decoder WebAssembly module never loads and createScene times out. Passes on V8 and Apple JavaScriptCore."
         },
         {
             "title": "FrameGraph selection outline",

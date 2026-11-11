@@ -914,6 +914,9 @@
         if (t.excludedGraphicsApis && t.excludedGraphicsApis.includes(validationApi)) {
             return "excludedGraphicsApis: " + validationApi;
         }
+        if (t.excludedPlatforms && t.excludedPlatforms.includes(TestUtils.getPlatformName())) {
+            return "excludedPlatforms: " + TestUtils.getPlatformName();
+        }
         return null;
     }
 
