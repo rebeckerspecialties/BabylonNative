@@ -3810,7 +3810,7 @@ fragmentOutputs.color=color;
     xhr.open("GET", globalThis.__babylonNativeValidationConfigUrl || "app:///Scripts/config.json", true);
 
     xhr.addEventListener("readystatechange", function () {
-        if (xhr.status === 200) {
+        if (xhr.readyState === 4 && xhr.status === 200) {
             config = JSON.parse(xhr.responseText);
             const workaroundErrors = validateWorkarounds(config.tests);
             if (workaroundErrors.length > 0) {

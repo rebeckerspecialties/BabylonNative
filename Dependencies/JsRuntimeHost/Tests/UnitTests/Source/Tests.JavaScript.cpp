@@ -19,6 +19,7 @@
 #include <Babylon/Polyfills/Worker.h>
 #endif
 #include <filesystem>
+#include <UrlLib/TestSupport/LoopbackHttpServer.h>
 #include <cstdint>
 #include <future>
 #include <iostream>
@@ -47,6 +48,14 @@ TEST(JavaScript, All)
     // Change this to true to wait for the JavaScript debugger to attach (only applies to V8)
     constexpr const bool waitForDebugger = false;
 
+    // The XMLHttpRequest and fetch tests request their resources from this server instead of a
+    // public host. It is declared first so that it outlives the runtime.
+    UrlLib::TestSupport::LoopbackHttpServer httpServer{};
+    ASSERT_TRUE(httpServer.Valid());
+    const std::string loopbackHttpOrigin{httpServer.Origin()};
+    const std::string loopbackClosedPortOrigin{UrlLib::TestSupport::LoopbackHttpServer::ClosedPortOrigin()};
+    ASSERT_FALSE(loopbackClosedPortOrigin.empty());
+
     std::promise<int32_t> exitCodePromise;
 
     Babylon::AppRuntime::Options options{};
@@ -66,7 +75,7 @@ TEST(JavaScript, All)
 
     Babylon::AppRuntime runtime{options};
 
-    runtime.Dispatch([&exitCodePromise](Napi::Env env) mutable {
+    runtime.Dispatch([&exitCodePromise, loopbackHttpOrigin, loopbackClosedPortOrigin](Napi::Env env) mutable {
         Babylon::Polyfills::Console::Initialize(env, [env](const char* message, Babylon::Polyfills::Console::LogLevel logLevel) {
             std::cout << "[" << EnumToString(logLevel) << "] " << message;
             if (logLevel == Babylon::Polyfills::Console::LogLevel::Error)
@@ -116,6 +125,8 @@ TEST(JavaScript, All)
 
         env.Global().Set("hostPlatform", Napi::Value::From(env, JSRUNTIMEHOST_PLATFORM));
         env.Global().Set("hostEngine", Napi::Value::From(env, NAPI_JAVASCRIPT_ENGINE));
+        env.Global().Set("loopbackHttpOrigin", Napi::Value::From(env, loopbackHttpOrigin));
+        env.Global().Set("loopbackClosedPortOrigin", Napi::Value::From(env, loopbackClosedPortOrigin));
 
         auto getPropertyNamesCallback = Napi::Function::New(
             env, [](const Napi::CallbackInfo& info) -> Napi::Value {

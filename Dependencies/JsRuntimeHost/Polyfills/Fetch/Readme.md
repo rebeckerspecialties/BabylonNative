@@ -29,6 +29,10 @@ The focused conformance tests are adapted from WPT `fetch/api/headers` and
 `fetch/api/response`, plus WebKit, Firefox, and Chromium response-body
 regressions.
 
+The native transport reports the final response URL after redirects and its
+redirect flag. Header iteration combines repeated values and sorts lower-case
+names. HTTP/2 and HTTP/3 responses have an empty statusText.
+
 ## Local files
 Like `XMLHttpRequest`, `fetch()` supports loading local resources:
 * `file:///` loads from an absolute path

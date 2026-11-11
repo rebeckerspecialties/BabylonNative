@@ -108,6 +108,7 @@ target_link_libraries(${_jsruntimehost_unit_tests_target}
     PRIVATE ScriptLoader
     PRIVATE URL
     PRIVATE UrlLib
+    PRIVATE UrlLibTestSupport
     PRIVATE XMLHttpRequest
     PRIVATE Fetch
     PRIVATE WebSocket

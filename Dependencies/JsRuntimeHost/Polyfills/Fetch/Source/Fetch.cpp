@@ -625,7 +625,7 @@ namespace Babylon::Polyfills::Internal
                                     status,
                                     statusText,
                                     finalUrl,
-                                    !responseUrl.empty() && responseUrl != url));
+                                    request->Redirected()));
                             })
                         .then(*scheduler, arcana::cancellation::none(),
                             [deferred, env, scheduler](const arcana::expected<void, std::exception_ptr>& result) {

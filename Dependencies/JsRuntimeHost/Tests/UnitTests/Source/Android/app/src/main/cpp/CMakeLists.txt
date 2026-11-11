@@ -86,6 +86,7 @@ target_link_libraries(UnitTestsJNI
     PRIVATE ScriptLoader
     PRIVATE URL
     PRIVATE UrlLib
+    PRIVATE UrlLibTestSupport
     PRIVATE XMLHttpRequest
     PRIVATE Fetch
     PRIVATE WebSocket
