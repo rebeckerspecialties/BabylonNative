@@ -3033,15 +3033,21 @@ fragmentOutputs.color=color;
     // has a reference at the plain comparison size, as a browser screenshot would be.
     function getComparisonDimensions(referenceLength) {
         const hardwareScalingLevel = getValidationHardwareScalingLevel();
-        const scaledWidth = Math.round(comparisonWidth / hardwareScalingLevel);
-        const scaledHeight = Math.round(comparisonHeight / hardwareScalingLevel);
-        if (referenceLength === scaledWidth * scaledHeight * 4) {
-            return { width: scaledWidth, height: scaledHeight };
+        const scaledWidth = comparisonWidth / hardwareScalingLevel;
+        const scaledHeight = comparisonHeight / hardwareScalingLevel;
+        // The engine truncates a fractional render size (600 / 0.9 renders 666 wide),
+        // so try that before the rounded size.
+        const candidates = [
+            { width: Math.floor(scaledWidth), height: Math.floor(scaledHeight) },
+            { width: Math.round(scaledWidth), height: Math.round(scaledHeight) },
+            { width: comparisonWidth, height: comparisonHeight },
+        ];
+        for (const candidate of candidates) {
+            if (referenceLength === candidate.width * candidate.height * 4) {
+                return candidate;
+            }
         }
-        if (referenceLength === comparisonWidth * comparisonHeight * 4) {
-            return { width: comparisonWidth, height: comparisonHeight };
-        }
-        throw new Error(`Reference data length (${referenceLength}) did not match expected comparison size ${scaledWidth}x${scaledHeight} or ${comparisonWidth}x${comparisonHeight}.`);
+        throw new Error(`Reference data length (${referenceLength}) did not match expected comparison size ${candidates.map((c) => c.width + "x" + c.height).join(" or ")}.`);
     }
 
     function normalizeRenderDataForComparison(renderData, screenshotWidth, screenshotHeight, referenceData) {
