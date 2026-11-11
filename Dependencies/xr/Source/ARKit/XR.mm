@@ -183,6 +183,23 @@ namespace {
         return frame;
     }
 
+    // BABYLON_NATIVE_XR_CAPTURE_EVERY=N with BABYLON_NATIVE_XR_CAPTURE_COUNT=M repeats the
+    // capture every N composited frames, M times in total, so a console capture of the pose
+    // log can be compared against what was on screen while the device moved.
+    static uint64_t ResolveCaptureUnsigned(const char* name, uint64_t fallback)
+    {
+        const char* value = std::getenv(name);
+        if (value == nullptr || *value == '\0')
+        {
+            return fallback;
+        }
+
+        errno = 0;
+        char* end{};
+        const auto parsed = std::strtoull(value, &end, 10);
+        return (errno != 0 || end == value || parsed == 0) ? fallback : parsed;
+    }
+
     static NSString* ResolveCapturePath(uint64_t frameIndex)
     {
         if (const char* explicitPath = std::getenv("BABYLON_NATIVE_XR_CAPTURE_PATH"))
@@ -199,7 +216,8 @@ namespace {
         NSString* resultsPath = [outputPath stringByAppendingPathComponent:@"Results"];
 
         NSString* filename{};
-        if (const char* name = std::getenv("BABYLON_NATIVE_XR_CAPTURE_NAME"))
+        // A repeated capture needs one file per frame, so the fixed name only applies to a single capture.
+        if (const char* name = ResolveCaptureUnsigned("BABYLON_NATIVE_XR_CAPTURE_EVERY", 0) != 0 ? nullptr : std::getenv("BABYLON_NATIVE_XR_CAPTURE_NAME"))
         {
             filename = *name != '\0' ? [NSString stringWithUTF8String:name] : nil;
         }
@@ -642,15 +660,21 @@ namespace {
 /**
  Updates the WebXR view pose from ARKit's camera-to-world transform.
 
- Projection and camera UVs are display-oriented separately. The WebXR pose
- should remain in the XR reference space; rotating it into interface
- orientation double-applies display orientation and makes world-locked content
- drift relative to the camera feed in portrait.
+ ARKit's camera transform is expressed for the sensor's native orientation (landscape, home
+ indicator on the right). The projection matrix and the camera image UVs are requested for the
+ current interface orientation, so the view has to be rolled into that orientation as well: this
+ is what -[ARCamera viewMatrixForOrientation:] does. Handing out the raw transform is only right
+ in landscape-right; in portrait the rendered content is rolled 90 degrees against the camera
+ image and in landscape-left 180 degrees, so world-locked content slides around as the device
+ pitches. BABYLON_NATIVE_XR_TRACE_REGISTRATION measures this against ARKit's projectPoint.
  */
 -(void)updatePose:(ARCamera*)camera {
     auto& frameView = activeFrameViews->at(0);
     simd_float4x4 transform = [camera transform];
-    auto orientation = simd_quaternion(transform);
+
+    // The inverse of the display-oriented view matrix is the display-oriented camera pose.
+    const simd_float4x4 displayOrientedTransform = simd_inverse([camera viewMatrixForOrientation:[self orientation]]);
+    auto orientation = simd_quaternion(displayOrientedTransform);
 
     // Set the orientation of the camera
     frameView.Space.Pose.Orientation = { orientation.vector.x
@@ -658,10 +682,24 @@ namespace {
         , orientation.vector.z
         , orientation.vector.w};
 
-    // Set the translation.
-    frameView.Space.Pose.Position = { transform.columns[3][0]
-        , transform.columns[3][1]
-        , transform.columns[3][2] };
+    // Set the translation.
+    frameView.Space.Pose.Position = { displayOrientedTransform.columns[3][0]
+        , displayOrientedTransform.columns[3][1]
+        , displayOrientedTransform.columns[3][2] };
+
+    // Opt-in registration trace (BABYLON_NATIVE_XR_TRACE_REGISTRATION=1): where ARKit itself puts a
+    // fixed world point on screen for this frame. A script logs where its camera puts the same point,
+    // and the difference is the misregistration between rendered content and the camera image.
+    static const bool traceRegistration = std::getenv("BABYLON_NATIVE_XR_TRACE_REGISTRATION") != nullptr;
+    if (traceRegistration) {
+        const auto viewportSize = [self viewportSize];
+        const auto interfaceOrientation = [self orientation];
+        const CGPoint projected = [camera projectPoint:simd_make_float3(0.0f, -1.0f, -2.0f) orientation:interfaceOrientation viewportSize:viewportSize];
+        NSLog(@"[NativeXR] registration orientation=%ld viewport=%.0fx%.0f position=%.4f,%.4f,%.4f arkit=%.1f,%.1f projection=%.4f,%.4f,%.4f,%.4f",
+            static_cast<long>(interfaceOrientation), viewportSize.width, viewportSize.height,
+            transform.columns[3][0], transform.columns[3][1], transform.columns[3][2], projected.x, projected.y,
+            frameView.ProjectionMatrix[0], frameView.ProjectionMatrix[5], frameView.ProjectionMatrix[8], frameView.ProjectionMatrix[9]);
+    }
 }
 
 - (void)session:(ARSession *)__unused session didAddAnchors:(nonnull NSArray<__kindof ARAnchor *> *)anchors {
@@ -1341,8 +1379,9 @@ namespace xr {
 
                     [renderEncoder endEncoding];
 
-                    if (captureFrameIndex != 0 && !captureWritten && frameIndex >= captureFrameIndex) {
-                        captureWritten = true;
+                    if (captureFrameIndex != 0 && capturesRemaining != 0 && frameIndex >= captureFrameIndex) {
+                        --capturesRemaining;
+                        captureFrameIndex = frameIndex + captureInterval;
                         CaptureDrawableTexture(metalDevice, currentCommandBuffer, drawable.texture, frameIndex);
                     }
 
@@ -1906,7 +1945,8 @@ namespace xr {
         bool cameraOnlyMode{ std::getenv("BABYLON_NATIVE_XR_CAMERA_ONLY") != nullptr };
         bool debugSolidColorMode{ std::getenv("BABYLON_NATIVE_XR_DEBUG_SOLID_COLOR") != nullptr };
         uint64_t captureFrameIndex{ ResolveCaptureFrame() };
-        bool captureWritten{ false };
+        uint64_t captureInterval{ ResolveCaptureUnsigned("BABYLON_NATIVE_XR_CAPTURE_EVERY", 0) };
+        uint64_t capturesRemaining{ captureInterval != 0 ? ResolveCaptureUnsigned("BABYLON_NATIVE_XR_CAPTURE_COUNT", 1) : 1 };
         id<MTLDevice> metalDevice{};
 // NOTE: There is an incorrect warning about CAMetalLayer specifically when compiling for the simulator.
 #pragma clang diagnostic push

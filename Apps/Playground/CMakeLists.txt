@@ -26,6 +26,7 @@ set(DEPENDENCIES
 
 set(SCRIPTS
     "Scripts/ar_cube.js"
+    "Scripts/ar_cube_registration.js"
     "Scripts/native_env.js"
     "Scripts/experience.js"
     "Scripts/gltf-roundtrip-down.png"

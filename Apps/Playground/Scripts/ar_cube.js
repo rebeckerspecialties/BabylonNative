@@ -178,6 +178,18 @@ async function createScene(engine) {
     var lastFrameReportTime = 0;
     xr.baseExperience.sessionManager.onXRFrameObservable.add(function () {
         xrFrameCount++;
+        if (globalThis.__arCubeLogRegistration === true) {
+            // Pairs with the host's BABYLON_NATIVE_XR_TRACE_REGISTRATION line for the same frame:
+            // where this camera puts ARKit's world point (0, -1, -2), in normalized device coordinates.
+            var xrCamera = xr.baseExperience.camera;
+            var rig = xrCamera.rigCameras.length > 0 ? xrCamera.rigCameras[0] : xrCamera;
+            var projection = rig.getProjectionMatrix();
+            var ndc = BABYLON.Vector3.TransformCoordinates(new BABYLON.Vector3(0, -1, scene.useRightHandedSystem ? -2 : 2), rig.getViewMatrix().multiply(projection));
+            var cameraPosition = rig.globalPosition;
+            arCubeLog("registration position=" + cameraPosition.x.toFixed(4) + "," + cameraPosition.y.toFixed(4) + "," + (scene.useRightHandedSystem ? cameraPosition.z : -cameraPosition.z).toFixed(4) +
+                " ndc=" + ndc.x.toFixed(4) + "," + ndc.y.toFixed(4) +
+                " projection=" + projection.m[0].toFixed(4) + "," + projection.m[5].toFixed(4) + "," + projection.m[8].toFixed(4) + "," + projection.m[9].toFixed(4));
+        }
         var now = Date.now();
         if (now - lastFrameReportTime >= 5000) {
             lastFrameReportTime = now;
