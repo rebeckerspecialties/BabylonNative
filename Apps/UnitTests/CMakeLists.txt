@@ -52,7 +52,8 @@ add_custom_command(
 set(SOURCES
     "Source/App.h"
     "Source/App.cpp"
-    "Source/Tests.JavaScript.cpp")
+    "Source/Tests.JavaScript.cpp"
+    "Source/Tests.NativeXr.ImageTracking.cpp")
 
 set(UNITTEST_LIBRARIES
     AppRuntime
@@ -182,7 +183,7 @@ if(APPLE)
             SKIP_EXTERNAL_TEXTURE_TESTS)
     endif()
     find_library(JAVASCRIPTCORE_LIBRARY JavaScriptCore)
-    set(ADDITIONAL_LIBRARIES ${JAVASCRIPTCORE_LIBRARY})
+    set(ADDITIONAL_LIBRARIES ${JAVASCRIPTCORE_LIBRARY} "-framework CoreGraphics")
 elseif(UNIX AND NOT ANDROID)
     set(SOURCES ${SOURCES} "Source/App.X11.cpp")
 elseif(WIN32)
@@ -194,7 +195,8 @@ if(BABYLON_NATIVE_PLUGIN_NATIVEENGINE_LOAD_IMAGES)
     target_compile_definitions(UnitTests PRIVATE HAS_NATIVE_IMAGE_LOADING)
     target_link_libraries(UnitTests PRIVATE UrlLib)
 endif()
-target_include_directories(UnitTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../../Plugins/NativeEngine/Source")
+target_include_directories(UnitTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../../Plugins/NativeEngine/Source"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../Dependencies/xr/Include")
 if(TARGET NativeEngine)
     target_include_directories(UnitTests PRIVATE "${BGFX_DIR}/3rdparty")
 endif()
