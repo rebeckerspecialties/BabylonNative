@@ -69,6 +69,13 @@ async function createScene(engine) {
     });
     var features = xr.baseExperience.featuresManager;
 
+    // A WebGPU engine presents XR through projection layers; Babylon.js refuses to enter
+    // the session without the Layers feature.
+    if (engine.isWebGPU && BABYLON.WebXRLayers) {
+        features.enableFeature(BABYLON.WebXRLayers.Name, "latest");
+        arCubeLog("WebGPU layers enabled");
+    }
+
     var hitTest = null;
     try {
         hitTest = features.enableFeature(BABYLON.WebXRFeatureName.HIT_TEST, "latest", { disablePermanentHitTest: false });
@@ -87,23 +94,38 @@ async function createScene(engine) {
     } catch (error) {
         arCubeLog("plane detection unavailable: " + error);
     }
-    try {
-        features.enableFeature(BABYLON.WebXRFeatureName.DEPTH_SENSING, "latest", {
-            usagePreference: ["gpu-optimized", "cpu-optimized"],
-            dataFormatPreference: ["float32", "luminance-alpha"],
-        });
-        arCubeLog("depth sensing enabled (occlusion)");
-    } catch (error) {
-        arCubeLog("depth sensing unavailable: " + error);
+    // Babylon.js attaches these two when the session starts and fails the whole
+    // enterXRAsync if the host's session lacks the entry points, so only enable them
+    // where the host implements them (NativeXr on ARKit implements neither yet).
+    function hostHasMethod(className, methodName) {
+        var constructor = globalThis[className];
+        return !!constructor && !!constructor.prototype && typeof constructor.prototype[methodName] === "function";
     }
-    try {
-        features.enableFeature(BABYLON.WebXRFeatureName.LIGHT_ESTIMATION, "latest", {
-            setSceneEnvironmentTexture: true,
-            createDirectionalLightSource: true,
-        });
-        arCubeLog("light estimation enabled");
-    } catch (error) {
-        arCubeLog("light estimation unavailable: " + error);
+    if (hostHasMethod("XRFrame", "getDepthInformation") || hostHasMethod("XRWebGLBinding", "getDepthInformation")) {
+        try {
+            features.enableFeature(BABYLON.WebXRFeatureName.DEPTH_SENSING, "latest", {
+                usagePreference: ["gpu-optimized", "cpu-optimized"],
+                dataFormatPreference: ["float32", "luminance-alpha"],
+            });
+            arCubeLog("depth sensing enabled (occlusion)");
+        } catch (error) {
+            arCubeLog("depth sensing unavailable: " + error);
+        }
+    } else {
+        arCubeLog("depth sensing is not implemented by this host");
+    }
+    if (hostHasMethod("XRSession", "requestLightProbe")) {
+        try {
+            features.enableFeature(BABYLON.WebXRFeatureName.LIGHT_ESTIMATION, "latest", {
+                setSceneEnvironmentTexture: true,
+                createDirectionalLightSource: true,
+            });
+            arCubeLog("light estimation enabled");
+        } catch (error) {
+            arCubeLog("light estimation unavailable: " + error);
+        }
+    } else {
+        arCubeLog("light estimation is not implemented by this host");
     }
 
     function placeAt(position) {
@@ -150,7 +172,21 @@ async function createScene(engine) {
         });
     }
 
+    // One line every five seconds while the session delivers frames, so a console capture
+    // shows whether XR frames flow without access to the device's screen.
+    var xrFrameCount = 0;
+    var lastFrameReportTime = 0;
+    xr.baseExperience.sessionManager.onXRFrameObservable.add(function () {
+        xrFrameCount++;
+        var now = Date.now();
+        if (now - lastFrameReportTime >= 5000) {
+            lastFrameReportTime = now;
+            arCubeLog("xr frames=" + xrFrameCount + " fps=" + Math.round(engine.getFps()) + " placed=" + placed);
+        }
+    });
+
     xr.baseExperience.onStateChangedObservable.add(function (state) {
+        arCubeLog("xr state: " + BABYLON.WebXRState[state]);
         if (state === BABYLON.WebXRState.IN_XR) {
             // Centered preview relative to the viewer until tracking places the cube.
             cube.parent = xr.baseExperience.camera;
