@@ -2,6 +2,7 @@
 #include <Babylon/JsRuntime.h>
 #include <Babylon/Graphics/WgpuInterop.h>
 
+#include <napi/env.h>
 #include <napi/napi.h>
 
 #include <algorithm>
@@ -12,6 +13,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstdint>
+#include <mutex>
 #include <functional>
 #ifdef BABYLON_NATIVE_WEBGPU_TEST_HOOKS
 #include <future>
@@ -43,6 +45,59 @@ namespace Babylon::Plugins::NativeWebGPU
         std::atomic_uint64_t g_multiDrawIndirectDrawCount{0};
         std::atomic_uint64_t g_renderPassCommandStreamCount{0};
         std::atomic_uint64_t g_renderPassCommandStreamWordCount{0};
+        std::atomic_uint64_t g_renderPassCommandStreamDisabledCount{0};
+        std::mutex g_renderPassCommandStreamDisabledReasonMutex;
+        std::string g_renderPassCommandStreamDisabledReason;
+
+        // Version of the render-pass command-stream encoding decoded by
+        // babylon_wgpu_native_render_pass_record_commands (opcodes 1-14). Must match
+        // WebGPURenderPassCommandStreamProtocolVersion in Babylon.js; a mismatch makes
+        // the engine fall back to direct encoder calls instead of recording.
+        constexpr uint32_t RENDER_PASS_COMMAND_STREAM_PROTOCOL_VERSION = 1;
+
+        // Implements Babylon.js' IWebGPURenderPassCommandRecorderProvider for this
+        // backend (webgpuRenderPassCommandStream.ts). Applications install it with
+        //   engine.renderPassCommandRecorderProvider =
+        //       navigator.gpu.__babylonNativeRenderPassCommandRecorderProvider;
+        // It is plain JavaScript on purpose: isEnabled and getResourceId run once per
+        // draw and must not cross into native; only the one-time failure report does.
+        constexpr const char* JS_RENDER_PASS_COMMAND_RECORDER_PROVIDER_SOURCE = R"javascript(
+(function () {
+    "use strict";
+    const gpu = navigator.gpu;
+    const handleIdName = "__babylonNativeWebGPUHandleId";
+    const protocolVersion = gpu._renderPassCommandStreamProtocolVersion;
+    let enabled = true;
+    const provider = {
+        protocolVersion: protocolVersion,
+        // The decoder records each batch all-or-nothing: a rejected batch has recorded
+        // nothing, so the engine may replay it through direct encoder calls.
+        recordsAtomically: true,
+        isEnabled: function () {
+            return enabled;
+        },
+        getResourceId: function (resource) {
+            const id = resource ? resource[handleIdName] : 0;
+            return typeof id === "number" && id > 0 ? id : 0;
+        },
+        getLastError: function () {
+            const stats = typeof gpu._backendStats === "function" ? gpu._backendStats() : null;
+            return stats && typeof stats.lastError === "string" && stats.lastError.length > 0 ? stats.lastError : undefined;
+        },
+        onDisabled: function (info) {
+            enabled = false;
+            gpu._reportRenderPassCommandStreamDisabled(String(info.reason), String(info.message), Number(info.replayedDrawCount) || 0);
+        }
+    };
+    Object.defineProperty(gpu, "__babylonNativeRenderPassCommandRecorderProvider", {
+        value: Object.freeze(provider),
+        enumerable: false,
+        configurable: true,
+        writable: false
+    });
+})();
+)javascript";
+        constexpr const char* JS_RENDER_PASS_COMMAND_RECORDER_PROVIDER_URL = "babylon-native://plugins/NativeWebGPU/renderPassCommandRecorderProvider.js";
         std::atomic_uint64_t g_textureCreateCount{0};
         std::atomic_uint64_t g_textureViewCreateCount{0};
         std::atomic_uint64_t g_bindGroupCreateCount{0};
@@ -354,17 +409,12 @@ namespace Babylon::Plugins::NativeWebGPU
             objectConstructor.Get("setPrototypeOf").As<Napi::Function>().Call(objectConstructor, {object, prototype});
         }
 
-        // Version of the render-pass command stream decoded by
-        // babylon_wgpu_native_render_pass_record_commands (Core/GraphicsWgpu/Rust/src/lib.rs).
-        // Babylon.js disables the stream when this differs from its
-        // WebGPURenderPassCommandStreamProtocolVersion, so bump both together.
-        constexpr uint32_t RENDER_PASS_COMMAND_STREAM_PROTOCOL_VERSION = 1;
-
         // Babylon.js only batches render-pass commands into GPURenderPassEncoder._recordCommands
         // when the host installs an IWebGPURenderPassCommandRecorderProvider on the engine
-        // (WebGPUEngine.renderPassCommandRecorderProvider). Expose the provider for this backend as
-        // navigator.gpu._renderPassCommandRecorderProvider and install it on every WebGPUEngine by
-        // default, so hosts do not have to opt in per engine:
+        // (WebGPUEngine.renderPassCommandRecorderProvider). Install this backend's provider
+        // (navigator.gpu.__babylonNativeRenderPassCommandRecorderProvider, defined by
+        // JS_RENDER_PASS_COMMAND_RECORDER_PROVIDER_SOURCE) on every WebGPUEngine by default, so
+        // hosts do not have to opt in per engine:
         //   - engines loaded through the BABYLON UMD global are covered automatically, as long as
         //     this plugin is initialized before the Babylon.js bundle is evaluated;
         //   - module-bundled apps (no BABYLON global) assign the provider themselves, or call
@@ -372,22 +422,14 @@ namespace Babylon::Plugins::NativeWebGPU
         // An application turns recording off for an engine by setting its
         // renderPassCommandRecorderProvider back to null (e.g. for A/B measurements).
         // Babylon.js builds without the provider property are left untouched.
-        void InstallRenderPassCommandRecorderProvider(Napi::Env env, Napi::Object gpu)
+        void InstallRenderPassCommandRecorderProviderByDefault(Napi::Env env, Napi::Object gpu)
         {
             const auto install = Napi::Eval(env, R"JS(
-                ((gpu, protocolVersion, handleIdName) => {
-                    const provider = Object.freeze({
-                        protocolVersion,
-                        isEnabled: () => true,
-                        getResourceId: (resource) => {
-                            const id = resource ? resource[handleIdName] : 0;
-                            return typeof id === "number" ? id : 0;
-                        },
-                        getLastError: () => {
-                            const error = gpu._backendStats().lastError;
-                            return error ? String(error) : undefined;
-                        },
-                    });
+                ((gpu) => {
+                    const provider = gpu.__babylonNativeRenderPassCommandRecorderProvider;
+                    if (!provider) {
+                        return;
+                    }
                     const patched = new WeakSet();
                     const installOnEngineClass = (engineClass) => {
                         const prototype = engineClass && engineClass.prototype;
@@ -411,7 +453,6 @@ namespace Babylon::Plugins::NativeWebGPU
                         };
                         return true;
                     };
-                    Object.defineProperty(gpu, "_renderPassCommandRecorderProvider", { value: provider, configurable: true });
                     Object.defineProperty(gpu, "_installRenderPassCommandRecorderProvider", { value: installOnEngineClass, configurable: true });
 
                     // The UMD bundle assigns an empty globalThis.BABYLON namespace and then fills it
@@ -445,8 +486,8 @@ namespace Babylon::Plugins::NativeWebGPU
                         }
                     });
                 })
-            )JS", "native-webgpu-render-pass-command-recorder-provider.js").As<Napi::Function>();
-            install.Call({gpu, Napi::Number::New(env, RENDER_PASS_COMMAND_STREAM_PROTOCOL_VERSION), Napi::String::New(env, JS_NATIVE_HANDLE_ID_NAME)});
+            )JS", "babylon-native://plugins/NativeWebGPU/renderPassCommandRecorderProviderDefaultInstall.js").As<Napi::Function>();
+            install.Call({gpu});
         }
 
         void InstallGpuInterfaces(Napi::Env env)
@@ -4114,6 +4155,13 @@ namespace Babylon::Plugins::NativeWebGPU
                 stats.Set("placeholderRendererActive", Napi::Boolean::New(env, false));
                 stats.Set("developerFeaturesMode", Napi::String::New(env, kWebGpuDeveloperFeaturesMode));
                 stats.Set("lastError", Napi::String::New(env, GetLastWgpuError()));
+                stats.Set("renderPassCommandStreamCount", Napi::Number::From(env, static_cast<double>(g_renderPassCommandStreamCount.load(std::memory_order_relaxed))));
+                stats.Set("renderPassCommandStreamWordCount", Napi::Number::From(env, static_cast<double>(g_renderPassCommandStreamWordCount.load(std::memory_order_relaxed))));
+                stats.Set("renderPassCommandStreamDisabledCount", Napi::Number::From(env, static_cast<double>(g_renderPassCommandStreamDisabledCount.load(std::memory_order_relaxed))));
+                {
+                    std::lock_guard<std::mutex> lock{g_renderPassCommandStreamDisabledReasonMutex};
+                    stats.Set("renderPassCommandStreamDisabledReason", Napi::String::New(env, g_renderPassCommandStreamDisabledReason));
+                }
                 return stats;
             });
         }
@@ -4163,10 +4211,24 @@ namespace Babylon::Plugins::NativeWebGPU
 
             auto backendStats = CreateBackendStatsFunction(env);
             gpu.Set("_backendStats", backendStats);
+            gpu.Set("_renderPassCommandStreamProtocolVersion", Napi::Number::From(env, RENDER_PASS_COMMAND_STREAM_PROTOCOL_VERSION));
+            gpu.Set("_reportRenderPassCommandStreamDisabled", Napi::Function::New(env, [](const Napi::CallbackInfo& info) -> Napi::Value {
+                // One-time report from the engine when it stops recording batches (see the
+                // provider's onDisabled). Kept in the backend stats for field diagnostics and
+                // logged like renderer errors.
+                const auto reason = info.Length() > 0 && info[0].IsString() ? info[0].As<Napi::String>().Utf8Value() : std::string{"unknown"};
+                const auto message = info.Length() > 1 && info[1].IsString() ? info[1].As<Napi::String>().Utf8Value() : std::string{};
+                const auto replayedDrawCount = info.Length() > 2 ? ToUint32(info[2], 0) : 0;
+                g_renderPassCommandStreamDisabledCount.fetch_add(1, std::memory_order_relaxed);
+                {
+                    std::lock_guard<std::mutex> lock{g_renderPassCommandStreamDisabledReasonMutex};
+                    g_renderPassCommandStreamDisabledReason = reason;
+                }
+                std::fprintf(stderr, "NativeWebGPU render pass command stream disabled (%s, %u draws replayed): %s\n", reason.c_str(), replayedDrawCount, message.c_str());
+                return info.Env().Undefined();
+            }));
             // Back-compat alias kept for existing tests/scripts.
             gpu.Set("_debugStats", backendStats);
-
-            InstallRenderPassCommandRecorderProvider(env, gpu);
 
             if (developerFeaturesEnabled)
             {
@@ -4470,5 +4532,7 @@ namespace Babylon::Plugins::NativeWebGPU
         InstallWebGpuConstants(env);
         auto gpu = CreateGpu(env, developerFeaturesEnabled, unsafeWebGpuEnabled);
         navigator.Set(JS_GPU_NAME, gpu);
+        Napi::Eval(env, JS_RENDER_PASS_COMMAND_RECORDER_PROVIDER_SOURCE, JS_RENDER_PASS_COMMAND_RECORDER_PROVIDER_URL);
+        InstallRenderPassCommandRecorderProviderByDefault(env, gpu);
     }
 }
