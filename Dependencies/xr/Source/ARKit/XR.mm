@@ -369,6 +369,8 @@ namespace {
 
     UIInterfaceOrientation cameraUVReferenceOrientation;
     CGSize cameraUVReferenceSize;
+
+    NSString* sessionFailureDescription;
 }
 
 /**
@@ -786,6 +788,24 @@ namespace {
     _viewportSize.height = ResolveDrawableDimension(size.height, _viewportSize.height, 0, 1);
 }
 
+/**
+ ARKit reports a session that cannot run (camera access not authorized, unsupported
+ configuration, sensor failure) here and then delivers no frames. Keep the reason so that
+ session creation can fail with it instead of waiting forever for a first frame.
+ */
+- (void)session:(ARSession *)__unused session didFailWithError:(NSError *)error {
+    NSLog(@"[NativeXR] ARKit session failed: %@ (code %ld)", error.localizedDescription, static_cast<long>(error.code));
+    @synchronized(self) {
+        sessionFailureDescription = [NSString stringWithFormat:@"%@ (ARKit error %ld)", error.localizedDescription, static_cast<long>(error.code)];
+    }
+}
+
+- (NSString*)sessionFailureDescription {
+    @synchronized(self) {
+        return sessionFailureDescription;
+    }
+}
+
 @end
 namespace xr {
     namespace {
@@ -1108,6 +1128,12 @@ namespace xr {
                     CFRunLoopRemoveTimer(mainRunLoop, timer, kCFRunLoopCommonModes);
                     CFRelease(timer);
                     tcs.complete();
+                } else if (NSString* failure = [sessionDelegate sessionFailureDescription]) {
+                    // No frame will ever arrive: fail session creation with ARKit's reason.
+                    CFRunLoopRemoveTimer(mainRunLoop, timer, kCFRunLoopCommonModes);
+                    CFRelease(timer);
+                    tcs.complete(arcana::make_unexpected(std::make_exception_ptr(std::runtime_error{
+                        std::string{"The ARKit session could not start: "} + [failure UTF8String]})));
                 }
             });
             CFRunLoopAddTimer(mainRunLoop, timer, kCFRunLoopCommonModes);
