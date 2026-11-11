@@ -278,6 +278,11 @@ namespace
 
 @end
 
+#include <Shared/CommandLine.h>
+#include <Shared/PlaygroundScripts.h>
+
+#include <stdexcept>
+
 @implementation ViewController
 {
     BNRuntime* _runtime;

@@ -1107,6 +1107,8 @@ namespace Babylon
                 StaticValue("COMMAND_COPYTEXTURE", Napi::FunctionPointer::Create(env, &NativeEngine::CopyTexture)),
 
                 InstanceValue("supportsPrimitiveModeExpansion", Napi::Boolean::From(env, true)),
+                // bgfx resolves multisampled render targets into mipmapped storage before generating mips.
+                InstanceValue("supportsMultisampledMipmaps", Napi::Boolean::From(env, true)),
                 InstanceValue("supportsDynamicTextureMipMaps", Napi::Boolean::From(env,
                     0 != (bgfx::getCaps()->formats[bgfx::TextureFormat::RGBA8] & BGFX_CAPS_FORMAT_TEXTURE_MIP_AUTOGEN))),
                 InstanceMethod("dispose", &NativeEngine::Dispose),
@@ -2026,9 +2028,18 @@ void main() {
         // Match Create3D's depth padding and Create2D's additional allocation flag.
         const uint16_t textureDepth = is3D ? (numLayers > 0 ? numLayers : 1) : 0;
         const uint16_t textureLayers = (isCube || is3D) ? 1 : (numLayers > 0 ? numLayers : 1);
-        const auto createFlags = (!isCube && !is3D) || (is3D && textureDepth == 1 && renderTarget)
+        auto createFlags = (!isCube && !is3D) || (is3D && textureDepth == 1 && renderTarget)
             ? flags | BGFX_TEXTURE_BLIT_DST : flags;
         const uint16_t physicalDepth = is3D ? std::max<uint16_t>(2, textureDepth) : 0;
+        if ((createFlags & BGFX_TEXTURE_MSAA_SAMPLE) != 0 && textureLayers == 1 &&
+            !bgfx::isTextureValid(physicalDepth, isCube, textureLayers, format, createFlags) &&
+            bgfx::isTextureValid(physicalDepth, isCube, textureLayers, format, createFlags & ~BGFX_TEXTURE_MSAA_SAMPLE))
+        {
+            // GLES 3.0 has no multisampled textures; bgfx resolves MSAA depth into single-sample storage there.
+            // Arrays are excluded because bgfx GL has no multisampled renderbuffer path for them.
+            flags &= ~BGFX_TEXTURE_MSAA_SAMPLE;
+            createFlags &= ~BGFX_TEXTURE_MSAA_SAMPLE;
+        }
         if (!bgfx::isTextureValid(physicalDepth, isCube, textureLayers, format, createFlags))
         {
             // Some backends support 24-bit depth only with packed stencil storage.
@@ -2062,6 +2073,15 @@ void main() {
         else
         {
             texture->Create2D(width, height, hasMips, textureLayers, format, flags);
+        }
+
+        // WebGL creates render-target and cube textures with CLAMP_TO_EDGE, and raw InternalTexture binds
+        // (post-process inputs) never reapply a wrap mode.
+        if (renderTarget || isCube)
+        {
+            constexpr uint32_t addressMask = BGFX_SAMPLER_U_MASK | BGFX_SAMPLER_V_MASK | BGFX_SAMPLER_W_MASK;
+            constexpr uint32_t clampAll = BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP | BGFX_SAMPLER_W_CLAMP;
+            texture->SamplerFlags((texture->SamplerFlags() & ~addressMask) | clampAll);
         }
     }
 
@@ -3386,20 +3406,32 @@ void main() {
             // Prefer a supported depth RT format. Android retains D24S8 for Mali compatibility:
             // https://forum.babylonjs.com/t/post-processing-graphics-glitch/49523
             bgfx::TextureFormat::Enum depthStencilFormat{bgfx::TextureFormat::D24S8};
+            const auto selectDepthStencilFormat = [&]() {
+                depthStencilFormat = bgfx::TextureFormat::D24S8;
 #ifndef ANDROID
-            if (!generateStencilBuffer)
-            {
-                if (bgfx::isTextureValid(0, false, depthStencilNumLayers, bgfx::TextureFormat::D32F, flags))
+                if (!generateStencilBuffer)
                 {
-                    depthStencilFormat = bgfx::TextureFormat::D32F;
+                    if (bgfx::isTextureValid(0, false, depthStencilNumLayers, bgfx::TextureFormat::D32F, flags))
+                    {
+                        depthStencilFormat = bgfx::TextureFormat::D32F;
+                    }
+                    else if (bgfx::isTextureValid(0, false, depthStencilNumLayers, bgfx::TextureFormat::D24, flags))
+                    {
+                        depthStencilFormat = bgfx::TextureFormat::D24;
+                    }
                 }
-                else if (bgfx::isTextureValid(0, false, depthStencilNumLayers, bgfx::TextureFormat::D24, flags))
-                {
-                    depthStencilFormat = bgfx::TextureFormat::D24;
-                }
-            }
 #endif
-            if (!bgfx::isTextureValid(0, false, depthStencilNumLayers, depthStencilFormat, flags))
+                return bgfx::isTextureValid(0, false, depthStencilNumLayers, depthStencilFormat, flags);
+            };
+            bool depthStencilFormatValid = selectDepthStencilFormat();
+            if (!depthStencilFormatValid && (flags & BGFX_TEXTURE_MSAA_SAMPLE) != 0 && depthStencilNumLayers == 1)
+            {
+                // GLES 3.0 has no multisampled textures; bgfx resolves MSAA depth into single-sample storage there.
+                // bgfx GL has no multisampled renderbuffer path for arrays, so layered targets keep failing.
+                flags &= ~BGFX_TEXTURE_MSAA_SAMPLE;
+                depthStencilFormatValid = selectDepthStencilFormat();
+            }
+            if (!depthStencilFormatValid)
             {
                 throw Napi::Error::New(env, "No supported depth/stencil texture format for frame buffer");
             }
@@ -3548,6 +3580,11 @@ void main() {
         {
             DrawInternal(encoder, fillMode, instanceDataLayout);
         }
+        else
+        {
+            // Drop the bindings made for the skipped draw, as Submit would, so they cannot leak into the next draw.
+            encoder->discard(BGFX_DISCARD_ALL);
+        }
     }
 
     void NativeEngine::DrawIndexedInstanced(NativeDataStream::Reader& data)
@@ -3588,6 +3625,11 @@ void main() {
         {
             DrawInternal(encoder, fillMode, instanceDataLayout);
         }
+        else
+        {
+            // Drop the bindings made for the skipped draw, as Submit would, so they cannot leak into the next draw.
+            encoder->discard(BGFX_DISCARD_ALL);
+        }
     }
 
     // Note: For legacy reasons JS might call this function for instance drawing.
@@ -3619,6 +3661,11 @@ void main() {
         if (shouldDraw)
         {
             DrawInternal(encoder, fillMode, instanceDataLayout);
+        }
+        else
+        {
+            // Drop the bindings made for the skipped draw, as Submit would, so they cannot leak into the next draw.
+            encoder->discard(BGFX_DISCARD_ALL);
         }
     }
 
@@ -3657,6 +3704,11 @@ void main() {
         if (shouldDraw)
         {
             DrawInternal(encoder, fillMode, instanceDataLayout);
+        }
+        else
+        {
+            // Drop the bindings made for the skipped draw, as Submit would, so they cannot leak into the next draw.
+            encoder->discard(BGFX_DISCARD_ALL);
         }
     }
 

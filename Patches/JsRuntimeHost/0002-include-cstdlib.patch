@@ -1,9 +1,0 @@
-diff --git a/Core/AppRuntime/Source/AppRuntime.cpp b/Core/AppRuntime/Source/AppRuntime.cpp
---- a/Core/AppRuntime/Source/AppRuntime.cpp
-+++ b/Core/AppRuntime/Source/AppRuntime.cpp
-@@ -6,4 +6,5 @@
- #include <cassert>
- #include <atomic>
-+#include <cstdlib>
- #include <optional>
- #include <mutex>
