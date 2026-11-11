@@ -7,6 +7,7 @@
 
 #include <Babylon/Embedding/Runtime.h>
 #include <Shared/CommandLine.h>
+#include <Shared/Diagnostics.h>
 #include <Shared/PlaygroundScripts.h>
 #include <napi/napi.h>
 
@@ -178,6 +179,12 @@ namespace
         CommandLine::PrintUsage([[[NSProcessInfo processInfo] processName] UTF8String]);
         std::quick_exit(0);
     }
+
+    // Install the shared crash/terminate reporting (uncaught C++ exception
+    // messages, signal banners, finish line) like the desktop Playground apps
+    // do, so a failure during a host-driven run is attributable from the
+    // console instead of ending in libc++abi's bare "uncaught exception".
+    Diagnostics::Initialize();
 
     auto& nativeRuntime = *[runtime nativeRuntime];
     Playground::Initialize(options);

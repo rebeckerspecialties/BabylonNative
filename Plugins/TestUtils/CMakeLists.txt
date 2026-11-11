@@ -1,8 +1,14 @@
+if(VISIONOS)
+    set(TESTUTILS_PLATFORM_SOURCE "Source/TestUtils_iOS.mm")
+else()
+    set(TESTUTILS_PLATFORM_SOURCE "Source/TestUtils_${BABYLON_NATIVE_PLATFORM}.${BABYLON_NATIVE_PLATFORM_IMPL_EXT}")
+endif()
+
 set(SOURCES
     "Include/Babylon/Plugins/TestUtils.h"
     "Source/TestUtils.h"
     "Source/TestUtils.cpp"
-    "Source/TestUtils_${BABYLON_NATIVE_PLATFORM}.${BABYLON_NATIVE_PLATFORM_IMPL_EXT}")
+    "${TESTUTILS_PLATFORM_SOURCE}")
 
 add_library(TestUtils ${SOURCES})
 warnings_as_errors(TestUtils)

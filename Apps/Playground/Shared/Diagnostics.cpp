@@ -9,6 +9,12 @@
 #include <cstring>
 #include <exception>
 #include <string>
+#if defined(__APPLE__)
+#include <dlfcn.h>
+#include <mach/mach.h>
+#include <pthread.h>
+#include <thread>
+#endif
 
 #define BN_STRINGIFY_IMPL(value) #value
 #define BN_STRINGIFY(value) BN_STRINGIFY_IMPL(value)
@@ -96,6 +102,139 @@ namespace
         __android_log_write(ANDROID_LOG_ERROR, "BabylonNative", text);
 #endif
     }
+
+#if defined(__APPLE__)
+    // Symbolize one return address the way WriteNativeCallstack does, but
+    // without backtrace(): dladdr() works on any address, including one read
+    // out of another thread's frame chain.
+    void WriteOneFrame(int index, uint64_t address)
+    {
+        // Strip pointer-authentication bits from signed return addresses.
+        address &= 0x0000007FFFFFFFFFULL;
+        Dl_info info{};
+        const char* image = "?";
+        if (::dladdr(reinterpret_cast<void*>(address), &info) != 0 && info.dli_fname != nullptr)
+        {
+            const char* slash = std::strrchr(info.dli_fname, '/');
+            image = slash != nullptr ? slash + 1 : info.dli_fname;
+            if (info.dli_sname != nullptr)
+            {
+                std::fprintf(stderr, "    %2d %s`%s + %llu\n", index, image, info.dli_sname,
+                    static_cast<unsigned long long>(address - reinterpret_cast<uint64_t>(info.dli_saddr)));
+                return;
+            }
+        }
+        std::fprintf(stderr, "    %2d %s`0x%llx\n", index, image, static_cast<unsigned long long>(address));
+    }
+
+    // Dump a frame-pointer walk of every thread in the process to stderr.
+    // Opt-in diagnostic for launches driven from a host (devicectl, CI) where a
+    // debugger cannot be attached quickly: set
+    // BABYLON_PLAYGROUND_DUMP_THREADS_AFTER_MS=<delay> in the environment and the
+    // dump is written that many milliseconds after startup, three times.
+    void DumpAllThreadStacks()
+    {
+        thread_act_array_t threads{};
+        mach_msg_type_number_t threadCount{};
+        if (::task_threads(::mach_task_self(), &threads, &threadCount) != KERN_SUCCESS)
+        {
+            std::fputs("--- BN: THREAD DUMP unavailable (task_threads failed) ---\n", stderr);
+            return;
+        }
+        const thread_t self = ::mach_thread_self();
+        std::fprintf(stderr, "--- BN: THREAD DUMP (%u threads) ---\n", threadCount);
+        for (mach_msg_type_number_t i = 0; i < threadCount; ++i)
+        {
+            const thread_t thread = threads[i];
+            if (thread == self)
+            {
+                continue;
+            }
+            char name[64]{};
+            if (pthread_t pt = ::pthread_from_mach_thread_np(thread); pt != nullptr)
+            {
+                ::pthread_getname_np(pt, name, sizeof(name));
+            }
+            ::thread_suspend(thread);
+            arm_thread_state64_t state{};
+            mach_msg_type_number_t stateCount = ARM_THREAD_STATE64_COUNT;
+            if (::thread_get_state(thread, ARM_THREAD_STATE64, reinterpret_cast<thread_state_t>(&state), &stateCount) == KERN_SUCCESS)
+            {
+                std::fprintf(stderr, "  thread %u%s%s%s:\n", i, name[0] ? " (" : "", name, name[0] ? ")" : "");
+                WriteOneFrame(0, static_cast<uint64_t>(arm_thread_state64_get_pc(state)));
+                WriteOneFrame(1, static_cast<uint64_t>(arm_thread_state64_get_lr(state)));
+                uint64_t fp = static_cast<uint64_t>(arm_thread_state64_get_fp(state));
+                int index = 2;
+                for (int depth = 0; depth < 48 && fp != 0; ++depth)
+                {
+                    uint64_t frame[2]{};
+                    vm_size_t outSize{};
+                    if (::vm_read_overwrite(::mach_task_self(), static_cast<vm_address_t>(fp), sizeof(frame),
+                            reinterpret_cast<vm_address_t>(frame), &outSize) != KERN_SUCCESS || outSize != sizeof(frame))
+                    {
+                        break;
+                    }
+                    if (frame[1] == 0)
+                    {
+                        break;
+                    }
+                    WriteOneFrame(index++, frame[1]);
+                    if (frame[0] <= fp)
+                    {
+                        break;
+                    }
+                    fp = frame[0];
+                }
+            }
+            ::thread_resume(thread);
+        }
+        ::vm_deallocate(::mach_task_self(), reinterpret_cast<vm_address_t>(threads), threadCount * sizeof(thread_t));
+        std::fputs("--- BN: THREAD DUMP END ---\n", stderr);
+        std::fflush(stderr);
+    }
+
+    void StartThreadDumpWatchdogIfRequested();
+
+    // Start from a static initializer as well, so the dump is available even
+    // when the process never reaches Diagnostics::Initialize() (the case this
+    // diagnostic exists for: a hang during runtime bring-up).
+    struct ThreadDumpWatchdogStaticStarter
+    {
+        ThreadDumpWatchdogStaticStarter()
+        {
+            StartThreadDumpWatchdogIfRequested();
+        }
+    };
+    ThreadDumpWatchdogStaticStarter s_threadDumpWatchdogStaticStarter{};
+
+    void StartThreadDumpWatchdogIfRequested()
+    {
+        static std::atomic<bool> s_started{false};
+        bool expected = false;
+        if (!s_started.compare_exchange_strong(expected, true))
+        {
+            return;
+        }
+        const char* value = std::getenv("BABYLON_PLAYGROUND_DUMP_THREADS_AFTER_MS");
+        if (value == nullptr || value[0] == '\0')
+        {
+            return;
+        }
+        const long delayMs = std::strtol(value, nullptr, 10);
+        if (delayMs <= 0)
+        {
+            return;
+        }
+        std::thread([delayMs] {
+            ::pthread_setname_np("bn-thread-dump-watchdog");
+            for (int round = 0; round < 3; ++round)
+            {
+                std::this_thread::sleep_for(std::chrono::milliseconds{delayMs});
+                DumpAllThreadStacks();
+            }
+        }).detach();
+    }
+#endif
 
     void WriteNativeCallstack(unsigned int skipFrames)
     {
@@ -301,6 +440,9 @@ namespace Diagnostics
 
     void Initialize()
     {
+#if defined(__APPLE__)
+        StartThreadDumpWatchdogIfRequested();
+#endif
         bool expected = false;
         if (!s_initialized.compare_exchange_strong(expected, true))
         {

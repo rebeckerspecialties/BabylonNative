@@ -233,6 +233,7 @@ namespace Babylon::Plugins::Internal
 #elif defined(BABYLON_NATIVE_TESTUTILS_SYSTEM_IMAGES) && defined(__APPLE__)
         image->m_Image = DecodeImageData(info.Env(), buffer.Data(), buffer.ByteLength(), image->m_Width, image->m_Height);
 #else
+        (void)buffer;
         delete image;
         throw Napi::Error::New(info.Env(), "Image decoding is disabled in this build.");
 #endif
@@ -285,6 +286,7 @@ namespace Babylon::Plugins::Internal
 
         return Napi::Value::From(info.Env(), data);
 #else
+        (void)imageData;
         throw Napi::Error::New(info.Env(), "Image data extraction is disabled in this build.");
 #endif
     }
