@@ -15,6 +15,27 @@ namespace Babylon::Graphics
     class DeviceContext;
     class DeviceImpl;
 
+    // Keeps the current graphics frame open until the JavaScript work using
+    // it has completed. NativeEngine and NativeXr acquire this from the frame
+    // start callback and carry it through their JS-thread callback.
+    class FrameCompletionScope final
+    {
+    public:
+        FrameCompletionScope(const FrameCompletionScope&) = delete;
+        FrameCompletionScope& operator=(const FrameCompletionScope&) = delete;
+        FrameCompletionScope& operator=(FrameCompletionScope&&) = delete;
+
+        FrameCompletionScope(FrameCompletionScope&&) noexcept;
+        ~FrameCompletionScope();
+
+    private:
+        friend class DeviceContext;
+
+        explicit FrameCompletionScope(DeviceImpl&);
+
+        DeviceImpl* m_impl;
+    };
+
     class UpdateToken final
     {
     public:
@@ -69,8 +90,10 @@ namespace Babylon::Graphics
 
         continuation_scheduler<>& BeforeRenderScheduler();
         continuation_scheduler<>& AfterRenderScheduler();
+        continuation_scheduler<>& FrameStartScheduler();
 
         Update GetUpdate(const char* updateName);
+        FrameCompletionScope AcquireFrameCompletionScope();
 
         void RequestScreenShot(std::function<void(std::vector<uint8_t>)> callback);
         void UpdateMSAA(uint8_t value);

@@ -32,6 +32,44 @@ static EXTERNAL_IMAGE_UPLOAD_OWNED_BYTES: AtomicU64 = AtomicU64::new(0);
 static ACTIVE_CONTEXT: AtomicPtr<BackendContext> = AtomicPtr::new(ptr::null_mut());
 static LAST_ERROR: OnceLock<Mutex<String>> = OnceLock::new();
 
+/// Ids of the NativeXR depth attachment textures and their views. Render-pass
+/// parsing uses them to report the load/store operations Babylon.js actually
+/// issues on that attachment, which decides whether it can be transient
+/// (memoryless): wgpu only allows a transient attachment to be cleared and
+/// discarded.
+fn xr_depth_textures() -> &'static Mutex<std::collections::HashSet<u64>> {
+    static IDS: OnceLock<Mutex<std::collections::HashSet<u64>>> = OnceLock::new();
+    IDS.get_or_init(|| Mutex::new(std::collections::HashSet::new()))
+}
+
+fn xr_depth_views() -> &'static Mutex<std::collections::HashSet<u64>> {
+    static IDS: OnceLock<Mutex<std::collections::HashSet<u64>>> = OnceLock::new();
+    IDS.get_or_init(|| Mutex::new(std::collections::HashSet::new()))
+}
+
+fn xr_depth_ops_seen() -> &'static Mutex<std::collections::HashSet<String>> {
+    static SEEN: OnceLock<Mutex<std::collections::HashSet<String>>> = OnceLock::new();
+    SEEN.get_or_init(|| Mutex::new(std::collections::HashSet::new()))
+}
+
+fn describe_ops<T>(ops: &Option<wgpu::Operations<T>>) -> String {
+    match ops {
+        None => "none".to_owned(),
+        Some(ops) => {
+            let load = match ops.load {
+                wgpu::LoadOp::Clear(_) => "clear",
+                wgpu::LoadOp::Load => "load",
+                wgpu::LoadOp::DontCare(_) => "dont-care",
+            };
+            let store = match ops.store {
+                wgpu::StoreOp::Store => "store",
+                wgpu::StoreOp::Discard => "discard",
+            };
+            format!("{load}/{store}")
+        }
+    }
+}
+
 fn webgpu_memory_trace_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
     *ENABLED.get_or_init(|| std::env::var_os("BABYLON_NATIVE_WEBGPU_MEMORY_TRACE").is_some())
@@ -115,6 +153,18 @@ pub struct BabylonWgpuMappedRangeWrite {
     pub offset: u64,
     pub data: *const u8,
     pub data_len: usize,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct BabylonWgpuVulkanBinding {
+    pub instance: u64,
+    pub physical_device: u64,
+    pub device: u64,
+    pub queue: u64,
+    pub api_version: u32,
+    pub queue_family_index: u32,
+    pub queue_index: u32,
 }
 
 struct BackendContext {
@@ -725,6 +775,35 @@ pub extern "C" fn babylon_wgpu_native_import_metal_texture(
 pub extern "C" fn babylon_wgpu_native_get_metal_device() -> *mut c_void {
     run_with_active_backend("NativeWebGPU.getMetalDevice", ptr::null_mut(), |backend| {
         backend.get_metal_device()
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn babylon_wgpu_native_import_vulkan_texture(
+    native_image: u64,
+    descriptor_json: *const c_char,
+) -> u64 {
+    run_with_active_backend("NativeWebGPU.importVulkanTexture", 0, |backend| {
+        backend.import_vulkan_texture(
+            native_image,
+            read_c_string(descriptor_json, "GPUTextureDescriptor")?,
+        )
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn babylon_wgpu_native_get_vulkan_binding(
+    output_binding: *mut BabylonWgpuVulkanBinding,
+) -> bool {
+    run_with_active_backend("NativeWebGPU.getVulkanBinding", false, |backend| {
+        if output_binding.is_null() {
+            return Err("Vulkan binding output pointer was null".to_string());
+        }
+        let binding = backend.get_vulkan_binding()?;
+        unsafe {
+            *output_binding = binding;
+        }
+        Ok(true)
     })
 }
 
@@ -1546,6 +1625,18 @@ pub extern "C" fn babylon_wgpu_native_queue_wait_submitted_work() -> bool {
 }
 
 #[no_mangle]
+pub extern "C" fn babylon_wgpu_native_prepare_openxr_texture_for_release(texture_id: u64) -> bool {
+    run_with_active_backend(
+        "NativeXR.prepareOpenXRTextureForRelease",
+        false,
+        |backend| {
+            backend.prepare_openxr_texture_for_release(texture_id)?;
+            Ok(true)
+        },
+    )
+}
+
+#[no_mangle]
 pub extern "C" fn babylon_wgpu_native_queue_write_texture(
     destination_json: *const c_char,
     data: *const u8,
@@ -2128,6 +2219,8 @@ mod upstream_wgpu_native {
         pub device: wgpu::Device,
         pub queue: wgpu::Queue,
         pub surface: Option<wgpu::Surface<'static>>,
+        pub instance: wgpu::Instance,
+        pub adapter: wgpu::Adapter,
         pub surface_config: Option<wgpu::SurfaceConfiguration>,
         pub resolved_adapter_info: AdapterProbeInfo,
         pub max_texture_dimension_2d: u32,
@@ -3637,8 +3730,12 @@ mod upstream_wgpu_native {
                                     depth_or_array_layers: 1,
                                 },
                             );
-                            self.runtime.queue.submit(Some(encoder.finish()));
-                            self.runtime.queue.present(frame);
+                            submit_and_present(
+                                &self.runtime.device,
+                                &self.runtime.queue,
+                                encoder.finish(),
+                                Some(frame),
+                            );
                         }
                         wgpu::CurrentSurfaceTexture::Lost
                         | wgpu::CurrentSurfaceTexture::Outdated
@@ -3959,6 +4056,10 @@ mod upstream_wgpu_native {
             let sample_count = json_u32(&descriptor, "sampleCount", 1).max(1);
             let label = json_str(&descriptor, "label").map(str::to_owned);
             let dimension = map_texture_dimension(json_str(&descriptor, "dimension"));
+            // `transient` asks for an attachment that never leaves tile memory
+            // (Metal's MTLStorageModeMemoryless). Only meaningful for
+            // render-attachment-only textures that are never sampled, read
+            // back, or copied -- notably the XR depth buffer.
             let transient = json_bool(&descriptor, "transient", false);
             // wgpu maps TRANSIENT_ATTACHMENT to memoryless storage where the backend
             // has it (MTLStorageModeMemoryless on Apple GPUs), and validates that
@@ -3998,6 +4099,12 @@ mod upstream_wgpu_native {
                     view_formats: &view_formats,
                 });
             let id = self.resources.next();
+            if label
+                .as_deref()
+                .is_some_and(|label| label.starts_with("NativeXR.depth"))
+            {
+                crate::xr_depth_textures().lock().unwrap().insert(id);
+            }
             let estimated = estimated_texture_allocation_bytes(
                 size.width,
                 size.height,
@@ -4185,6 +4292,140 @@ mod upstream_wgpu_native {
             Err("native Metal texture import is only available on Apple platforms".to_string())
         }
 
+        #[cfg(target_os = "android")]
+        pub fn import_vulkan_texture(
+            &mut self,
+            native_image: u64,
+            descriptor_json: &str,
+        ) -> Result<u64, String> {
+            if native_image == 0 {
+                return Err("native Vulkan image handle was null".to_string());
+            }
+
+            use ash::vk::Handle;
+
+            let descriptor = parse_json(descriptor_json)?;
+            let size = descriptor
+                .get("size")
+                .map(parse_extent3d)
+                .unwrap_or(wgpu::Extent3d {
+                    width: 1,
+                    height: 1,
+                    depth_or_array_layers: 1,
+                });
+            let format_text = json_str(&descriptor, "format").unwrap_or("rgba8unorm");
+            let format = map_texture_format(format_text)
+                .ok_or_else(|| format!("unsupported GPUTexture format '{format_text}'"))?;
+            let usage = map_texture_usage(json_u32(&descriptor, "usage", 0x10))
+                | wgpu::TextureUsages::RENDER_ATTACHMENT;
+            let view_formats = compatible_view_formats(format);
+            let mip_level_count = json_u32(&descriptor, "mipLevelCount", 1).max(1);
+            let sample_count = json_u32(&descriptor, "sampleCount", 1).max(1);
+            let label = json_str(&descriptor, "label").map(str::to_owned);
+            let dimension = map_texture_dimension(json_str(&descriptor, "dimension"));
+
+            let Some(hal_device) =
+                (unsafe { self.runtime.device.as_hal::<wgpu::hal::api::Vulkan>() })
+            else {
+                return Err("NativeWebGPU device is not Vulkan-backed".to_string());
+            };
+
+            let mut hal_usage = wgpu::TextureUses::empty();
+            if usage.contains(wgpu::TextureUsages::COPY_SRC) {
+                hal_usage |= wgpu::TextureUses::COPY_SRC;
+            }
+            if usage.contains(wgpu::TextureUsages::COPY_DST) {
+                hal_usage |= wgpu::TextureUses::COPY_DST;
+            }
+            if usage.contains(wgpu::TextureUsages::TEXTURE_BINDING) {
+                hal_usage |= wgpu::TextureUses::RESOURCE;
+            }
+            if usage.contains(wgpu::TextureUsages::STORAGE_BINDING) {
+                hal_usage |= wgpu::TextureUses::STORAGE_READ_WRITE;
+            }
+            if usage.contains(wgpu::TextureUsages::RENDER_ATTACHMENT) {
+                hal_usage |= if format.is_depth_stencil_format() {
+                    wgpu::TextureUses::DEPTH_STENCIL_WRITE
+                } else {
+                    wgpu::TextureUses::COLOR_TARGET
+                };
+            }
+
+            let hal_descriptor = wgpu::hal::TextureDescriptor {
+                label: label.as_deref(),
+                size,
+                mip_level_count,
+                sample_count,
+                dimension,
+                format,
+                usage: hal_usage,
+                memory_flags: wgpu::hal::MemoryFlags::empty(),
+                view_formats: view_formats.clone(),
+            };
+            let raw_image = ash::vk::Image::from_raw(native_image);
+            let hal_texture = unsafe {
+                hal_device.texture_from_raw(
+                    raw_image,
+                    &hal_descriptor,
+                    Some(Box::new(|| {})),
+                    wgpu::hal::vulkan::TextureMemory::External,
+                )
+            };
+            let texture = unsafe {
+                self.runtime
+                    .device
+                    .create_texture_from_hal::<wgpu::hal::api::Vulkan>(
+                        hal_texture,
+                        &wgpu::TextureDescriptor {
+                            label: label.as_deref(),
+                            size,
+                            mip_level_count,
+                            sample_count,
+                            dimension,
+                            format,
+                            usage,
+                            view_formats: &view_formats,
+                        },
+                        // The swapchain image is fully rendered every frame; nothing
+                        // written before the import needs preserving.
+                        wgpu::TextureUses::UNINITIALIZED,
+                    )
+            };
+
+            let id = self.resources.next();
+            self.resources.textures.insert(
+                id,
+                TextureResource {
+                    texture,
+                    width: size.width,
+                    height: size.height,
+                    depth_or_array_layers: size.depth_or_array_layers,
+                    mip_level_count,
+                    sample_count,
+                    dimension,
+                    format,
+                },
+            );
+            add_estimated_gpu_memory_bytes(estimated_texture_allocation_bytes(
+                size.width,
+                size.height,
+                size.depth_or_array_layers,
+                format,
+                mip_level_count,
+                sample_count,
+            ));
+            Ok(id)
+        }
+
+        #[cfg(not(target_os = "android"))]
+        pub fn import_vulkan_texture(
+            &mut self,
+            _native_image: u64,
+            _descriptor_json: &str,
+        ) -> Result<u64, String> {
+            Err("native Vulkan texture import is only available on Android".to_string())
+        }
+
         #[cfg(any(
             target_os = "macos",
             target_os = "ios",
@@ -4208,6 +4449,41 @@ mod upstream_wgpu_native {
         )))]
         pub fn get_metal_device(&mut self) -> Result<*mut c_void, String> {
             Ok(ptr::null_mut())
+        }
+
+        #[cfg(target_os = "android")]
+        pub fn get_vulkan_binding(&mut self) -> Result<super::BabylonWgpuVulkanBinding, String> {
+            use ash::vk::Handle;
+
+            let Some(hal_instance) =
+                (unsafe { self.runtime.instance.as_hal::<wgpu::hal::api::Vulkan>() })
+            else {
+                return Err("NativeWebGPU instance is not Vulkan-backed".to_string());
+            };
+            let Some(hal_device) =
+                (unsafe { self.runtime.device.as_hal::<wgpu::hal::api::Vulkan>() })
+            else {
+                return Err("NativeWebGPU device is not Vulkan-backed".to_string());
+            };
+
+            Ok(super::BabylonWgpuVulkanBinding {
+                instance: hal_instance
+                    .shared_instance()
+                    .raw_instance()
+                    .handle()
+                    .as_raw(),
+                physical_device: hal_device.raw_physical_device().as_raw(),
+                device: hal_device.raw_device().handle().as_raw(),
+                queue: hal_device.raw_queue().as_raw(),
+                api_version: hal_instance.shared_instance().instance_api_version(),
+                queue_family_index: hal_device.queue_family_index(),
+                queue_index: hal_device.queue_index(),
+            })
+        }
+
+        #[cfg(not(target_os = "android"))]
+        pub fn get_vulkan_binding(&mut self) -> Result<super::BabylonWgpuVulkanBinding, String> {
+            Err("NativeWebGPU Vulkan binding is only available on Android".to_string())
         }
 
         pub fn create_texture_view(
@@ -4262,6 +4538,9 @@ mod upstream_wgpu_native {
                     .map(|raw| raw.min(u64::from(u32::MAX)) as u32),
             });
             let id = self.resources.next();
+            if crate::xr_depth_textures().lock().unwrap().contains(&texture_id) {
+                crate::xr_depth_views().lock().unwrap().insert(id);
+            }
             self.resources.texture_views.insert(
                 id,
                 TextureViewResource {
@@ -4969,6 +5248,16 @@ mod upstream_wgpu_native {
                                     wgpu::StoreOp::Store
                                 },
                             });
+                    if crate::xr_depth_views().lock().unwrap().contains(&view_id) {
+                        let key = format!(
+                            "depth {} / stencil {}",
+                            crate::describe_ops(&depth_ops),
+                            crate::describe_ops(&stencil_ops)
+                        );
+                        if crate::xr_depth_ops_seen().lock().unwrap().insert(key.clone()) {
+                            eprintln!("NativeWebGPU XR depth attachment ops first seen: {key}");
+                        }
+                    }
                     Ok::<_, String>(DepthStencilAttachmentCommand {
                         view: view.view.clone(),
                         depth_ops,
@@ -6026,6 +6315,45 @@ mod upstream_wgpu_native {
                 .device
                 .poll(wgpu::PollType::wait_indefinitely())
                 .map_err(|error| format!("failed waiting for submitted GPU work: {error}"))?;
+            Ok(())
+        }
+
+        pub fn prepare_openxr_texture_for_release(
+            &mut self,
+            texture_id: u64,
+        ) -> Result<(), String> {
+            let texture = &self
+                .resources
+                .textures
+                .get(&texture_id)
+                .ok_or_else(|| format!("NativeXR color texture {texture_id} was not found"))?
+                .texture;
+            let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+            let mut encoder =
+                self.runtime
+                    .device
+                    .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                        label: Some("NativeXR.prepareOpenXRTextureForRelease"),
+                    });
+            {
+                let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("NativeXR.prepareOpenXRTextureForRelease"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &view,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Load,
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    occlusion_query_set: None,
+                    timestamp_writes: None,
+                    multiview_mask: None,
+                });
+            }
+            self.runtime.queue.submit(Some(encoder.finish()));
             Ok(())
         }
 
@@ -8016,6 +8344,8 @@ mod upstream_wgpu_native {
                 device: bootstrap.device,
                 queue: bootstrap.queue,
                 surface,
+                instance,
+                adapter: bootstrap.adapter,
                 surface_config,
                 resolved_adapter_info,
                 max_texture_dimension_2d,
@@ -8123,7 +8453,12 @@ mod upstream_wgpu_native {
             return Ok(None);
         }
 
-        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
+        #[cfg(any(
+            target_os = "macos",
+            target_os = "ios",
+            target_os = "tvos",
+            target_os = "visionos"
+        ))]
         {
             // SAFETY: The caller passes a valid CoreAnimation layer pointer that stays alive
             // for the lifetime of the created surface.
@@ -8343,12 +8678,18 @@ mod upstream_wgpu_native {
         // iOS simulator builds are especially sensitive to delayed submission
         // retirement and can exhibit sustained RSS growth unless we block for
         // completion. Use the stronger mode only on simulator targets.
-        #[cfg(all(any(target_os = "ios", target_os = "tvos"), target_abi = "sim"))]
+        #[cfg(all(
+            any(target_os = "ios", target_os = "tvos", target_os = "visionos"),
+            target_abi = "sim"
+        ))]
         {
             let _ = device.poll(wgpu::PollType::wait_indefinitely());
         }
 
-        #[cfg(all(any(target_os = "ios", target_os = "tvos"), not(target_abi = "sim")))]
+        #[cfg(all(
+            any(target_os = "ios", target_os = "tvos", target_os = "visionos"),
+            not(target_abi = "sim")
+        ))]
         {
             static IOS_SUBMIT_POLL_TICK: std::sync::atomic::AtomicU32 =
                 std::sync::atomic::AtomicU32::new(0);
@@ -8361,7 +8702,7 @@ mod upstream_wgpu_native {
             let _ = device.poll(poll_mode);
         }
 
-        #[cfg(not(any(target_os = "ios", target_os = "tvos")))]
+        #[cfg(not(any(target_os = "ios", target_os = "tvos", target_os = "visionos")))]
         {
             static NON_IOS_SUBMIT_POLL_TICK: std::sync::atomic::AtomicU32 =
                 std::sync::atomic::AtomicU32::new(0);
@@ -8388,7 +8729,12 @@ mod upstream_wgpu_native {
     }
 
     pub fn preferred_wgpu_backends() -> wgpu::Backends {
-        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
+        #[cfg(any(
+            target_os = "macos",
+            target_os = "ios",
+            target_os = "tvos",
+            target_os = "visionos"
+        ))]
         {
             return wgpu::Backends::METAL;
         }
@@ -8402,6 +8748,7 @@ mod upstream_wgpu_native {
             target_os = "macos",
             target_os = "ios",
             target_os = "tvos",
+            target_os = "visionos",
             target_os = "windows"
         )))]
         {
@@ -8560,8 +8907,51 @@ mod upstream_wgpu_native {
                 trace: wgpu::Trace::default(),
             };
 
-            pollster::block_on(selected_adapter.request_device(&descriptor))
+            #[cfg(target_os = "android")]
+            {
+                let hal_adapter = unsafe { selected_adapter.as_hal::<wgpu::hal::api::Vulkan>() }
+                    .ok_or_else(|| "selected Android adapter is not Vulkan-backed".to_string())?;
+                let xr_external_memory_extension =
+                    ash::android::external_memory_android_hardware_buffer::NAME;
+                if !hal_adapter
+                    .physical_device_capabilities()
+                    .supports_extension(xr_external_memory_extension)
+                {
+                    return Err(
+                        "Vulkan adapter does not support VK_ANDROID_external_memory_android_hardware_buffer required by Android OpenXR"
+                            .to_string(),
+                    );
+                }
+
+                let hal_device = unsafe {
+                    hal_adapter.open_with_callback(
+                        required_features,
+                        limits,
+                        &descriptor.memory_hints,
+                        Some(Box::new(move |args| {
+                            if !args.extensions.contains(&xr_external_memory_extension) {
+                                args.extensions.push(xr_external_memory_extension);
+                            }
+                        })),
+                    )
+                }
+                .map_err(|error| {
+                    format!("failed to create XR-compatible Vulkan device: {error}")
+                })?;
+                unsafe {
+                    selected_adapter
+                        .create_device_from_hal::<wgpu::hal::api::Vulkan>(hal_device, &descriptor)
+                }
                 .map(|(device, queue)| (device, queue, required_features))
+                .map_err(|error| format!("failed to register XR-compatible Vulkan device: {error}"))
+            }
+
+            #[cfg(not(target_os = "android"))]
+            {
+                pollster::block_on(selected_adapter.request_device(&descriptor))
+                    .map(|(device, queue)| (device, queue, required_features))
+                    .map_err(|error| error.to_string())
+            }
         };
         #[allow(unused_mut)]
         let mut device_result = make_device(&adapter, &adapter_limits);

@@ -11,6 +11,7 @@
 
 #include <napi/env.h>
 
+#include <condition_variable>
 #include <functional>
 #include <future>
 #include <map>
@@ -84,6 +85,10 @@ namespace Babylon::Graphics
 
         continuation_scheduler<>& BeforeRenderScheduler();
         continuation_scheduler<>& AfterRenderScheduler();
+        continuation_scheduler<>& FrameStartScheduler();
+
+        void IncrementPendingFrameScopes();
+        void DecrementPendingFrameScopes();
 
         void RequestScreenShot(std::function<void(std::vector<uint8_t>)> callback);
 
@@ -128,6 +133,12 @@ namespace Babylon::Graphics
 
         continuation_dispatcher<> m_beforeRenderDispatcher{};
         continuation_dispatcher<> m_afterRenderDispatcher{};
+        continuation_dispatcher<> m_frameStartDispatcher{};
+
+        std::mutex m_frameSyncMutex{};
+        std::condition_variable m_frameSyncCV{};
+        bool m_frameBlocked{true};
+        size_t m_pendingFrameScopes{};
 
         std::queue<std::function<void(std::vector<uint8_t>)>> m_screenShotCallbacks{};
         std::mutex m_screenShotCallbacksMutex{};

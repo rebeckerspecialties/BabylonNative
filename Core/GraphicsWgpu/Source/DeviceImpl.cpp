@@ -456,6 +456,13 @@ namespace Babylon::Graphics
             return;
         }
 
+        {
+            std::lock_guard lock{m_frameSyncMutex};
+            m_frameBlocked = false;
+        }
+        m_frameSyncCV.notify_all();
+
+        m_frameStartDispatcher.tick(*cancellationSource);
         m_beforeRenderDispatcher.tick(*cancellationSource);
     }
 
@@ -513,6 +520,12 @@ namespace Babylon::Graphics
         if (!cancellationSource)
         {
             return;
+        }
+
+        {
+            std::unique_lock lock{m_frameSyncMutex};
+            m_frameSyncCV.wait(lock, [this] { return m_pendingFrameScopes == 0; });
+            m_frameBlocked = true;
         }
 
         if (tickBeforeRender)
@@ -629,6 +642,27 @@ namespace Babylon::Graphics
     continuation_scheduler<>& DeviceImpl::AfterRenderScheduler()
     {
         return m_afterRenderDispatcher.scheduler();
+    }
+
+    continuation_scheduler<>& DeviceImpl::FrameStartScheduler()
+    {
+        return m_frameStartDispatcher.scheduler();
+    }
+
+    void DeviceImpl::IncrementPendingFrameScopes()
+    {
+        std::unique_lock lock{m_frameSyncMutex};
+        m_frameSyncCV.wait(lock, [this] { return !m_frameBlocked; });
+        ++m_pendingFrameScopes;
+    }
+
+    void DeviceImpl::DecrementPendingFrameScopes()
+    {
+        {
+            std::lock_guard lock{m_frameSyncMutex};
+            --m_pendingFrameScopes;
+        }
+        m_frameSyncCV.notify_all();
     }
 
     void DeviceImpl::RequestScreenShot(std::function<void(std::vector<uint8_t>)> callback)

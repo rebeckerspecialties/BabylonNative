@@ -242,10 +242,16 @@ elseif(VISIONOS)
     endif()
 
     if(BABYLON_VISIONOS_SIMULATOR_BUILD)
-        set(RUST_TARGET_TRIPLE "aarch64-apple-xros-sim")
+        set(RUST_TARGET_TRIPLE "aarch64-apple-visionos-sim")
     else()
-        set(RUST_TARGET_TRIPLE "aarch64-apple-xros")
+        set(RUST_TARGET_TRIPLE "aarch64-apple-visionos")
     endif()
+    set(RUST_BUILD_STD_ARGS "-Z" "build-std=std,panic_abort")
+    set(RUST_RELEASE_BUILD_STD_ARGS "")
+    list(APPEND RUST_PLATFORM_ENV
+        "RUSTC_BOOTSTRAP=1"
+        "CARGO_PROFILE_DEV_PANIC=abort"
+        "CARGO_PROFILE_RELEASE_PANIC=abort")
 elseif(APPLE)
     if(CMAKE_OSX_ARCHITECTURES MATCHES "(^|;)x86_64(;|$)")
         set(RUST_TARGET_TRIPLE "x86_64-apple-darwin")

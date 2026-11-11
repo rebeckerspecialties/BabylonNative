@@ -51,6 +51,17 @@ struct BabylonWgpuMappedRangeWrite final
     size_t data_len{};
 };
 
+struct BabylonWgpuVulkanBinding final
+{
+    uint64_t instance{};
+    uint64_t physical_device{};
+    uint64_t device{};
+    uint64_t queue{};
+    uint32_t api_version{};
+    uint32_t queue_family_index{};
+    uint32_t queue_index{};
+};
+
 extern "C"
 {
     // Error kinds: 1 validation, 2 out-of-memory, 3 internal, 4 physical device loss.
@@ -111,6 +122,8 @@ extern "C"
     uint64_t babylon_wgpu_native_create_texture(const char* descriptor_json);
     uint64_t babylon_wgpu_native_import_metal_texture(const void* native_texture, const char* descriptor_json);
     void* babylon_wgpu_native_get_metal_device();
+    uint64_t babylon_wgpu_native_import_vulkan_texture(uint64_t native_image, const char* descriptor_json);
+    bool babylon_wgpu_native_get_vulkan_binding(BabylonWgpuVulkanBinding* output_binding);
     uint64_t babylon_wgpu_native_create_texture_view(uint64_t texture_id, const char* descriptor_json);
     uint64_t babylon_wgpu_native_create_sampler(const char* descriptor_json);
     uint64_t babylon_wgpu_native_create_shader_module(const char* code);
@@ -247,6 +260,7 @@ extern "C"
     bool babylon_wgpu_native_compute_pass_end(uint64_t pass_id);
     bool babylon_wgpu_native_queue_submit(const uint64_t* command_buffer_ids, size_t command_buffer_count);
     bool babylon_wgpu_native_queue_wait_submitted_work();
+    bool babylon_wgpu_native_prepare_openxr_texture_for_release(uint64_t texture_id);
     bool babylon_wgpu_native_queue_write_texture(
         const char* destination_json,
         const uint8_t* data,
