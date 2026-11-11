@@ -28,19 +28,19 @@ FetchContent_Declare(base-n
     EXCLUDE_FROM_ALL)
 FetchContent_Declare(bx
     GIT_REPOSITORY https://github.com/bkaradzic/bx.git
-    GIT_TAG dae5c595b767b94fc2a4d5177815ef22dd1f3f2f
+    GIT_TAG 57548da89a07771c5b0f8a6711149be70e08a329
     EXCLUDE_FROM_ALL)
 FetchContent_Declare(bimg
     GIT_REPOSITORY https://github.com/bkaradzic/bimg.git
-    GIT_TAG 9bfbd6493b48a15238f2d1374a718ec026524515
+    GIT_TAG 77bebb28e12956bfced82bb2cf7c19ac5735b6c8
     EXCLUDE_FROM_ALL)
 FetchContent_Declare(bgfx
     GIT_REPOSITORY https://github.com/BabylonJS/bgfx.git
-    GIT_TAG 5a0a89260aa1affd336707bb935282249e7bf72f
+    GIT_TAG 5fe1c1bb5798edfc7ff21521bfa9f14c3a4ba035
     EXCLUDE_FROM_ALL)
 FetchContent_Declare(glslang
     GIT_REPOSITORY https://github.com/BabylonJS/glslang.git
-    GIT_TAG 284e4301e5a6b44b279635276588db7cdd942624
+    GIT_TAG f02debc9c37c4026a5ae2f1229e7f08c7df767e4
     EXCLUDE_FROM_ALL)
 # The codec does not use the transcoder's external dependencies.
 set(_draco_submodules "")
@@ -162,6 +162,7 @@ set(CMAKE_REQUIRED_QUIET TRUE)
 option(BABYLON_NATIVE_BUILD_APPS "Build Babylon Native apps." ${PROJECT_IS_TOP_LEVEL})
 option(BABYLON_NATIVE_INSTALL "Include the install target." ${PROJECT_IS_TOP_LEVEL})
 option(BABYLON_DEBUG_TRACE "Enable debug trace." OFF)
+option(BABYLON_NATIVE_BGFX_TRACE "Forward bgfx trace messages (BX_CONFIG_DEBUG builds) to debug output. Debug checks are unaffected." ON)
 
 # WARNING: This is experimental. Only use it if you can ensure that your application will properly handle thread affinity.
 option(BABYLON_NATIVE_CHECK_THREAD_AFFINITY "Checks thread safety in the graphics device calls. It can be removed if hosting application ensures thread coherence." ON)

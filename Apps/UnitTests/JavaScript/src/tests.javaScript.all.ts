@@ -1,4 +1,4 @@
-import * as Mocha from "mocha";
+import Mocha from "mocha";
 import { expect } from "chai";
 import { registerTriangleStripDepthTests } from "./tests.nativeEngine.triangleStripDepth";
 import { registerIblCdfTests } from "./tests.nativeEngine.iblCdf";
@@ -1506,6 +1506,12 @@ describe("Canvas2D", function () {
     expect(function () {
       ctx.letterSpacing = `${"9".repeat(400)}px`;
     }).to.not.throw();
+  });
+
+  it("keeps every word of an unquoted multi-word font family", function () {
+    const ctx = createContext();
+    ctx.font = "normal normal 18px Times  New Roman";
+    expect(ctx.font).to.equal('18px "Times New Roman"');
   });
 
   it("rejects a createImageData source whose dimensions are not valid extents", function () {

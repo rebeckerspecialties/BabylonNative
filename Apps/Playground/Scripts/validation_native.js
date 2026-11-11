@@ -3959,12 +3959,15 @@ fragmentOutputs.color=color;
     Promise.all([
         loadFontAssetAsync("app:///Scripts/RobotoSlab.ttf"),
         loadFontAssetAsync("app:///Scripts/DroidSans.ttf"),
-        loadFontAssetAsync("app:///Scripts/Arimo-Regular.ttf")
+        loadFontAssetAsync("app:///Scripts/Arimo-Regular.ttf"),
+        loadFontAssetAsync("app:///Scripts/Tinos-Regular.ttf")
     ]).then(function (fonts) {
         return _native.Canvas.loadTTFAsync("droidsans", fonts[0]).then(function () {
             return _native.Canvas.loadTTFAsync("monospace", fonts[1]);
         }).then(function () {
             return _native.Canvas.loadTTFAsync("Arial", fonts[2]);
+        }).then(function () {
+            return _native.Canvas.loadTTFAsync("Times New Roman", fonts[3]);
         });
     }).then(function () {
         _native.RootUrl = "https://playground.babylonjs.com";

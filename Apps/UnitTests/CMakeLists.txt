@@ -17,7 +17,8 @@ set(TEST_ASSETS
     "tests.externalTexture.render.js"
     "tests.javaScript.all.js"
     "tests.shaderCache.basicScene.js"
-    "tests.shaderCompilation.comprehensiveGLSL.js")
+    "tests.shaderCompilation.comprehensiveGLSL.js"
+    "tests.wgpu.js")
 set(TEST_ASSET_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/${CMAKE_CFG_INTDIR}/Assets")
 list(TRANSFORM TEST_ASSETS PREPEND "${TEST_ASSET_DIRECTORY}/")
 
@@ -75,14 +76,6 @@ set(UNITTEST_LIBRARIES
 # graphics backend. The NativeEngine branch tracks upstream's test list so a bgfx build of this
 # tree keeps upstream's coverage; the NativeWebGPU branch is this fork's.
 if(TARGET NativeEngine)
-    list(APPEND TEST_ASSETS
-        "JavaScript/dist/tests.externalTexture.deviceLoss.js"
-        "JavaScript/dist/tests.externalTexture.layerCount.js"
-        "JavaScript/dist/tests.externalTexture.msaa.js"
-        "JavaScript/dist/tests.externalTexture.render.js"
-        "JavaScript/dist/tests.javaScript.all.js"
-        "JavaScript/dist/tests.shaderCache.basicScene.js"
-        "JavaScript/dist/tests.shaderCompilation.comprehensiveGLSL.js")
     list(APPEND SOURCES
         "Source/Tests.BgfxCallback.cpp"
         "Source/Tests.Canvas.TextMetrics.cpp"
@@ -114,6 +107,7 @@ if(TARGET NativeEngine)
         "Source/Tests.ShaderCompilation.cpp"
         "Source/Tests.ShaderCompilation.FragCoord.cpp"
         "Source/Tests.UniformPadding.cpp"
+        "Source/DeviceImplTestAccess.h"
         "Source/Helpers.h"
         "Source/Helpers.${GRAPHICS_API}.${BABYLON_NATIVE_PLATFORM_IMPL_EXT}")
     list(APPEND UNITTEST_LIBRARIES
@@ -170,8 +164,6 @@ if(TARGET NativeEngine)
         list(APPEND ADDITIONAL_COMPILE_DEFINITIONS HAS_RENDERDOC)
     endif()
 elseif(TARGET NativeWebGPU)
-    list(APPEND TEST_ASSETS
-        "JavaScript/dist/tests.wgpu.js")
     if(APPLE)
         list(APPEND SOURCES
             "Source/MetalCppImplementation.cpp")

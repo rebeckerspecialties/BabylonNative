@@ -218,12 +218,27 @@ tasks.register('copyFiles') {
         }
         copy {
             from '../../../node_modules/babylonjs-serializers'
-            include 'babylonjs.serializers.js'
+            include "babylonjs.serializers.js"
+            into 'src/main/assets/Scripts'
+        }
+        copy {
+            from '../../../node_modules/babylonjs-procedural-textures'
+            include "babylonjs.proceduralTextures.js"
+            into 'src/main/assets/Scripts'
+        }
+        copy {
+            from '../../../node_modules/earcut/dist'
+            include "earcut.min.js"
+            into 'src/main/assets/Scripts'
+        }
+        copy {
+            from '../../../node_modules/@babylonjs/havok/lib/umd'
+            include "HavokPhysics_umd.js", "HavokPhysics.wasm"
             into 'src/main/assets/Scripts'
         }
         copy {
             from '../../../Dependencies'
-            include '*.js'
+            include "*.js", "*.ttf", "*.txt"
             into 'src/main/assets/Scripts'
         }
         copy {
@@ -235,6 +250,10 @@ tasks.register('copyFiles') {
             include '*.jpg'
             include '*.ktx2'
             into 'src/main/assets/Scripts'
+        }
+        copy {
+            from '../../ReferenceImages'
+            into 'src/main/assets/ReferenceImages'
         }
     }
 }

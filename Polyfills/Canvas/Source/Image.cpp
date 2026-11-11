@@ -1,12 +1,7 @@
-#include <bgfx/bgfx.h>
-#include <map>
-#include "Canvas.h"
 #include "Image.h"
-#include "Context.h"
 #include "NativeInstanceRegistry.h"
-#include <functional>
-#include <sstream>
-#include <assert.h>
+#include <bx/error.h>
+#include <iterator>
 #include <vector>
 #ifdef BABYLON_NATIVE_PLUGIN_NATIVEENGINE_LOAD_IMAGES
 #include <Babylon/Graphics/ImageFormat.h>
@@ -14,7 +9,6 @@
 #include <bimg/decode.h>
 #endif
 #include "nanovg/nanovg.h"
-#include <cassert>
 #include <stdexcept>
 #include <napi/pointer.h>
 #include <basen.hpp>
@@ -62,7 +56,6 @@ namespace Babylon::Polyfills::Internal
                 InstanceAccessor("naturalWidth", &NativeCanvasImage::GetNaturalWidth, nullptr),
                 InstanceAccessor("naturalHeight", &NativeCanvasImage::GetNaturalHeight, nullptr),
                 InstanceAccessor("src", &NativeCanvasImage::GetSrc, &NativeCanvasImage::SetSrc),
-                // TODO: This should be set directly on the JS Object rather than via an instanceAccessor see: https://github.com/BabylonJS/BabylonNative/issues/1030
                 InstanceAccessor("_imageContainer", &NativeCanvasImage::GetImageContainer, nullptr),
             });
 
@@ -120,14 +113,14 @@ namespace Babylon::Polyfills::Internal
         return Napi::Value::From(Env(), m_height);
     }
 
-    Napi::Value NativeCanvasImage::GetNaturalWidth(const Napi::CallbackInfo&)
+    Napi::Value NativeCanvasImage::GetNaturalWidth(const Napi::CallbackInfo& info)
     {
-        return Napi::Value::From(Env(), m_width);
+        return GetWidth(info);
     }
 
-    Napi::Value NativeCanvasImage::GetNaturalHeight(const Napi::CallbackInfo&)
+    Napi::Value NativeCanvasImage::GetNaturalHeight(const Napi::CallbackInfo& info)
     {
-        return Napi::Value::From(Env(), m_height);
+        return GetHeight(info);
     }
 
     Napi::Value NativeCanvasImage::GetSrc(const Napi::CallbackInfo&)
@@ -151,7 +144,7 @@ namespace Babylon::Polyfills::Internal
 #ifdef BABYLON_NATIVE_PLUGIN_NATIVEENGINE_LOAD_IMAGES
         ReleaseImage();
         auto& allocator = Graphics::DeviceContext::GetDefaultAllocator();
-        m_imageContainer = bimg::imageParse(&allocator, buffer.data(), static_cast<uint32_t>(buffer.size_bytes()));
+        m_imageContainer = bimg::imageParse(&allocator, buffer.data(), static_cast<uint32_t>(buffer.size_bytes()), bimg::TextureFormat::Count, bx::ErrorIgnore{});
         if (m_imageContainer != nullptr)
         {
             m_imageContainer = Graphics::NormalizePngImage(allocator, m_imageContainer);
@@ -197,7 +190,6 @@ namespace Babylon::Polyfills::Internal
         m_cancellationSource->cancel();
         m_cancellationSource = std::make_shared<arcana::cancellation_source>();
 
-        // try with base64
         static const std::string base64{"base64,"};
         const auto pos = text.find(base64);
         if (pos != std::string::npos)
@@ -222,7 +214,6 @@ namespace Babylon::Polyfills::Internal
             return;
         }
 
-        // try with URL
         UrlLib::UrlRequest request{};
         request.Open(UrlLib::UrlMethod::Get, NormalizeImageUrl(text));
         request.ResponseType(UrlLib::UrlResponseType::Buffer);
@@ -266,7 +257,6 @@ namespace Babylon::Polyfills::Internal
     void NativeCanvasImage::HandleLoadImageError(const Napi::Object& self, const Napi::Error& error)
     {
         // Match HTML <img>: fire onerror when set; otherwise fail silently.
-        // Throwing here made GUI image tests flaky (async decode after/during ready).
         const auto onerror = self.Get("onerror");
         if (onerror.IsFunction())
         {
