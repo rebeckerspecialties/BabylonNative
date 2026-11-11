@@ -72,13 +72,13 @@ FetchContent_Declare(webgpu_headers
     URL https://github.com/webgpu-native/webgpu-headers/archive/673658bc2bd70ec39fc55ebe6bb0173cf6d0a603.tar.gz
     URL_HASH SHA256=6754c6c2465c79a954f7c04c7890c9f00b7ecce8addbe01b5056e860ba3933e6
     EXCLUDE_FROM_ALL)
-# Keep the public wgpu 30 pin while the runtime/test PR split is validated.
-# The reviewed runtime-only delta is packaged locally; see Patches/wgpu-native.
+# Published parity runtime based on current wgpu-native trunk.
+# Align its core/hal dependencies with the workspace's wgpu 30.0.1 release.
 FetchContent_Declare(wgpu_native
     GIT_REPOSITORY https://github.com/rebeckerspecialties/wgpu-native.git
-    GIT_TAG c8df6cb99795a4cab585355582ce53e8111c9c0d
+    GIT_TAG 8322fe1a94ad0193c3393d03fd2a2f3c565e320b
     PATCH_COMMAND ${CMAKE_COMMAND}
-        "-DPATCH_FILE=${CMAKE_CURRENT_LIST_DIR}/Patches/wgpu-native/0001-reviewed-parity-runtime.patch"
+        "-DPATCH_FILE=${CMAKE_CURRENT_LIST_DIR}/Patches/wgpu-native/0001-wgpu-30.0.1.patch"
         -P "${CMAKE_CURRENT_LIST_DIR}/Patches/apply_patch_if_needed.cmake"
     EXCLUDE_FROM_ALL)
 FetchContent_Declare(metal-cpp

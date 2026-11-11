@@ -49,8 +49,9 @@ runtime-first/test-second branches, attribution, current upstream pins, and
 validation commands. Those sibling repositories are durable work, not build
 artifacts to clean away. Use `configure-integration.mjs --canonical` and
 `validate-m4.mjs --canonical --run` to target the merged checkout. Ordinary
-builds apply `Patches/wgpu-native/0001-reviewed-parity-runtime.patch` to the
-public dependency pin; a source override must already contain those fixes.
+builds use the published parity runtime at `8322fe1a` and apply
+`Patches/wgpu-native/0001-wgpu-30.0.1.patch` to align its wgpu dependencies
+with the workspace. A source override must already contain that patch.
 
 The local M4 Max exposes Metal and runs real WebGPU workloads with full
 execution access. A missing-adapter result in a restricted process does not

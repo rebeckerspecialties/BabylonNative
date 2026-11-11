@@ -98,10 +98,6 @@ function readSeries() {
         .map((line) => line.trim())
         .filter((line) => line.length > 0 && !line.startsWith("#"));
 
-    if (patches.length === 0) {
-        fail(`patch series is empty: ${seriesPath}`);
-    }
-
     for (const patch of patches) {
         const patchPath = path.join(patchesDir, patch);
         if (!fs.existsSync(patchPath)) {
@@ -158,6 +154,9 @@ function applyPatch(dir, patch) {
 }
 
 function preflightApplyStack(targetDir, patches) {
+    if (patches.length === 0) {
+        return;
+    }
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "babylonjs-patch-stack-"));
     const tempWorktree = path.join(tempRoot, "Babylon.js");
 

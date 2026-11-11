@@ -1,3 +1,4 @@
 # Babylon.js source patch stack for NativeWebGPU local validation.
 # The apply script treats missing or non-applying patches as hard failures.
-0002-webgpu-render-command-stream-contract.patch
+# No source patches are required for Babylon.js 9.35.0.
+# Recorder fallback and atomicity fixes shipped upstream in 9.34.0.

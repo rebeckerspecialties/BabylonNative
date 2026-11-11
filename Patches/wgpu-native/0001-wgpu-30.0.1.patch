@@ -1,0 +1,75 @@
+diff --git a/Cargo.toml b/Cargo.toml
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -34,26 +34,26 @@ resolver = "2"
+ [workspace.dependencies.wgpu]
+ package = "wgpu"
+ git = "https://github.com/gfx-rs/wgpu.git"
+-rev = "1a3a4cc27d8082dfd07beaf76dcf3dfb78dda321"
++rev = "40f4a34ebaf56f9a046231f54125ad046239d3f3"
+ 
+ [workspace.dependencies.wgc]
+ package = "wgpu-core"
+ git = "https://github.com/gfx-rs/wgpu.git"
+-rev = "1a3a4cc27d8082dfd07beaf76dcf3dfb78dda321"
++rev = "40f4a34ebaf56f9a046231f54125ad046239d3f3"
+ 
+ [workspace.dependencies.wgt]
+ package = "wgpu-types"
+ git = "https://github.com/gfx-rs/wgpu.git"
+-rev = "1a3a4cc27d8082dfd07beaf76dcf3dfb78dda321"
++rev = "40f4a34ebaf56f9a046231f54125ad046239d3f3"
+ 
+ [workspace.dependencies.hal]
+ package = "wgpu-hal"
+ git = "https://github.com/gfx-rs/wgpu.git"
+-rev = "1a3a4cc27d8082dfd07beaf76dcf3dfb78dda321"
++rev = "40f4a34ebaf56f9a046231f54125ad046239d3f3"
+ 
+ [workspace.dependencies.naga]
+ package = "naga"
+ git = "https://github.com/gfx-rs/wgpu.git"
+-rev = "1a3a4cc27d8082dfd07beaf76dcf3dfb78dda321"
++rev = "40f4a34ebaf56f9a046231f54125ad046239d3f3"
+ 
+ [lib]
+diff --git a/src/lib.rs b/src/lib.rs
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -5223,9 +5223,6 @@ pub extern "C" fn wgpuGetWgslLanguageFeatures() -> native::WGPUWgslLanguageFeatures {
+                     ImplementedLanguageExtension::PointerCompositeAccess => {
+                         native::WGPUWgslLanguageFeatures_PointerCompositeAccess
+                     }
+-                    ImplementedLanguageExtension::ImmediateAddressSpace => {
+-                        native::WGPUWgslLanguageFeatures_ImmediateAddressSpace
+-                    }
+                 }
+             },
+         )
+@@ -6390,7 +6387,7 @@
+                 panic!("unknown WGPUBlasGeometryKind: {}", entry.geometryKind)
+             };
+             wgc::ray_tracing::BlasBuildEntry {
+-                blas: blas_id,
++                blas_id,
+                 geometries,
+             }
+         });
+@@ -6406,7 +6403,7 @@
+                     inst.as_ref()
+                         .map(|(blas_id, transform, custom_data, mask)| {
+                             wgc::ray_tracing::TlasInstance {
+-                                blas: *blas_id,
++                                blas_id: *blas_id,
+                                 transform,
+                                 custom_data: *custom_data,
+                                 mask: *mask,
+@@ -6415,7 +6412,7 @@
+                 })
+                 .collect();
+             wgc::ray_tracing::TlasPackage {
+-                tlas: tlas_id,
++                tlas_id,
+                 instances: Box::new(instances.into_iter()),
+                 lowest_unmodified: pkg.lowestUnmodified,
+             }
