@@ -3027,18 +3027,30 @@ fragmentOutputs.color=color;
         return downscaled;
     }
 
+    // The size the comparison runs at. References are normally captured at the
+    // comparison size divided by the engine's hardware scaling level, but a
+    // playground that sets its own scaling level (e.g. 0.5 for supersampling) still
+    // has a reference at the plain comparison size, as a browser screenshot would be.
+    function getComparisonDimensions(referenceLength) {
+        const hardwareScalingLevel = getValidationHardwareScalingLevel();
+        const scaledWidth = Math.round(comparisonWidth / hardwareScalingLevel);
+        const scaledHeight = Math.round(comparisonHeight / hardwareScalingLevel);
+        if (referenceLength === scaledWidth * scaledHeight * 4) {
+            return { width: scaledWidth, height: scaledHeight };
+        }
+        if (referenceLength === comparisonWidth * comparisonHeight * 4) {
+            return { width: comparisonWidth, height: comparisonHeight };
+        }
+        throw new Error(`Reference data length (${referenceLength}) did not match expected comparison size ${scaledWidth}x${scaledHeight} or ${comparisonWidth}x${comparisonHeight}.`);
+    }
+
     function normalizeRenderDataForComparison(renderData, screenshotWidth, screenshotHeight, referenceData) {
         if (referenceData.length === renderData.length) {
             return renderData;
         }
 
         const hardwareScalingLevel = getValidationHardwareScalingLevel();
-        const targetWidth = Math.round(comparisonWidth / hardwareScalingLevel);
-        const targetHeight = Math.round(comparisonHeight / hardwareScalingLevel);
-        const expectedReferenceLength = targetWidth * targetHeight * 4;
-        if (referenceData.length !== expectedReferenceLength) {
-            throw new Error(`Reference data length (${referenceData.length}) did not match expected comparison size ${targetWidth}x${targetHeight}.`);
-        }
+        const { width: targetWidth, height: targetHeight } = getComparisonDimensions(referenceData.length);
 
         const sourcePixelCount = renderData.length / 4;
         if (!screenshotWidth || !screenshotHeight || screenshotWidth * screenshotHeight !== sourcePixelCount) {
@@ -3071,7 +3083,7 @@ fragmentOutputs.color=color;
 
             if (differencesCount === 0) {
                 const pixel = index / 4;
-                const width = Math.round(comparisonWidth / getValidationHardwareScalingLevel());
+                const width = getComparisonDimensions(referenceData.length).width;
                 console.log(`First pixel off at ${index} (pixel ${pixel} @ x=${pixel % width}, y=${Math.floor(pixel / width)}): Value: (${renderData[index]}, ${renderData[index + 1]}, ${renderData[index + 2]}) - Expected: (${referenceData[index]}, ${referenceData[index + 1]}, ${referenceData[index + 2]}) `);
             }
 
@@ -3091,9 +3103,7 @@ fragmentOutputs.color=color;
 
         const error = (differencesCount * 100) / (size / 4) > errorRatio;
 
-        const hardwareScalingLevel = getValidationHardwareScalingLevel();
-        const width = comparisonWidth / hardwareScalingLevel;
-        const height = comparisonHeight / hardwareScalingLevel;
+        const { width, height } = getComparisonDimensions(referenceData.length);
 
         if (error) {
             TestUtils.writePNG(referenceData, width, height, TestUtils.getOutputDirectory() + "/Errors/" + test.referenceImage);
@@ -3119,7 +3129,19 @@ fragmentOutputs.color=color;
 
             const defaultErrorRatio = 2.5;
 
-            if (compareFunction(test, screenshot, referenceImage, test.threshold || 25, test.errorRatio || defaultErrorRatio, screenshotWidth, screenshotHeight)) {
+            // A comparison that throws (for example a readback whose size does not
+            // match the reference image) is thrown from a readback callback, where
+            // nothing catches it and the run would stall forever. Fail the test instead.
+            let comparisonFailed;
+            try {
+                comparisonFailed = compareFunction(test, screenshot, referenceImage, test.threshold || 25, test.errorRatio || defaultErrorRatio, screenshotWidth, screenshotHeight);
+            } catch (e) {
+                comparisonFailed = true;
+                console.error("Test '" + (test.title || "(unnamed)") + "' comparison threw: " + (e && e.message ? e.message : e)
+                    + " (render bytes=" + (screenshot ? screenshot.length : "none") + ", readback=" + screenshotWidth + "x" + screenshotHeight + ")");
+            }
+
+            if (comparisonFailed) {
                 testRes = false;
                 console.log("Test '" + (test.title || "(unnamed)") + "' failed (pixel comparison)");
                 logFailureDiagnostics(test);
