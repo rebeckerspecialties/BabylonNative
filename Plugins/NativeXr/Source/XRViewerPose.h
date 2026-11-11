@@ -2,6 +2,8 @@
 
 #include "XRView.h"
 
+#include <optional>
+
 namespace Babylon
 {
     class XRViewerPose : public Napi::ObjectWrap<XRViewerPose>
@@ -39,13 +41,25 @@ namespace Babylon
         {
         }
 
-        void Update(const Napi::CallbackInfo& info, const xr::System::Session::Frame& frame)
+        void Update(
+            const Napi::CallbackInfo& info,
+            const xr::System::Session::Frame& frame,
+            const XRRigidTransform* referenceSpaceOffset)
         {
+            const auto referenceSpaceInverse = referenceSpaceOffset == nullptr
+                ? std::optional<xr::Pose>{}
+                : std::optional<xr::Pose>{InvertPose(referenceSpaceOffset->GetNativePose())};
+            const auto adjustSpace = [&referenceSpaceInverse](const xr::Space& space) {
+                return referenceSpaceInverse.has_value()
+                    ? xr::Space{ComposePoses(*referenceSpaceInverse, space.Pose)}
+                    : space;
+            };
+
             // Update the transform, for now assume that the pose of the first view if it exists represents the viewer transform.
             // This is correct for devices with a single view, but is likely incorrect for devices with multiple views (eg. VR/AR headsets with binocular views).
             if (frame.Views.size() > 0)
             {
-                m_transform.Update(frame.Views[0].Space, false);
+                m_transform.Update(adjustSpace(frame.Views[0].Space), false);
             }
 
             // Update the views array if necessary.
@@ -77,7 +91,11 @@ namespace Babylon
             for (uint32_t idx = 0; idx < static_cast<uint32_t>(frame.Views.size()); ++idx)
             {
                 const auto& view = frame.Views[idx];
-                m_views[idx]->Update(idx, view.ProjectionMatrix, view.Space, view.IsFirstPersonObserver);
+                m_views[idx]->Update(
+                    idx,
+                    view.ProjectionMatrix,
+                    adjustSpace(view.Space),
+                    view.IsFirstPersonObserver);
             }
 
             // Check the frame to see if it has valid tracking, if it does not then the position should

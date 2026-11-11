@@ -75,6 +75,20 @@ namespace xr
         size_t Depth{};
     };
 
+    // Opaque Vulkan handles supplied by the embedding graphics backend.
+    // Keeping Vulkan headers out of this public interface lets the existing
+    // ARKit/Metal implementation remain unchanged on Apple platforms.
+    struct VulkanGraphicsBinding
+    {
+        uintptr_t Instance{};
+        uintptr_t PhysicalDevice{};
+        uintptr_t Device{};
+        uintptr_t Queue{};
+        uint32_t ApiVersion{};
+        uint32_t QueueFamilyIndex{};
+        uint32_t QueueIndex{};
+    };
+
     struct Vector3f
     {
         float X{0.f};

@@ -2,6 +2,7 @@
 
 #include "Constants.h"
 #include "XRGPUBinding.h"
+#include "JsInstanceOf.h"
 #include "XRGPUSubImage.h"
 #include "XRProjectionLayer.h"
 #include "XRSession.h"
@@ -26,8 +27,7 @@ namespace Babylon
             }
 
             const auto session = info[0].As<Napi::Object>();
-            const auto constructor = info.Env().Global().Get("XRSession");
-            if (!constructor.IsFunction() || !session.InstanceOf(constructor.As<Napi::Function>()))
+            if (!IsInstanceOfGlobalClass(session, "XRSession"))
             {
                 throw std::runtime_error{"XRGPUBinding first argument must be an XRSession."};
             }

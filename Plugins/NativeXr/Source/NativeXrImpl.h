@@ -121,6 +121,7 @@ namespace Babylon
                 Napi::FunctionReference DestroyRenderTexture{};
                 std::vector<ViewConfiguration*> ActiveViewConfigurations{};
                 std::unordered_map<ViewConfiguration*, uint32_t> ViewConfigurationStartViewIdx{};
+                std::vector<uint64_t> FrameColorTextureIds{};
                 std::unordered_map<void*, ViewConfiguration> TextureToViewConfigurationMap{};
                 uint32_t LastTextureWidth{};
                 uint32_t LastTextureHeight{};

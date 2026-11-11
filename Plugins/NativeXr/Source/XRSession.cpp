@@ -5,6 +5,7 @@
 #include <XR.h>
 #include <Babylon/Graphics/DeviceContext.h>
 
+#include "JsInstanceOf.h"
 #include "Constants.h"
 #include "PointerEvent.h"
 #include "XRWebGLBinding.h"
@@ -26,10 +27,55 @@
 #include "XRSession.h"
 #include "XRFrame.h"
 
+#include <cstdio>
+#include <cstdlib>
+
+#if defined(__ANDROID__)
+#include <android/log.h>
+#endif
+
 namespace Babylon
 {
     namespace
     {
+#if defined(__ANDROID__)
+        void LogSessionStage(const char* stage)
+        {
+            __android_log_print(ANDROID_LOG_INFO, "BabylonNative", "NativeXR requestSession: %s", stage);
+        }
+
+        void LogSessionFailure(const std::exception_ptr& exception)
+        {
+            try
+            {
+                std::rethrow_exception(exception);
+            }
+            catch (const std::exception& error)
+            {
+                __android_log_print(
+                    ANDROID_LOG_ERROR,
+                    "BabylonNative",
+                    "NativeXR requestSession failed: %s",
+                    error.what());
+            }
+            catch (...)
+            {
+                __android_log_print(
+                    ANDROID_LOG_ERROR,
+                    "BabylonNative",
+                    "NativeXR requestSession failed with an unknown exception.");
+            }
+        }
+#else
+        void LogSessionStage(const char*)
+        {
+        }
+
+        void LogSessionFailure(const std::exception_ptr&)
+        {
+        }
+#endif
+
         void SetXRGamepadObjectData(Napi::Object& jsInputSource, Napi::Object& jsGamepadObject, xr::System::Session::Frame::InputSource& inputSource)
         {
             auto env = jsInputSource.Env();
@@ -241,14 +287,17 @@ namespace Babylon
 
         Napi::Promise XRSession::CreateAsync(const Napi::CallbackInfo& info, std::shared_ptr<Plugins::NativeXr::Impl> nativeXr)
         {
-            auto jsSession{ Napi::Persistent(info.Env().Global().Get(JS_CLASS_NAME).As<Napi::Function>().New({info[0], info[1]})) };
+            LogSessionStage("creating JavaScript session");
+            auto sessionInit = info.Length() > 1 && info[1].IsObject()
+                ? info[1].As<Napi::Object>()
+                : Napi::Object::New(info.Env());
+            auto jsSession{ Napi::Persistent(info.Env().Global().Get(JS_CLASS_NAME).As<Napi::Function>().New({info[0], sessionInit})) };
             auto& session{ *XRSession::Unwrap(jsSession.Value()) };
             session.m_xr = std::move(nativeXr);
 
-            auto featureObject = info[1].As<Napi::Object>();
-            if (featureObject.Has("trackedImages"))
+            if (sessionInit.Has("trackedImages"))
             {
-                const auto napiTrackedImages{ featureObject.Get("trackedImages").As<Napi::Array>() };
+                const auto napiTrackedImages{ sessionInit.Get("trackedImages").As<Napi::Array>() };
                 session.m_imageTrackingRequests.resize(napiTrackedImages.Length());
 
                 // Create the tracked image buffer.
@@ -278,15 +327,18 @@ namespace Babylon
             }
 
             auto deferred{ Napi::Promise::Deferred::New(info.Env()) };
+            LogSessionStage("starting platform session");
             session.m_xr->BeginSessionAsync()
                 .then(session.m_runtimeScheduler, arcana::cancellation::none(),
                     [deferred, jsSession{ std::move(jsSession) }, env{ info.Env() }](const arcana::expected<void, std::exception_ptr>& result) {
                 if (result.has_error())
                 {
+                    LogSessionFailure(result.error());
                     deferred.Reject(Napi::Error::New(env, result.error()).Value());
                 }
                 else
                 {
+                    LogSessionStage("platform session started");
                     deferred.Resolve(jsSession.Value());
                 }
             });
@@ -488,8 +540,7 @@ namespace Babylon
                 if (layers.Length() == 1)
                 {
                     const auto layerValue = layers.Get(uint32_t{0});
-                    const auto projectionLayerConstructor = info.Env().Global().Get("XRProjectionLayer").As<Napi::Function>();
-                    if (!layerValue.IsObject() || !layerValue.As<Napi::Object>().InstanceOf(projectionLayerConstructor))
+                    if (!layerValue.IsObject() || !IsInstanceOfGlobalClass(layerValue.As<Napi::Object>(), "XRProjectionLayer"))
                     {
                         throw std::runtime_error{"NativeXR renderState.layers only supports XRProjectionLayer objects."};
                     }
@@ -717,6 +768,17 @@ namespace Babylon
         Napi::Value XRSession::RequestAnimationFrame(const Napi::CallbackInfo& info)
         {
             Napi::Function callback{ info[0].As<Napi::Function>() };
+
+            {
+                // Mirrors the NativeXrImpl trace: this is the JS end of the XR
+                // frame loop, so a run that stops here never asked for a frame.
+                static const bool trace = std::getenv("BABYLON_NATIVE_XR_TRACE") != nullptr;
+                if (trace)
+                {
+                    std::fputs("XRTRACE XRSession::RequestAnimationFrame\n", stderr);
+                    std::fflush(stderr);
+                }
+            }
 
             m_xr->ScheduleFrame([this, callbackPtr{ std::make_shared<Napi::FunctionReference>(Napi::Persistent(callback)) }](const std::shared_ptr<const xr::System::Session::Frame>& frame) {
                 ProcessEyeInputSource(*frame.get(), Env());

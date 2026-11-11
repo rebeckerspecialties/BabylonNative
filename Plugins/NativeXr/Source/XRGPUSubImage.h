@@ -28,10 +28,16 @@ namespace Babylon
         Napi::ObjectReference m_colorTexture{};
         Napi::ObjectReference m_depthStencilTexture{};
         Napi::ObjectReference m_viewport{};
+        uint32_t m_width{};
+        uint32_t m_height{};
         uint32_t m_arrayLayer{};
 
         Napi::Value GetColorTexture(const Napi::CallbackInfo& info);
         Napi::Value GetDepthStencilTexture(const Napi::CallbackInfo& info);
+        Napi::Value GetColorTextureWidth(const Napi::CallbackInfo& info);
+        Napi::Value GetColorTextureHeight(const Napi::CallbackInfo& info);
+        Napi::Value GetDepthStencilTextureWidth(const Napi::CallbackInfo& info);
+        Napi::Value GetDepthStencilTextureHeight(const Napi::CallbackInfo& info);
         Napi::Value GetViewport(const Napi::CallbackInfo& info);
         Napi::Value GetViewDescriptor(const Napi::CallbackInfo& info);
     };

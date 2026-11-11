@@ -43,6 +43,10 @@ namespace Babylon
             {
                 InstanceAccessor("colorTexture", &XRGPUSubImage::GetColorTexture, nullptr),
                 InstanceAccessor("depthStencilTexture", &XRGPUSubImage::GetDepthStencilTexture, nullptr),
+                InstanceAccessor("colorTextureWidth", &XRGPUSubImage::GetColorTextureWidth, nullptr),
+                InstanceAccessor("colorTextureHeight", &XRGPUSubImage::GetColorTextureHeight, nullptr),
+                InstanceAccessor("depthStencilTextureWidth", &XRGPUSubImage::GetDepthStencilTextureWidth, nullptr),
+                InstanceAccessor("depthStencilTextureHeight", &XRGPUSubImage::GetDepthStencilTextureHeight, nullptr),
                 InstanceAccessor("viewport", &XRGPUSubImage::GetViewport, nullptr),
                 InstanceMethod("getViewDescriptor", &XRGPUSubImage::GetViewDescriptor),
             });
@@ -65,14 +69,14 @@ namespace Babylon
         , m_colorTexture{Napi::Persistent(RequireGPUTexture(info, 0, "colorTexture"))}
         , m_depthStencilTexture{Napi::Persistent(RequireGPUTexture(info, 1, "depthStencilTexture"))}
         , m_viewport{Napi::Persistent(Napi::Object::New(info.Env()))}
+        , m_width{RequireNumber(info, 2, "width").Uint32Value()}
+        , m_height{RequireNumber(info, 3, "height").Uint32Value()}
         , m_arrayLayer{RequireNumber(info, 4, "array layer").Uint32Value()}
     {
-        const auto width = RequireNumber(info, 2, "width");
-        const auto height = RequireNumber(info, 3, "height");
         m_viewport.Set("x", Napi::Number::New(info.Env(), 0));
         m_viewport.Set("y", Napi::Number::New(info.Env(), 0));
-        m_viewport.Set("width", width);
-        m_viewport.Set("height", height);
+        m_viewport.Set("width", Napi::Number::New(info.Env(), m_width));
+        m_viewport.Set("height", Napi::Number::New(info.Env(), m_height));
     }
 
     Napi::Value XRGPUSubImage::GetColorTexture(const Napi::CallbackInfo&)
@@ -83,6 +87,26 @@ namespace Babylon
     Napi::Value XRGPUSubImage::GetDepthStencilTexture(const Napi::CallbackInfo&)
     {
         return m_depthStencilTexture.Value();
+    }
+
+    Napi::Value XRGPUSubImage::GetColorTextureWidth(const Napi::CallbackInfo& info)
+    {
+        return Napi::Number::New(info.Env(), m_width);
+    }
+
+    Napi::Value XRGPUSubImage::GetColorTextureHeight(const Napi::CallbackInfo& info)
+    {
+        return Napi::Number::New(info.Env(), m_height);
+    }
+
+    Napi::Value XRGPUSubImage::GetDepthStencilTextureWidth(const Napi::CallbackInfo& info)
+    {
+        return Napi::Number::New(info.Env(), m_width);
+    }
+
+    Napi::Value XRGPUSubImage::GetDepthStencilTextureHeight(const Napi::CallbackInfo& info)
+    {
+        return Napi::Number::New(info.Env(), m_height);
     }
 
     Napi::Value XRGPUSubImage::GetViewport(const Napi::CallbackInfo&)

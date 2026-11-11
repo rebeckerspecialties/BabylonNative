@@ -89,6 +89,50 @@ namespace Babylon
         }
     }
 
+    inline xr::Vector4f MultiplyPoseQuaternions(const xr::Vector4f& lhs, const xr::Vector4f& rhs)
+    {
+        return {
+            (lhs.W * rhs.X) + (lhs.X * rhs.W) + (lhs.Y * rhs.Z) - (lhs.Z * rhs.Y),
+            (lhs.W * rhs.Y) - (lhs.X * rhs.Z) + (lhs.Y * rhs.W) + (lhs.Z * rhs.X),
+            (lhs.W * rhs.Z) + (lhs.X * rhs.Y) - (lhs.Y * rhs.X) + (lhs.Z * rhs.W),
+            (lhs.W * rhs.W) - (lhs.X * rhs.X) - (lhs.Y * rhs.Y) - (lhs.Z * rhs.Z)};
+    }
+
+    inline xr::Vector3f RotatePoseVector(const xr::Vector4f& quaternion, const xr::Vector3f& vector)
+    {
+        const xr::Vector4f vectorAsQuaternion{vector.X, vector.Y, vector.Z, 0.f};
+        const xr::Vector4f inverseQuaternion{-quaternion.X, -quaternion.Y, -quaternion.Z, quaternion.W};
+        const auto rotated = MultiplyPoseQuaternions(
+            MultiplyPoseQuaternions(quaternion, vectorAsQuaternion),
+            inverseQuaternion);
+        return {rotated.X, rotated.Y, rotated.Z};
+    }
+
+    inline xr::Pose ComposePoses(const xr::Pose& basePose, const xr::Pose& offsetPose)
+    {
+        const auto rotatedOffset = RotatePoseVector(basePose.Orientation, offsetPose.Position);
+        return {
+            {
+                basePose.Position.X + rotatedOffset.X,
+                basePose.Position.Y + rotatedOffset.Y,
+                basePose.Position.Z + rotatedOffset.Z,
+            },
+            MultiplyPoseQuaternions(basePose.Orientation, offsetPose.Orientation)};
+    }
+
+    inline xr::Pose InvertPose(const xr::Pose& pose)
+    {
+        const xr::Vector4f inverseOrientation{
+            -pose.Orientation.X,
+            -pose.Orientation.Y,
+            -pose.Orientation.Z,
+            pose.Orientation.W};
+        const xr::Vector3f inversePosition = RotatePoseVector(
+            inverseOrientation,
+            {-pose.Position.X, -pose.Position.Y, -pose.Position.Z});
+        return {inversePosition, inverseOrientation};
+    }
+
     class XRRigidTransform : public Napi::ObjectWrap<XRRigidTransform>
     {
         static constexpr auto JS_CLASS_NAME = "XRRigidTransform";
@@ -188,7 +232,7 @@ namespace Babylon
             Update(space, false);
         }
 
-        xr::Pose GetNativePose()
+        xr::Pose GetNativePose() const
         {
             auto position = m_position.Value();
             auto orientation = m_orientation.Value();

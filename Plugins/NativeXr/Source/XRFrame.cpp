@@ -189,12 +189,11 @@ namespace Babylon
                 m_hasBegunTracking = true;
             }
 
-            // TODO: Support reference spaces.
-            // auto& space = *XRReferenceSpace::Unwrap(info[0].As<Napi::Object>());
-
-            // Updating the reference space is currently not supported. Until it is, we assume the
-            // reference space is unmoving at identity (which is usually true).
-            m_xrViewerPose.Update(info, *m_frame);
+            auto* referenceSpace = XRReferenceSpace::Unwrap(info[0].As<Napi::Object>());
+            m_xrViewerPose.Update(
+                info,
+                *m_frame,
+                referenceSpace == nullptr ? nullptr : referenceSpace->GetTransform());
 
             return m_jsXRViewerPose.Value();
         }

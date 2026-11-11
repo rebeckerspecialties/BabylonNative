@@ -27,7 +27,7 @@ execute_process(COMMAND ${CMAKE_COMMAND}
 # --------------------------------------------------
 # arcore-android-sdk
 # --------------------------------------------------
-if(ANDROID OR BABYLON_NATIVE_BUILD_SOURCETREE)
+if((ANDROID AND NOT BABYLON_NATIVE_XR_OPENXR) OR BABYLON_NATIVE_BUILD_SOURCETREE)
     FetchContent_MakeAvailable_With_Message(arcore-android-sdk)
 endif()
 
@@ -405,7 +405,8 @@ endif()
 # --------------------------------------------------
 # xr
 # --------------------------------------------------
-# Currently supported on Android via ARCore, and iOS via ARKit.
+# Android can use ARCore or the opt-in OpenXR/Vulkan backend. iOS continues to
+# use ARKit/Metal; visionOS does not yet enable NativeXR.
 if((BABYLON_NATIVE_PLUGIN_NATIVEXR AND (ANDROID OR IOS)) OR BABYLON_NATIVE_BUILD_SOURCETREE)
     add_subdirectory(xr)
     set_property(TARGET xr PROPERTY FOLDER Dependencies/xr)

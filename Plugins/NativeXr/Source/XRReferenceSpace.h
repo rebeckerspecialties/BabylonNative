@@ -1,5 +1,7 @@
 #pragma once
 
+#include <stdexcept>
+
 namespace Babylon
 {
     // Implementation of the XRReferenceSpace interface: https://immersive-web.github.io/webxr/#xrreferencespace-interface
@@ -60,7 +62,7 @@ namespace Babylon
 
         XRRigidTransform* GetTransform()
         {
-            return XRRigidTransform::Unwrap(m_jsTransform.Value());
+            return m_jsTransform.IsEmpty() ? nullptr : XRRigidTransform::Unwrap(m_jsTransform.Value());
         }
 
     private:
@@ -69,6 +71,18 @@ namespace Babylon
             // TODO: Handle XRBoundedReferenceSpace case
             // https://immersive-web.github.io/webxr/#dom-xrreferencespace-getoffsetreferencespace
 
+            auto* offset = XRRigidTransform::Unwrap(info[0].As<Napi::Object>());
+            if (offset == nullptr)
+            {
+                throw std::runtime_error{"XRReferenceSpace.getOffsetReferenceSpace requires an XRRigidTransform."};
+            }
+            if (auto* current = GetTransform())
+            {
+                auto composedTransform = XRRigidTransform::New(info.Env());
+                XRRigidTransform::Unwrap(composedTransform)->Update(
+                    ComposePoses(current->GetNativePose(), offset->GetNativePose()));
+                return XRReferenceSpace::New(info.Env(), composedTransform);
+            }
             return XRReferenceSpace::New(info);
         }
 

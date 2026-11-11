@@ -12,6 +12,7 @@
 #include <arcana/tracing/trace_region.h>
 #include <array>
 #include <cstdio>
+#include <cstdarg>
 #include <cstdlib>
 #include <sstream>
 #include "NativeXrImpl.h"
@@ -20,7 +21,6 @@ namespace Babylon
 {
     namespace
     {
-        constexpr uint32_t WEBGPU_TEXTURE_USAGE_COPY_SRC{0x01};
         constexpr uint32_t WEBGPU_TEXTURE_USAGE_TEXTURE_BINDING{0x04};
         constexpr uint32_t WEBGPU_TEXTURE_USAGE_RENDER_ATTACHMENT{0x10};
 
@@ -66,7 +66,8 @@ namespace Babylon
             uint32_t height,
             uint32_t depthOrArrayLayers,
             const char* format,
-            uint32_t usage)
+            uint32_t usage,
+            bool transient = false)
         {
             std::ostringstream descriptor{};
             descriptor
@@ -75,7 +76,8 @@ namespace Babylon
                 << ",\"height\":" << height
                 << ",\"depthOrArrayLayers\":" << std::max<uint32_t>(1, depthOrArrayLayers)
                 << "},\"mipLevelCount\":1,\"sampleCount\":1,\"dimension\":\"2d\",\"format\":\""
-                << format << "\",\"usage\":" << usage << "}";
+                << format << "\",\"usage\":" << usage
+                << ",\"transient\":" << (transient ? "true" : "false") << "}";
             return descriptor.str();
         }
 
@@ -88,6 +90,27 @@ namespace Babylon
             }
 
             return {};
+        }
+
+        // Opt-in frame-path trace (BABYLON_NATIVE_XR_TRACE=1). The XR frame loop
+        // spans JS, the graphics update scheduler, and the platform session, so
+        // when frames stop the useful question is which of those stages was last
+        // reached. Writes to stderr, which host-driven runs capture.
+        void XrTrace(const char* format, ...)
+        {
+            static const bool enabled = std::getenv("BABYLON_NATIVE_XR_TRACE") != nullptr;
+            if (!enabled)
+            {
+                return;
+            }
+
+            std::fputs("XRTRACE ", stderr);
+            va_list args;
+            va_start(args, format);
+            std::vfprintf(stderr, format, args);
+            va_end(args);
+            std::fputc('\n', stderr);
+            std::fflush(stderr);
         }
 
         bool ShouldUseAsyncXrComposite()
@@ -250,14 +273,39 @@ namespace Babylon
                         throw std::runtime_error{"Failed to initialize xr system."};
                     }
 
-                    auto* metalDevice = babylon_wgpu_native_get_metal_device();
-                    if (metalDevice == nullptr)
+#if defined(__APPLE__)
+                    auto* graphicsDevice = babylon_wgpu_native_get_metal_device();
+                    if (graphicsDevice == nullptr)
                     {
-                        throw std::runtime_error{"NativeXR requires an initialized Metal-backed NativeWebGPU device."};
+                        throw std::runtime_error{"NativeXR requires an initialized Metal-backed NativeWebGPU device on Apple platforms."};
                     }
+                    auto graphicsBindingLifetime = std::shared_ptr<void>{};
+#elif defined(__ANDROID__) && defined(BABYLON_NATIVE_XR_OPENXR)
+                    BabylonWgpuVulkanBinding nativeVulkanBinding{};
+                    if (!babylon_wgpu_native_get_vulkan_binding(&nativeVulkanBinding))
+                    {
+                        auto detail = GetLastWgpuError();
+                        throw std::runtime_error{detail.empty()
+                                ? "NativeXR requires an initialized Vulkan-backed NativeWebGPU device on Android XR."
+                                : "NativeXR failed to get the NativeWebGPU Vulkan binding: " + detail};
+                    }
+                    auto vulkanBinding = std::make_shared<xr::VulkanGraphicsBinding>(xr::VulkanGraphicsBinding{
+                        static_cast<uintptr_t>(nativeVulkanBinding.instance),
+                        static_cast<uintptr_t>(nativeVulkanBinding.physical_device),
+                        static_cast<uintptr_t>(nativeVulkanBinding.device),
+                        static_cast<uintptr_t>(nativeVulkanBinding.queue),
+                        nativeVulkanBinding.api_version,
+                        nativeVulkanBinding.queue_family_index,
+                        nativeVulkanBinding.queue_index});
+                    void* graphicsDevice = vulkanBinding.get();
+                    std::shared_ptr<void> graphicsBindingLifetime = vulkanBinding;
+#else
+#error NativeXR requires an explicit platform graphics binding.
+#endif
 
-                    return xr::System::Session::CreateAsync(m_system, metalDevice, nullptr, [this, thisRef{shared_from_this()}] { return m_windowPtr; })
-                        .then(m_sessionState->GraphicsContext.AfterRenderScheduler(), arcana::cancellation::none(), [this, thisRef{shared_from_this()}](std::shared_ptr<xr::System::Session> session) {
+                    return xr::System::Session::CreateAsync(m_system, graphicsDevice, nullptr, [this, thisRef{shared_from_this()}] { return m_windowPtr; })
+                        .then(m_sessionState->GraphicsContext.AfterRenderScheduler(), arcana::cancellation::none(), [this, thisRef{shared_from_this()}, graphicsBindingLifetime{std::move(graphicsBindingLifetime)}](std::shared_ptr<xr::System::Session> session) {
+                            static_cast<void>(graphicsBindingLifetime);
                             m_sessionState->Session = std::move(session);
                             NotifySessionStateChanged(true);
                         });
@@ -360,6 +408,10 @@ namespace Babylon
         {
             assert(m_sessionState != nullptr);
 
+            XrTrace("SchedulePendingFrame scheduled=%d callbacks=%zu",
+                m_sessionState->FrameScheduled ? 1 : 0,
+                m_sessionState->ScheduleFrameCallbacks.size());
+
             if (m_sessionState->FrameScheduled || m_sessionState->ScheduleFrameCallbacks.empty())
             {
                 return;
@@ -367,10 +419,33 @@ namespace Babylon
 
             m_sessionState->FrameScheduled = true;
 
-            m_sessionState->FrameTask = arcana::make_task(m_sessionState->Update.Scheduler(), m_sessionState->CancellationSource, [this, thisRef{shared_from_this()}] {
+            // Drive XR frames from the graphics frame-start scheduler on every
+            // platform. The frame-completion scope acquired below keeps the
+            // frame open while JavaScript handles the callback, which is what
+            // the legacy per-update SafeTimespanGuarantor token used to do; the
+            // WebGPU device never opens those per-update timespans, so a frame
+            // task posted to one is never run.
+            XrTrace("SchedulePendingFrame posting FrameTask to frame-start scheduler");
+            m_sessionState->FrameTask = arcana::make_task(m_sessionState->GraphicsContext.FrameStartScheduler(), m_sessionState->CancellationSource, [this, thisRef{shared_from_this()}] {
+                XrTrace("FrameTask running on frame-start scheduler");
                 BeginFrame();
 
-                return arcana::make_task(m_runtimeScheduler, m_sessionState->CancellationSource, [this, updateToken{m_sessionState->Update.GetUpdateToken()}, thisRef{shared_from_this()}]() {
+#if defined(__ANDROID__) && defined(BABYLON_NATIVE_XR_OPENXR)
+                // OpenXR produces frames while the session is synchronized but
+                // not yet visible. Those frames have no acquired swapchain
+                // images and must be submitted without invoking the WebXR
+                // render callback. Keep the callback queued for the first
+                // renderable frame. ARKit has no such pre-visible phase.
+                if (!m_sessionState->Frame->IsTracking)
+                {
+                    EndFrame();
+                    m_sessionState->FrameScheduled = false;
+                    SchedulePendingFrame();
+                    return arcana::task_from_result<std::exception_ptr>();
+                }
+#endif
+
+                return arcana::make_task(m_runtimeScheduler, m_sessionState->CancellationSource, [this, frameScope{std::make_shared<Graphics::FrameCompletionScope>(m_sessionState->GraphicsContext.AcquireFrameCompletionScope())}, thisRef{shared_from_this()}]() {
                     BeginUpdate();
 
                     {
@@ -405,6 +480,7 @@ namespace Babylon
 
             bool shouldEndSession{};
             bool shouldRestartSession{};
+            XrTrace("BeginFrame calling GetNextFrame");
             m_sessionState->Frame = m_sessionState->Session->GetNextFrame(shouldEndSession, shouldRestartSession, [this](void* texturePointer) {
                 return arcana::make_task(m_runtimeScheduler, arcana::cancellation::none(), [this, texturePointer]() {
                     const auto itViewConfig{m_sessionState->TextureToViewConfigurationMap.find(texturePointer)};
@@ -437,6 +513,7 @@ namespace Babylon
             arcana::trace_region beginUpdateRegion{"NativeXR::BeginUpdate"};
 
             m_sessionState->ActiveViewConfigurations.resize(m_sessionState->Frame->Views.size());
+            m_sessionState->FrameColorTextureIds.clear();
             m_sessionState->LastTextureWidth = 0;
             m_sessionState->LastTextureHeight = 0;
             m_sessionState->LastTextureArrayLength = 0;
@@ -472,17 +549,46 @@ namespace Babylon
                     const auto textureLayers = std::max<uint32_t>(1, static_cast<uint32_t>(view.ColorTextureSize.Depth));
                     const auto* colorFormat = XrTextureFormatToWebGpuFormat(view.ColorTextureFormat);
                     const auto* depthFormat = XrDepthTextureFormatToWebGpuFormat(view.DepthTextureFormat);
-                    const auto colorUsage = WEBGPU_TEXTURE_USAGE_COPY_SRC | WEBGPU_TEXTURE_USAGE_TEXTURE_BINDING | WEBGPU_TEXTURE_USAGE_RENDER_ATTACHMENT;
+                    const auto colorUsage = WEBGPU_TEXTURE_USAGE_TEXTURE_BINDING | WEBGPU_TEXTURE_USAGE_RENDER_ATTACHMENT;
                     const auto depthUsage = WEBGPU_TEXTURE_USAGE_RENDER_ATTACHMENT;
                     const auto colorDescriptor = MakeTextureDescriptorJson("NativeXR.color", textureWidth, textureHeight, textureLayers, colorFormat, colorUsage);
-                    const auto depthDescriptor = MakeTextureDescriptorJson("NativeXR.depth", textureWidth, textureHeight, textureLayers, depthFormat, depthUsage);
+                    // The XR depth buffer is written and read only within the
+                    // render pass -- never sampled, copied, or presented -- so in
+                    // principle it can stay in tile memory (MTLStorageModeMemoryless)
+                    // and never occupy DRAM.
+                    //
+                    // It is nonetheless requested as ordinary storage, because
+                    // Babylon.js creates a texture *view* of this attachment
+                    // (WebGPUEngine.setUsage -> GPUTexture.createView) and Metal
+                    // refuses to create a view of a memoryless texture on some
+                    // GPU families. Measured with the AR portal on this branch:
+                    // iPhone 12 (A14) renders 1964 XR frames with the depth
+                    // attachment memoryless, while iPhone XS (A12) dies on the
+                    // second frame -- newTextureViewWithPixelFormat returns nil,
+                    // which wgpu-hal's Metal backend unwraps into a panic
+                    // (wgpu-hal/src/metal/device.rs, create_texture_view).
+                    //
+                    // A runtime probe cannot recover from that today: the failure
+                    // aborts the process instead of surfacing an error. Once
+                    // wgpu-hal returns an error there, this can become a
+                    // capability check that keeps the bandwidth win on the GPUs
+                    // that support it.
+                    const auto depthDescriptor = MakeTextureDescriptorJson("NativeXR.depth", textureWidth, textureHeight, textureLayers, depthFormat, depthUsage, /* transient */ false);
+#if defined(__APPLE__)
                     const auto colorTextureId = babylon_wgpu_native_import_metal_texture(view.ColorTexturePointer, colorDescriptor.c_str());
+#elif defined(__ANDROID__) && defined(BABYLON_NATIVE_XR_OPENXR)
+                    const auto colorTextureId = babylon_wgpu_native_import_vulkan_texture(
+                        static_cast<uint64_t>(reinterpret_cast<uintptr_t>(view.ColorTexturePointer)),
+                        colorDescriptor.c_str());
+#else
+#error NativeXR requires an explicit platform texture import path.
+#endif
                     const auto depthTextureId = babylon_wgpu_native_create_texture(depthDescriptor.c_str());
 
                     if (colorTextureId == 0 || depthTextureId == 0)
                     {
                         std::ostringstream error{};
-                        error << "NativeXR failed to create WebGPU render targets for ARKit frame"
+                        error << "NativeXR failed to create WebGPU render targets for XR frame"
                             << " (colorImportId=" << colorTextureId
                             << ", depthCreateId=" << depthTextureId << ")";
                         const auto detail = GetLastWgpuError();
@@ -539,6 +645,25 @@ namespace Babylon
                     m_sessionState->ViewConfigurationStartViewIdx.try_emplace(&viewConfig, viewIdx);
                 }
             }
+
+#if defined(__ANDROID__) && defined(BABYLON_NATIVE_XR_OPENXR)
+            for (uint32_t viewIdx = 0; viewIdx < m_sessionState->ActiveViewConfigurations.size(); ++viewIdx)
+            {
+                auto* viewConfig = m_sessionState->ActiveViewConfigurations[viewIdx];
+                const auto startViewIterator = m_sessionState->ViewConfigurationStartViewIdx.find(viewConfig);
+                if (viewConfig == nullptr ||
+                    startViewIterator == m_sessionState->ViewConfigurationStartViewIdx.end())
+                {
+                    continue;
+                }
+                const auto renderTargetIndex = viewIdx - startViewIterator->second;
+                if (renderTargetIndex < viewConfig->RenderTargets.size())
+                {
+                    m_sessionState->FrameColorTextureIds.emplace_back(
+                        viewConfig->RenderTargets[renderTargetIndex].ColorTextureId);
+                }
+            }
+#endif
         }
 
         void NativeXr::Impl::EndUpdate()
@@ -556,6 +681,16 @@ namespace Babylon
 
             arcana::trace_region endFrameRegion{"NativeXR::EndFrame"};
 
+#if defined(__ANDROID__) && defined(BABYLON_NATIVE_XR_OPENXR)
+            for (const auto colorTextureId : m_sessionState->FrameColorTextureIds)
+            {
+                if (!babylon_wgpu_native_prepare_openxr_texture_for_release(colorTextureId))
+                {
+                    throw std::runtime_error{"NativeXR failed to prepare its WebGPU color texture for OpenXR release: " + GetLastWgpuError()};
+                }
+            }
+#endif
+
             if (!ShouldUseAsyncXrComposite() && !babylon_wgpu_native_queue_wait_submitted_work())
             {
                 throw std::runtime_error{"NativeXR failed while waiting for NativeWebGPU frame work before AR compositing."};
@@ -563,6 +698,7 @@ namespace Babylon
 
             m_sessionState->Frame->Render();
             m_sessionState->Frame.reset();
+            m_sessionState->FrameColorTextureIds.clear();
         }
     } // Plugins
 } // Babylon

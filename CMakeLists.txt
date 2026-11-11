@@ -12,6 +12,8 @@ endif()
 
 include(FetchContent)
 
+option(BABYLON_NATIVE_XR_OPENXR "Use the OpenXR/Vulkan NativeXR backend on Android" OFF)
+
 # --------------------------------------------------
 # Declarations
 # --------------------------------------------------
@@ -69,7 +71,10 @@ FetchContent_Declare(ios-cmake
     EXCLUDE_FROM_ALL)
 FetchContent_Declare(JsRuntimeHost
     GIT_REPOSITORY https://github.com/rebeckerspecialties/JsRuntimeHost.git
-    GIT_TAG bfeea28bcdcd2bb10c06e464b9010c1edf0be37a)
+    GIT_TAG bfeea28bcdcd2bb10c06e464b9010c1edf0be37a
+    PATCH_COMMAND ${CMAKE_COMMAND}
+        "-DPATCH_FILE=${CMAKE_CURRENT_LIST_DIR}/Patches/JsRuntimeHost/0001-reuse-android-extensions-target.patch"
+        -P "${CMAKE_CURRENT_LIST_DIR}/Patches/apply_patch_if_needed.cmake")
 FetchContent_Declare(libwebp
     GIT_REPOSITORY https://github.com/webmproject/libwebp.git
     GIT_TAG baff2c8980970f58e2aa88622c6575bdee2f876a
