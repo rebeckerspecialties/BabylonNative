@@ -12,6 +12,18 @@ This branch is a durable WebGPU/wgpu-native fork, not an upstream bgfx replaceme
 
 ## Babylon.js Bundle Flow
 
+The `Apps` package no longer runs upstream's `postinstall` ES5 downlevel
+(`scripts/downlevelNativeScripts.mjs`): every engine this branch targets
+(JavaScriptCore on Apple and Android, V8, QuickJS) runs the ES2015+ UMD bundles
+directly, and the TypeScript ES5 lowering of Babylon.js 9.32's minified bundle
+emits a destructuring temporary that collides with the local named `_` in
+`WebGPUShaderProcessorWGSL.textureProcessor`, so cube/3D/array texture layouts
+are created with an object for `viewDimension` and every cube-sampling pipeline
+fails validation (upstream's published `babylon.es5.js` has the same defect).
+The script is kept byte-identical to upstream for Chakra consumers; do not run
+it over `Apps/node_modules` on this branch.
+
+
 When Babylon.js source changes are needed for WebGPU correctness:
 
 1. Patch `/Users/matt/src/Babylon.js`.
@@ -388,6 +400,58 @@ node Apps/scripts/tuneHillValleyGltfMaterials.js
 GPU-native ASTC KTX textures and avoids runtime CPU decompression on iOS. Use
 `__nativeArPortalLogMeshDiagnostics=true` only for targeted debugging; normal
 runs should not emit the active-mesh diagnostic stream.
+
+Memoryless (transient) depth attachments and A12:
+
+- `TextureUsages::TRANSIENT_ATTACHMENT` maps to `MTLStorageModeMemoryless`, which
+  keeps a depth attachment in tile memory and off DRAM. The XR depth buffer is a
+  natural candidate: it is only ever cleared and discarded.
+- It is nonetheless left as ordinary storage, because Babylon.js calls
+  `GPUTexture.createView` on that attachment and **Metal refuses to create a view
+  of a memoryless texture on some GPU families**. Measured with the AR portal:
+  iPhone 12 (A14) renders 1964 XR frames with the depth attachment memoryless,
+  while iPhone XS (A12) dies on the second frame. `newTextureViewWithPixelFormat`
+  returns nil there, and wgpu-hal's Metal backend unwrapped it into a process
+  abort, so there was nothing to catch.
+- Fixed upstream in gfx-rs/wgpu#10145 (return an error instead of panicking).
+  Once that lands, this can become a capability check that keeps the bandwidth
+  win on the GPUs that allow the view instead of an unconditional opt-out.
+- The mechanism itself is verified on device by `webgpu-caps/tools/memoryless-probe`,
+  which reads `MTLStorageMode` back off the texture: A12, A14, and M4 all report
+  `Memoryless` for a `TRANSIENT_ATTACHMENT` depth texture, so creation is fine
+  everywhere; only view creation is restricted.
+
+Where the AR portal's frame time actually goes (iPhone 12, measured 2026-08-22):
+
+- Pre-placement, with no active meshes at all, SSAO2 alone costs the difference
+  between 60 fps and 50 fps: 16.67 ms (vsync-locked) versus 20.1 ms per frame,
+  6 extra render passes per frame (14 vs 8), and ~190 MiB of GPU memory
+  (283 vs 92 MiB). It runs its whole chain over an empty scene.
+- Full-scene (`__nativeArPortalForceNonXrStress=true`, 112 active meshes) runs at
+  18-22 fps. SSAO2 costs ~20% there and roughly doubles the draw count, because
+  its geometry buffer re-renders the scene: 81 draws per frame with it, 47
+  without.
+- The WebGPU render-command batcher (Babylon.js `WebGPUEngine.renderPassCommandRecorderProvider`,
+  upstream since 9.33) is installed by default since 2026-11-10: NativeWebGPU exposes the provider
+  as `navigator.gpu._renderPassCommandRecorderProvider` and installs it after `initAsync` on every
+  engine created from the `BABYLON` UMD global (`InstallRenderPassCommandRecorderProvider` in
+  `Plugins/NativeWebGPU/Source/NativeWebGPU.cpp`). Module-bundled apps (no `BABYLON` global) call
+  `navigator.gpu._installRenderPassCommandRecorderProvider(WebGPUEngine)` once, or assign the
+  provider themselves. To compare without it, set `engine.renderPassCommandRecorderProvider = null`.
+  Confirm with `navigator.gpu._backendStats()`: `renderPassCommandStreamCount` advances once per
+  render pass. Before this, nothing installed a provider, so every earlier portal measurement ran
+  without the batcher; the old `__babylonNativeEnableRenderPassCommandStream` global and its two
+  prelude scripts are gone. Earlier estimate for the portal: no change pre-placement (about 10
+  draws per frame) and about 8% in the draw-heavy non-XR scene (18 -> 19.5 fps).
+- iPhone XS, 225 cloned spheres / 8 StandardMaterials, 1125x2436 (2026-11-10): 16.6 fps
+  without the batcher, 20-22 fps with it. The frame is JavaScriptCore-interpreter bound
+  (92% of process CPU; wgpu + plugin about 1.5%), so the stream is not what gets this to
+  60 fps: instancing (8 draws) or `snapshotRenderingMode = SNAPSHOTRENDERING_FAST` both hold
+  58-60 fps, `compatibilityMode = false` is slower (15.9 fps), and `freezeActiveMeshes` plus
+  frozen materials alone changes nothing on WebGPU.
+- So the first pre-placement win is skipping SSAO2 while the scene has no active
+  meshes, and the real post-placement target is the draw/pass count, not the
+  per-draw JS bridge cost.
 
 Open NativeXR portal questions for the next optimization session:
 
