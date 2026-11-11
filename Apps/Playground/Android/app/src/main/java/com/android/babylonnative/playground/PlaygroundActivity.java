@@ -7,6 +7,9 @@ import android.view.View;
 import com.babylonjs.embedding.BabylonNative;
 import com.library.babylonnative.BabylonView;
 
+import java.io.IOException;
+import java.io.InputStream;
+
 public class PlaygroundActivity extends Activity {
     /**
      * Bridges to {@code Apps/Playground/Shared/PlaygroundScripts.cpp},
@@ -34,24 +37,43 @@ public class PlaygroundActivity extends Activity {
         runtimeOptions.enableDebugTrace = true;
         mRuntimeHandle = BabylonNative.runtimeCreate(runtimeOptions);
 
-        // Queue the Babylon.js bootstrap scripts, then the WebGPU smoke scene.
-        // They run after the first View attach completes engine init on the JS
-        // thread, in submission order.
-        loadBootstrapScripts(mRuntimeHandle);
-        BabylonNative.runtimeEval(
-                mRuntimeHandle,
-                "(function(){"
-                        + "globalThis.createScene=undefined;"
-                        + "globalThis.__babylonPlaygroundSceneFactoryReady=undefined;"
-                        + "globalThis.__babylonPlaygroundWebGpuSmokeReady=undefined;"
-                        + "globalThis.__webgpuSmokeDispose=undefined;"
-                        + "})();",
-                "app:///Scripts/playground_bootstrap_reset.js");
-        BabylonNative.runtimeLoadScript(mRuntimeHandle, "app:///Scripts/webgpu_smoke.js");
-        BabylonNative.runtimeLoadScript(mRuntimeHandle, "app:///Scripts/playground_runner.js");
+        // A staged Factotum bundle is self-contained and opts into the
+        // lightweight DOM/WebGPU host. Without it, retain the normal
+        // Babylon.js smoke-scene behavior.
+        if (hasAsset("Scripts/factotum_native_bootstrap.js")) {
+            BabylonNative.runtimeLoadScript(
+                    mRuntimeHandle, "app:///Scripts/babylon_lite_bootstrap.js");
+            BabylonNative.runtimeLoadScript(
+                    mRuntimeHandle, "app:///Scripts/factotum_native_bootstrap.js");
+            BabylonNative.runtimeLoadScript(mRuntimeHandle, "app:///Scripts/runtime.js");
+            BabylonNative.runtimeLoadScript(mRuntimeHandle, "app:///Scripts/styles.js");
+            BabylonNative.runtimeLoadScript(mRuntimeHandle, "app:///Scripts/main.js");
+        } else {
+            loadBootstrapScripts(mRuntimeHandle);
+            BabylonNative.runtimeEval(
+                    mRuntimeHandle,
+                    "(function(){"
+                            + "globalThis.createScene=undefined;"
+                            + "globalThis.__babylonPlaygroundSceneFactoryReady=undefined;"
+                            + "globalThis.__babylonPlaygroundWebGpuSmokeReady=undefined;"
+                            + "globalThis.__webgpuSmokeDispose=undefined;"
+                            + "})();",
+                    "app:///Scripts/playground_bootstrap_reset.js");
+            BabylonNative.runtimeLoadScript(mRuntimeHandle, "app:///Scripts/webgpu_smoke.js");
+            BabylonNative.runtimeLoadScript(
+                    mRuntimeHandle, "app:///Scripts/playground_runner.js");
+        }
 
         mView = new BabylonView(getApplication(), mRuntimeHandle);
         setContentView(mView);
+    }
+
+    private boolean hasAsset(String path) {
+        try (InputStream ignored = getAssets().open(path)) {
+            return true;
+        } catch (IOException exception) {
+            return false;
+        }
     }
 
     @Override

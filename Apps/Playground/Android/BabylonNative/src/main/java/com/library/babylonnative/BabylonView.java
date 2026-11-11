@@ -2,6 +2,7 @@ package com.library.babylonnative;
 
 import android.content.Context;
 import android.graphics.Canvas;
+import android.view.Choreographer;
 import android.view.MotionEvent;
 import android.view.SurfaceHolder;
 import android.view.SurfaceView;
@@ -9,6 +10,7 @@ import android.view.View;
 import android.widget.FrameLayout;
 
 import com.babylonjs.embedding.BabylonNative;
+import com.android.library.babylonnative.BuildConfig;
 
 /**
  * Playground View built on {@link BabylonNative}. Borrows a Runtime handle
@@ -38,6 +40,13 @@ public class BabylonView extends FrameLayout implements SurfaceHolder.Callback2,
 
     /** Native View handle (0 if not attached). Owned by this view. */
     private long mViewHandle = 0;
+
+    private boolean mFrameCallbackPosted = false;
+    private final Choreographer.FrameCallback mFrameCallback = frameTimeNanos -> {
+        mFrameCallbackPosted = false;
+        renderFrame();
+        postFrameCallback();
+    };
 
     public BabylonView(Context context, long runtimeHandle) {
         super(context);
@@ -72,6 +81,44 @@ public class BabylonView extends FrameLayout implements SurfaceHolder.Callback2,
         this.addView(this.xrSurfaceView);
 
         setWillNotDraw(false);
+    }
+
+    private void postFrameCallback() {
+        if (!mFrameCallbackPosted && isAttachedToWindow()) {
+            mFrameCallbackPosted = true;
+            Choreographer.getInstance().postFrameCallback(mFrameCallback);
+        }
+    }
+
+    private void renderFrame() {
+        // ARCore renders through the auxiliary SurfaceView. Android XR's
+        // OpenXR compositor owns its swapchains directly; showing the
+        // auxiliary surface there only obscures the normal app panel.
+        if (!BuildConfig.BABYLON_NATIVE_XR_OPENXR
+                && BabylonNative.runtimeIsXrActive(mRuntimeHandle)) {
+            this.xrSurfaceView.setVisibility(View.VISIBLE);
+        } else {
+            this.xrSurfaceView.setVisibility(View.INVISIBLE);
+        }
+
+        if (mViewHandle != 0) {
+            BabylonNative.viewRenderFrame(mViewHandle);
+        }
+    }
+
+    @Override
+    protected void onAttachedToWindow() {
+        super.onAttachedToWindow();
+        postFrameCallback();
+    }
+
+    @Override
+    protected void onDetachedFromWindow() {
+        if (mFrameCallbackPosted) {
+            Choreographer.getInstance().removeFrameCallback(mFrameCallback);
+            mFrameCallbackPosted = false;
+        }
+        super.onDetachedFromWindow();
     }
 
     /**
@@ -141,15 +188,6 @@ public class BabylonView extends FrameLayout implements SurfaceHolder.Callback2,
 
     @Override
     protected void onDraw(Canvas canvas) {
-        if (BabylonNative.runtimeIsXrActive(mRuntimeHandle)) {
-            this.xrSurfaceView.setVisibility(View.VISIBLE);
-        } else {
-            this.xrSurfaceView.setVisibility(View.INVISIBLE);
-        }
-
-        if (mViewHandle != 0) {
-            BabylonNative.viewRenderFrame(mViewHandle);
-        }
-        invalidate();
+        super.onDraw(canvas);
     }
 }

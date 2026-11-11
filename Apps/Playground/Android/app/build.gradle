@@ -64,7 +64,7 @@ android {
             signingConfig signingConfigs.debug
             minifyEnabled true
             shrinkResources true
-            proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro"
+            proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"
             debuggable false
             ndk {
                 abiFilters "arm64-v8a"
@@ -189,6 +189,56 @@ tasks.configureEach { task ->
     }
 }
 
+tasks.register('copyFiles') {
+    doLast {
+        copy {
+            from '../../../node_modules/babylonjs'
+            include 'babylon.max.js'
+            into 'src/main/assets/Scripts'
+        }
+        copy {
+            from '../../../node_modules/babylonjs-addons'
+            include 'babylonjs.addons.js'
+            into 'src/main/assets/Scripts'
+        }
+        copy {
+            from '../../../node_modules/babylonjs-loaders'
+            include 'babylonjs.loaders.js'
+            into 'src/main/assets/Scripts'
+        }
+        copy {
+            from '../../../node_modules/babylonjs-materials'
+            include 'babylonjs.materials.js'
+            into 'src/main/assets/Scripts'
+        }
+        copy {
+            from '../../../node_modules/babylonjs-gui'
+            include 'babylon.gui.js'
+            into 'src/main/assets/Scripts'
+        }
+        copy {
+            from '../../../node_modules/babylonjs-serializers'
+            include 'babylonjs.serializers.js'
+            into 'src/main/assets/Scripts'
+        }
+        copy {
+            from '../../../Dependencies'
+            include '*.js'
+            into 'src/main/assets/Scripts'
+        }
+        copy {
+            from '../../Scripts'
+            include '*.js'
+            include '*.json'
+            include '*.ttf'
+            include '*.png'
+            include '*.jpg'
+            include '*.ktx2'
+            into 'src/main/assets/Scripts'
+        }
+    }
+}
+
 tasks.named('preBuild').configure {
     dependsOn ':BabylonNative:assembleRelease'
     dependsOn 'copyFiles'
@@ -197,5 +247,3 @@ tasks.named('preBuild').configure {
         dependsOn 'generateSanitizerWrapScripts'
     }
 }
-
-preBuild.dependsOn(copyFiles)

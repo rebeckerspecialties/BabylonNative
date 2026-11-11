@@ -32,12 +32,12 @@ def cmakeArguments = [
     "-DBABYLON_NATIVE_BUILD_APPS=ON",
     "-DBABYLON_NATIVE_POLYFILL_CANVAS=ON",
     "-DBABYLON_NATIVE_POLYFILL_CANVAS_WGPU=ON",
+    "-DBABYLON_NATIVE_XR_OPENXR=ON",
     "-DCMAKE_UNITY_BUILD=${unity_build}"
 ]
 if (project.hasProperty("ENABLE_SANITIZERS")) {
     cmakeArguments.add("-DENABLE_SANITIZERS=${project.property('ENABLE_SANITIZERS')}")
 }
-
 // Hermes for Android needs HOST hermesc/shermes (they emit bytecode at build
 // time and can't run as NDK-cross-compiled binaries). JsRuntimeHost's CMake
 // bootstraps these host compilers automatically when cross-compiling, so no
@@ -64,6 +64,7 @@ android {
 
     defaultConfig {
         minSdk = 25
+        buildConfigField "boolean", "BABYLON_NATIVE_XR_OPENXR", "true"
 
         testInstrumentationRunner = "android.support.test.runner.AndroidJUnitRunner"
         consumerProguardFiles "consumer-rules.pro"
@@ -92,6 +93,10 @@ android {
         packaging {
             exclude '**/libarcore_sdk_c.so'
         }
+    }
+
+    buildFeatures {
+        buildConfig = true
     }
 
     externalNativeBuild {
@@ -124,7 +129,10 @@ android {
             }
             externalNativeBuild {
                 cmake {
-                    arguments "-DBABYLON_DEBUG_TRACE=OFF", "-DCMAKE_BUILD_TYPE=Release", "-DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON"
+                    // NDK r28 removed the gold linker selected by CMake 3.22's
+                    // Android IPO path. Keep release optimization, but disable
+                    // IPO until this project moves to an LLD-aware CMake.
+                    arguments "-DBABYLON_DEBUG_TRACE=OFF", "-DCMAKE_BUILD_TYPE=Release", "-DCMAKE_INTERPROCEDURAL_OPTIMIZATION=OFF"
                 }
             }
         }
