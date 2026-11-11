@@ -1,5 +1,6 @@
 #pragma once
 
+#include <napi/env.h>
 #include <napi/napi.h>
 
 namespace Babylon
@@ -27,5 +28,38 @@ namespace Babylon
 
         bool result{false};
         return napi_instanceof(env, value, constructor, &result) == napi_ok && result;
+    }
+
+    /**
+     * Publish a class as the global `className` in a form script-side feature
+     * detection accepts on every engine.
+     *
+     * Babylon.js only takes its WebGPU XR path when
+     * `typeof XRGPUBinding === "function"` (and the same for `XRGPUSubImage`),
+     * which is false for the constructible *object* JavaScriptCore produces (see
+     * above), so every WebGPU XR session was refused there with "required
+     * feature not compatible". Where the constructor is not a function, publish
+     * a function that constructs through it and shares its prototype: `typeof`,
+     * `new`, `instanceof` and prototype probes then behave as they do on engines
+     * whose classes are functions, and instances are still the native objects.
+     */
+    inline void SetGlobalClass(Napi::Env env, const char* className, const Napi::Value& constructor)
+    {
+        // Decide in script: napi_typeof and `typeof` do not agree about these
+        // constructors on every engine build, and `typeof` is what callers probe.
+        const auto wrap = Napi::Eval(env, R"JS(
+            ((nativeConstructor, name) => {
+                if (typeof nativeConstructor === "function") {
+                    return nativeConstructor;
+                }
+                const constructor = function (...args) {
+                    return new nativeConstructor(...args);
+                };
+                Object.defineProperty(constructor, "name", { value: name, configurable: true });
+                constructor.prototype = nativeConstructor.prototype;
+                return constructor;
+            })
+        )JS", "babylon-native://plugins/NativeXr/globalClass.js").As<Napi::Function>();
+        env.Global().Set(className, wrap.Call({constructor, Napi::String::New(env, className)}));
     }
 }

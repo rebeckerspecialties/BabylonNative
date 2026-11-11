@@ -73,7 +73,7 @@ namespace Babylon
                 InstanceMethod("getSubImage", &XRGPUBinding::GetSubImage),
                 InstanceMethod("getViewSubImage", &XRGPUBinding::GetViewSubImage),
             });
-        env.Global().Set(JS_CLASS_NAME, constructor);
+        SetGlobalClass(env, JS_CLASS_NAME, constructor);
     }
 
     XRGPUBinding::XRGPUBinding(const Napi::CallbackInfo& info)

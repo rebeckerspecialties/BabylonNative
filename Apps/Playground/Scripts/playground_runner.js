@@ -194,7 +194,10 @@ var engine = null;
 
         var webgpuEngine = new BABYLON.WebGPUEngine(canvas, {
             antialias: false,
-            adaptToDeviceRatio: true
+            adaptToDeviceRatio: true,
+            // Babylon.js refuses to start a WebGPU XR session on an engine that was not
+            // created XR-compatible, so ask for it wherever the host has an XR system.
+            xrCompatible: typeof navigator !== "undefined" && !!navigator.xr
         });
         await webgpuEngine.initAsync();
         const recorderProvider = globalThis.navigator && navigator.gpu && navigator.gpu.__babylonNativeRenderPassCommandRecorderProvider;

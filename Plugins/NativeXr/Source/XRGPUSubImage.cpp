@@ -1,4 +1,5 @@
 #include "XRGPUSubImage.h"
+#include "JsInstanceOf.h"
 
 #include <stdexcept>
 #include <string>
@@ -50,7 +51,7 @@ namespace Babylon
                 InstanceAccessor("viewport", &XRGPUSubImage::GetViewport, nullptr),
                 InstanceMethod("getViewDescriptor", &XRGPUSubImage::GetViewDescriptor),
             });
-        env.Global().Set(JS_CLASS_NAME, constructor);
+        SetGlobalClass(env, JS_CLASS_NAME, constructor);
     }
 
     Napi::Object XRGPUSubImage::New(Napi::Env env, const XRGPUSubImageData& data)
