@@ -2,7 +2,7 @@
 
 This directory contains the local Babylon.js source patches needed for
 NativeWebGPU and NativeXR portal validation in this BabylonNative branch.
-The stack is maintained against the Babylon.js `9.22.1` release used by this
+The stack is maintained against the Babylon.js `9.32.1` release used by this
 branch.
 
 The patches are source-oriented on purpose. Avoid patching generated UMD files
@@ -13,10 +13,11 @@ hard to review, and hide the real upstreamable changes.
 
 - `0002-add-webgpu-render-command-batching.patch`
   - Adds a backend-neutral render command batcher and WebGPU render-pass
-    lowering path, with fallback replay and focused unit tests for
-    compatibility boundaries.
+    lowering path, with fallback replay, flush boundaries for occlusion
+    queries and debug markers, and focused unit tests. Generated from
+    `BabylonJS/Babylon.js#18562` rebased onto the `9.32.1` tag.
 
-The native WebXR-WebGPU projection-layer enablement (formerly `0001-enable-webgpu-layers-for-native-xr.patch`) landed upstream in the `[WebGPU-XR]` series (`BabylonJS/Babylon.js#18711`, `#18773`, `#18779`) and is part of 9.22.1, so it is no longer carried here. The KTX compressed-sRGB fix (`BabylonJS/Babylon.js#18538`), SSAO2 world-space
+The native WebXR-WebGPU projection-layer enablement (formerly `0001-enable-webgpu-layers-for-native-xr.patch`) landed upstream in the `[WebGPU-XR]` series (`BabylonJS/Babylon.js#18711`, `#18773`, `#18779`) and is part of 9.22.1 and later, so it is no longer carried here. The KTX compressed-sRGB fix (`BabylonJS/Babylon.js#18538`), SSAO2 world-space
 normal fix (`BabylonJS/Babylon.js#18539`), DOM-free font offset fallback
 (`BabylonJS/Babylon.js#18463`), and standard WebGPU XR render-target provider
 are already part of Babylon.js 9.17.0. IBL-shadow experiments and custom
