@@ -25,6 +25,7 @@ set(DEPENDENCIES
     "../Dependencies/recast.js")
 
 set(SCRIPTS
+    "Scripts/ar_cube.js"
     "Scripts/native_env.js"
     "Scripts/experience.js"
     "Scripts/gltf-roundtrip-down.png"

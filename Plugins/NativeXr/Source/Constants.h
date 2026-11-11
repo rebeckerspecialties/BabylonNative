@@ -1,5 +1,11 @@
 #pragma once
 
+#include <Babylon/WebXr/Core.h>
+
+#include <cstdint>
+#include <optional>
+#include <string_view>
+
 namespace Babylon
 {
     namespace Plugins
@@ -7,12 +13,30 @@ namespace Babylon
         class XRFrame;
     }
 
-    struct XRSessionType
+    // WebXR identifiers are validated by the shared WebXR core (Core/WebXr), not by string
+    // tables of this plugin. XRSessionMode carries the core's numbering.
+    enum class XRSessionMode : uint32_t
     {
-        static constexpr auto IMMERSIVE_VR{"immersive-vr"};
-        static constexpr auto IMMERSIVE_AR{"immersive-ar"};
-        static constexpr auto INLINE{"inline"};
+        Inline = BABYLON_WEBXR_SESSION_MODE_INLINE,
+        ImmersiveVr = BABYLON_WEBXR_SESSION_MODE_IMMERSIVE_VR,
+        ImmersiveAr = BABYLON_WEBXR_SESSION_MODE_IMMERSIVE_AR,
     };
+
+    inline std::optional<XRSessionMode> ParseXRSessionMode(std::string_view name)
+    {
+        uint32_t mode{};
+        if (!babylon_webxr_session_mode_parse(reinterpret_cast<const uint8_t*>(name.data()), name.size(), &mode))
+        {
+            return std::nullopt;
+        }
+        return static_cast<XRSessionMode>(mode);
+    }
+
+    // True when the WebXR specifications define `name` as a feature descriptor.
+    inline bool IsXRFeatureDescriptor(std::string_view name)
+    {
+        return babylon_webxr_feature_parse(reinterpret_cast<const uint8_t*>(name.data()), name.size(), nullptr);
+    }
 
     struct XRReferenceSpaceType
     {
