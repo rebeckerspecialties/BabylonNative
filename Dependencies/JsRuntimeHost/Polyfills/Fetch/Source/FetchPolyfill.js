@@ -591,6 +591,14 @@
         var response = new ResponseConstructor(body, init);
         var state = responseStates.get(response);
         if (state) {
+            // UrlLib has already normalized and combined network fields. Trimming
+            // the combined value again loses the space in two empty fields (", ").
+            var headers = requireHeaderState(state.headers);
+            headers.list.length = 0;
+            headers.version++;
+            for (var pair of init.headers) {
+                appendHeader(headers, normalizeHeaderName(pair[0]), toByteString(pair[1], "Header value"));
+            }
             state.redirected = metadata.redirected === true;
             state.type = metadata.type || "basic";
             state.url = metadata.url || "";
