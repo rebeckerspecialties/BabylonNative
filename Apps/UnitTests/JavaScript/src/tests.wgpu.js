@@ -1,3 +1,4 @@
+// Handwritten NativeWebGPU integration tests, copied into the build's Assets directory.
 (function () {
     function fail(message) {
         throw new Error(message);
