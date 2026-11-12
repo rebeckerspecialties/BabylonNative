@@ -1530,8 +1530,8 @@ setNativeArPortalDefault("__nativeArPortalExitDelayMs", 70000);
         applyRealtimeMaterialOverrides(scene);
         logPortalMaterialParity(scene);
         var nativePortalIblShadows = enablePortalIblShadows(scene, xrCamera, virtualWorldResult.meshes);
-        var nativePortalSSAO2 = enablePortalSSAO2(scene, xrCamera);
-        void nativePortalSSAO2;
+        // The world is disabled until placement; AO has no visible geometry to shade yet.
+        reportStatus("native-xr-portal:ssao2=deferred-until-placement");
 
         var nativeHillDebugMaterial = new BABYLON.StandardMaterial("nativeHillDebugMaterial", scene);
         nativeHillDebugMaterial.disableLighting = true;
@@ -1984,6 +1984,7 @@ setNativeArPortalDefault("__nativeArPortalExitDelayMs", 70000);
 
                 rootScene.setEnabled(true);
                 rootOccluder.setEnabled(true);
+                enablePortalSSAO2(scene, xrCamera);
                 applyMarkerVisibility(false);
                 if (xrTest) {
                     xrTest.paused = true;
