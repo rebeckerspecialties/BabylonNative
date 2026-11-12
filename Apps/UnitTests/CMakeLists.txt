@@ -58,6 +58,7 @@ set(SOURCES
     "Source/App.h"
     "Source/App.cpp"
     "Source/Tests.JavaScript.cpp"
+    "Source/Tests.NativeXr.Compositor.cpp"
     "Source/Tests.NativeXr.ImageTracking.cpp")
 
 set(UNITTEST_LIBRARIES

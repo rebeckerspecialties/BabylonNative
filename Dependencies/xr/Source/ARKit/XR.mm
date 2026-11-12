@@ -12,6 +12,7 @@
 #import <ImageIO/ImageIO.h>
 
 #import "Include/IXrContextARKit.h"
+#include "CompositorCoordinates.h"
 #include "ImageTrackingData.h"
 #include "ImageTrackingValidationState.h"
 
@@ -54,16 +55,16 @@ namespace {
      from cameraViewportUVs below using ARKit's display transform; do not reuse
      the app texture UVs for that path or camera passthrough will inherit app
      texture orientation fixes.
-     NOTE: The WebGPU-backed XR app texture arrives in the orientation expected
-     for final display, so the app UVs are kept in screen order. The ARKit
-     camera path uses cameraViewportUVs below and remains independent.
+     WebGPU app textures have a top-left origin. Map clip-space top to texture
+     row zero; reversing this flips the app layer and its apparent camera motion.
+     The ARKit camera path uses cameraViewportUVs below and remains independent.
      */
     static XRVertex vertices[] = {
         // 2D positions, UV,        camera UV
-        { { -1, -1 },   { 0, 0 },   { 0, 0} },
-        { { -1, 1 },    { 0, 1 },   { 0, 0} },
-        { { 1, -1 },    { 1, 0 },   { 0, 0} },
-        { { 1, 1 },     { 1, 1 },   { 0, 0} },
+        { { -1, -1 },   { 0, xr::CompositorTextureV(-1) },   { 0, 0} },
+        { { -1, 1 },    { 0, xr::CompositorTextureV(1) },    { 0, 0} },
+        { { 1, -1 },    { 1, xr::CompositorTextureV(-1) },   { 0, 0} },
+        { { 1, 1 },     { 1, xr::CompositorTextureV(1) },    { 0, 0} },
     };
 
     static const CGPoint cameraViewportUVs[] = {
