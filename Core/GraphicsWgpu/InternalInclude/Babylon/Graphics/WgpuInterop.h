@@ -122,6 +122,8 @@ extern "C"
     uint64_t babylon_wgpu_native_create_texture(const char* descriptor_json);
     uint64_t babylon_wgpu_native_import_metal_texture(const void* native_texture, const char* descriptor_json);
     void* babylon_wgpu_native_get_metal_device();
+    // Borrowed queue owned by the active backend; native consumers must retain it.
+    void* babylon_wgpu_native_get_metal_queue();
     uint64_t babylon_wgpu_native_import_vulkan_texture(uint64_t native_image, const char* descriptor_json);
     bool babylon_wgpu_native_get_vulkan_binding(BabylonWgpuVulkanBinding* output_binding);
     uint64_t babylon_wgpu_native_create_texture_view(uint64_t texture_id, const char* descriptor_json);

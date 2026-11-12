@@ -30,6 +30,7 @@ target_link_libraries(NativeWebGPUAsyncTests
     PRIVATE gtest_main)
 
 if(APPLE)
+    target_sources(NativeWebGPUAsyncTests PRIVATE "Source/Tests.MetalInterop.mm")
     find_library(APPKIT_FRAMEWORK AppKit)
     find_library(COREFOUNDATION_FRAMEWORK CoreFoundation)
     find_library(FOUNDATION_FRAMEWORK Foundation)

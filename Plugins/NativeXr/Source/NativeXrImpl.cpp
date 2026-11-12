@@ -115,6 +115,7 @@ namespace Babylon
 
         bool ShouldUseAsyncXrComposite()
         {
+#if defined(__APPLE__)
             static const bool enabled = std::getenv("BABYLON_NATIVE_XR_ASYNC_COMPOSITE") != nullptr;
             static bool didLog{};
             if (enabled && !didLog)
@@ -123,6 +124,9 @@ namespace Babylon
                 std::fprintf(stderr, "NativeXR async composite enabled: skipping per-frame WebGPU queue wait before AR compositing.\n");
             }
             return enabled;
+#else
+            return false;
+#endif
         }
 
     }
@@ -275,9 +279,10 @@ namespace Babylon
 
 #if defined(__APPLE__)
                     auto* graphicsDevice = babylon_wgpu_native_get_metal_device();
-                    if (graphicsDevice == nullptr)
+                    auto* graphicsQueue = babylon_wgpu_native_get_metal_queue();
+                    if (graphicsDevice == nullptr || graphicsQueue == nullptr)
                     {
-                        throw std::runtime_error{"NativeXR requires an initialized Metal-backed NativeWebGPU device on Apple platforms."};
+                        throw std::runtime_error{"NativeXR requires an initialized Metal-backed NativeWebGPU device and queue on Apple platforms."};
                     }
                     auto graphicsBindingLifetime = std::shared_ptr<void>{};
 #elif defined(__ANDROID__) && defined(BABYLON_NATIVE_XR_OPENXR)
@@ -298,12 +303,13 @@ namespace Babylon
                         nativeVulkanBinding.queue_family_index,
                         nativeVulkanBinding.queue_index});
                     void* graphicsDevice = vulkanBinding.get();
+                    void* graphicsQueue = nullptr;
                     std::shared_ptr<void> graphicsBindingLifetime = vulkanBinding;
 #else
 #error NativeXR requires an explicit platform graphics binding.
 #endif
 
-                    return xr::System::Session::CreateAsync(m_system, graphicsDevice, nullptr, [this, thisRef{shared_from_this()}] { return m_windowPtr; })
+                    return xr::System::Session::CreateAsync(m_system, graphicsDevice, graphicsQueue, [this, thisRef{shared_from_this()}] { return m_windowPtr; })
                         .then(m_sessionState->GraphicsContext.AfterRenderScheduler(), arcana::cancellation::none(), [this, thisRef{shared_from_this()}, graphicsBindingLifetime{std::move(graphicsBindingLifetime)}](std::shared_ptr<xr::System::Session> session) {
                             static_cast<void>(graphicsBindingLifetime);
                             m_sessionState->Session = std::move(session);

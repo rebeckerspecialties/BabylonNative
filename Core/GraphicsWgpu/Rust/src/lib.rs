@@ -779,6 +779,13 @@ pub extern "C" fn babylon_wgpu_native_get_metal_device() -> *mut c_void {
 }
 
 #[no_mangle]
+pub extern "C" fn babylon_wgpu_native_get_metal_queue() -> *mut c_void {
+    run_with_active_backend("NativeWebGPU.getMetalQueue", ptr::null_mut(), |backend| {
+        backend.get_metal_queue()
+    })
+}
+
+#[no_mangle]
 pub extern "C" fn babylon_wgpu_native_import_vulkan_texture(
     native_image: u64,
     descriptor_json: *const c_char,
@@ -4493,6 +4500,32 @@ mod upstream_wgpu_native {
             target_os = "visionos"
         )))]
         pub fn get_metal_device(&mut self) -> Result<*mut c_void, String> {
+            Ok(ptr::null_mut())
+        }
+
+        #[cfg(any(
+            target_os = "macos",
+            target_os = "ios",
+            target_os = "tvos",
+            target_os = "visionos"
+        ))]
+        pub fn get_metal_queue(&mut self) -> Result<*mut c_void, String> {
+            let Some(hal_queue) =
+                (unsafe { self.runtime.queue.as_hal::<wgpu::hal::api::Metal>() })
+            else {
+                return Ok(ptr::null_mut());
+            };
+            // The runtime retains the queue; the receiving ARC owner retains it too.
+            Ok(hal_queue.as_raw() as *const _ as *mut c_void)
+        }
+
+        #[cfg(not(any(
+            target_os = "macos",
+            target_os = "ios",
+            target_os = "tvos",
+            target_os = "visionos"
+        )))]
+        pub fn get_metal_queue(&mut self) -> Result<*mut c_void, String> {
             Ok(ptr::null_mut())
         }
 
