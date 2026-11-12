@@ -2300,6 +2300,7 @@ mod upstream_wgpu_native {
         current_canvas_texture: Option<wgpu::Texture>,
         current_canvas_texture_id: Option<u64>,
         current_canvas_id: Option<u64>,
+        presentation_blitter: Option<(wgpu::TextureFormat, wgpu::util::TextureBlitter)>,
         staging_belt: wgpu::util::StagingBelt,
         pending_buffer_writes: Vec<PendingBufferWrite>,
         free_buffer_write_data: Vec<Vec<u8>>,
@@ -3422,6 +3423,39 @@ mod upstream_wgpu_native {
         }
     }
 
+    fn encode_canvas_presentation(
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        source: &wgpu::Texture,
+        destination: &wgpu::Texture,
+        blitter: &mut Option<(wgpu::TextureFormat, wgpu::util::TextureBlitter)>,
+    ) {
+        if source.size() == destination.size()
+            && source.format().remove_srgb_suffix() == destination.format().remove_srgb_suffix()
+            && destination.usage().contains(wgpu::TextureUsages::COPY_DST)
+        {
+            encoder.copy_texture_to_texture(
+                source.as_image_copy(),
+                destination.as_image_copy(),
+                source.size(),
+            );
+            return;
+        }
+
+        // Canvas backing dimensions need not match the native drawable (DPR,
+        // hardware scaling, window resizing). Present the whole image at its size.
+        let format = destination.format();
+        if blitter.as_ref().map(|(cached, _)| *cached) != Some(format) {
+            *blitter = Some((format, wgpu::util::TextureBlitter::new(device, format)));
+        }
+        blitter.as_ref().unwrap().1.copy(
+            device,
+            encoder,
+            &source.create_view(&wgpu::TextureViewDescriptor::default()),
+            &destination.create_view(&wgpu::TextureViewDescriptor::default()),
+        );
+    }
+
     impl InteropBackendContext {
         pub fn create(config: LocalBootstrapConfig) -> Result<Self, String> {
             let runtime = LocalRuntimeState::bootstrap(config)?;
@@ -3441,6 +3475,7 @@ mod upstream_wgpu_native {
                 current_canvas_texture: None,
                 current_canvas_texture_id: None,
                 current_canvas_id: None,
+                presentation_blitter: None,
                 staging_belt,
                 pending_buffer_writes: Vec::new(),
                 free_buffer_write_data: Vec::new(),
@@ -3632,23 +3667,10 @@ mod upstream_wgpu_native {
 
         pub fn resize(&mut self, width: u32, height: u32) {
             let (width, height) = self.runtime.clamped_extent(width, height);
-            self.runtime.reconfigure_surface(width, height);
-            self.offscreen_texture = None;
-            self.offscreen_view = None;
             self.current_surface_frame = None;
             self.current_surface_frame_submitted = false;
-            if let Some(id) = self.current_canvas_texture_id.take() {
-                if let Some(texture) = self.resources.textures.remove(&id) {
-                    subtract_estimated_gpu_memory_bytes(estimated_texture_resource_bytes(&texture));
-                }
-            }
-            for target in self.canvas_targets.drain().map(|(_, target)| target) {
-                if let Some(texture) = self.resources.textures.remove(&target.texture_id) {
-                    subtract_estimated_gpu_memory_bytes(estimated_texture_resource_bytes(&texture));
-                }
-            }
-            self.current_canvas_texture = None;
-            self.current_canvas_id = None;
+            // Host drawable size and individual canvas backing sizes are independent.
+            self.runtime.reconfigure_surface(width, height);
         }
 
         pub fn render(
@@ -3677,14 +3699,44 @@ mod upstream_wgpu_native {
                             label: Some("babylon-native-webgpu.screenshot-encoder"),
                         },
                     );
+                    let capture_target = if source_texture.width() != self.runtime.width
+                        || source_texture.height() != self.runtime.height
+                    {
+                        let texture = self.runtime.device.create_texture(&wgpu::TextureDescriptor {
+                            label: Some("babylon-native-webgpu.screenshot-scaled"),
+                            size: wgpu::Extent3d {
+                                width: self.runtime.width,
+                                height: self.runtime.height,
+                                depth_or_array_layers: 1,
+                            },
+                            mip_level_count: 1,
+                            sample_count: 1,
+                            dimension: wgpu::TextureDimension::D2,
+                            format: source_texture.format(),
+                            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                                | wgpu::TextureUsages::COPY_SRC,
+                            view_formats: &[],
+                        });
+                        encode_canvas_presentation(
+                            &self.runtime.device,
+                            &mut encoder,
+                            source_texture,
+                            &texture,
+                            &mut self.presentation_blitter,
+                        );
+                        Some(texture)
+                    } else {
+                        None
+                    };
+                    let source_texture = capture_target.as_ref().unwrap_or(source_texture);
                     let (staging_buffer, padded_bytes_per_row, unpadded_bytes_per_row) =
                         copy_texture_to_readback_buffer(
                             &self.runtime.device,
                             &mut encoder,
                             source_texture,
-                            self.runtime.width,
-                            self.runtime.height,
-                            self.offscreen_format,
+                            source_texture.width(),
+                            source_texture.height(),
+                            source_texture.format(),
                         )?;
                     self.runtime.queue.submit(Some(encoder.finish()));
                     Some(map_readback_buffer_to_rgba(
@@ -3692,9 +3744,9 @@ mod upstream_wgpu_native {
                         &staging_buffer,
                         padded_bytes_per_row,
                         unpadded_bytes_per_row,
-                        self.runtime.width,
-                        self.runtime.height,
-                        self.offscreen_format,
+                        source_texture.width(),
+                        source_texture.height(),
+                        source_texture.format(),
                     )?)
                 } else {
                     None
@@ -3704,19 +3756,6 @@ mod upstream_wgpu_native {
             };
 
             if self.runtime.surface.is_some() && self.offscreen_texture.is_some() {
-                if self
-                    .runtime
-                    .surface_config
-                    .as_ref()
-                    .map(|config| {
-                        config.width != self.runtime.width || config.height != self.runtime.height
-                    })
-                    .unwrap_or(false)
-                {
-                    self.runtime
-                        .reconfigure_surface(self.runtime.width, self.runtime.height);
-                }
-
                 if let (Some(surface), Some(source_texture)) = (
                     self.runtime.surface.as_ref(),
                     self.offscreen_texture.as_ref(),
@@ -3729,24 +3768,12 @@ mod upstream_wgpu_native {
                                     label: Some("babylon-native-webgpu.present-offscreen"),
                                 },
                             );
-                            encoder.copy_texture_to_texture(
-                                wgpu::TexelCopyTextureInfo {
-                                    texture: source_texture,
-                                    mip_level: 0,
-                                    origin: wgpu::Origin3d::ZERO,
-                                    aspect: wgpu::TextureAspect::All,
-                                },
-                                wgpu::TexelCopyTextureInfo {
-                                    texture: &frame.texture,
-                                    mip_level: 0,
-                                    origin: wgpu::Origin3d::ZERO,
-                                    aspect: wgpu::TextureAspect::All,
-                                },
-                                wgpu::Extent3d {
-                                    width: self.runtime.width,
-                                    height: self.runtime.height,
-                                    depth_or_array_layers: 1,
-                                },
+                            encode_canvas_presentation(
+                                &self.runtime.device,
+                                &mut encoder,
+                                source_texture,
+                                &frame.texture,
+                                &mut self.presentation_blitter,
                             );
                             submit_and_present(
                                 &self.runtime.device,
@@ -6746,8 +6773,6 @@ mod upstream_wgpu_native {
             }
 
             let (width, height) = self.runtime.clamped_extent(width, height);
-            self.runtime.width = width;
-            self.runtime.height = height;
 
             let requested_format =
                 map_texture_format(format).unwrap_or(self.runtime.render_target_format);
@@ -6806,6 +6831,7 @@ mod upstream_wgpu_native {
                     dimension: wgpu::TextureDimension::D2,
                     format,
                     usage: map_texture_usage(usage)
+                        | wgpu::TextureUsages::TEXTURE_BINDING
                         | wgpu::TextureUsages::RENDER_ATTACHMENT
                         | wgpu::TextureUsages::COPY_SRC
                         | wgpu::TextureUsages::COPY_DST,
@@ -9051,6 +9077,172 @@ mod upstream_wgpu_native {
     #[cfg(test)]
     mod tests {
         use super::map_texture_format;
+
+        #[test]
+        #[ignore = "requires a native GPU adapter; run explicitly on device"]
+        fn canvas_backing_size_is_independent_of_host_resize() {
+            let mut context = super::InteropBackendContext::create(super::LocalBootstrapConfig {
+                width: 16,
+                height: 16,
+                surface_layer: std::ptr::null_mut(),
+                prefer_low_power: false,
+                hdr10: false,
+            })
+            .expect("GPU test requires a native adapter");
+            let first = context
+                .canvas_get_current_texture(1, 8, 4, "rgba8unorm", 0x10)
+                .unwrap();
+            let second = context
+                .canvas_get_current_texture(2, 5, 7, "rgba8unorm", 0x10)
+                .unwrap();
+            assert_eq!((context.runtime.width, context.runtime.height), (16, 16));
+            context.resize(32, 24);
+            assert_eq!(
+                context
+                    .canvas_get_current_texture(1, 8, 4, "rgba8unorm", 0x10)
+                    .unwrap(),
+                first
+            );
+            assert_eq!(
+                context
+                    .canvas_get_current_texture(2, 5, 7, "rgba8unorm", 0x10)
+                    .unwrap(),
+                second
+            );
+            let screenshot = context.render(false, true).unwrap().unwrap();
+            assert_eq!((screenshot.width, screenshot.height), (32, 24));
+            assert_eq!((context.runtime.width, context.runtime.height), (32, 24));
+        }
+
+        #[test]
+        #[ignore = "requires a native GPU adapter; run explicitly on device"]
+        fn canvas_presentation_scales_the_entire_image_and_converts_format() {
+            let mut context = super::InteropBackendContext::create(super::LocalBootstrapConfig {
+                width: 16,
+                height: 16,
+                surface_layer: std::ptr::null_mut(),
+                prefer_low_power: false,
+                hdr10: false,
+            })
+            .expect("GPU test requires a native adapter");
+            context
+                .canvas_get_current_texture(1, 8, 4, "rgba8unorm", 0x10)
+                .unwrap();
+            let source = context.offscreen_texture.as_ref().unwrap();
+            let mut pixels = Vec::new();
+            for _ in 0..4 {
+                for x in 0..8 {
+                    pixels.extend_from_slice(if x < 4 {
+                        &[255, 0, 0, 255]
+                    } else {
+                        &[0, 0, 255, 255]
+                    });
+                }
+            }
+            context.runtime.queue.write_texture(
+                source.as_image_copy(),
+                &pixels,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(32),
+                    rows_per_image: Some(4),
+                },
+                source.size(),
+            );
+            let mut blitter = None;
+            for (width, height, format, usage) in [
+                (
+                    8,
+                    4,
+                    wgpu::TextureFormat::Rgba8Unorm,
+                    wgpu::TextureUsages::COPY_DST,
+                ),
+                (
+                    4,
+                    8,
+                    wgpu::TextureFormat::Rgba8Unorm,
+                    wgpu::TextureUsages::empty(),
+                ),
+                (
+                    16,
+                    2,
+                    wgpu::TextureFormat::Bgra8Unorm,
+                    wgpu::TextureUsages::COPY_DST,
+                ),
+                (
+                    8,
+                    4,
+                    wgpu::TextureFormat::Rgba8Unorm,
+                    wgpu::TextureUsages::empty(),
+                ),
+            ] {
+                let destination = context
+                    .runtime
+                    .device
+                    .create_texture(&wgpu::TextureDescriptor {
+                        label: Some("canvas presentation regression"),
+                        size: wgpu::Extent3d {
+                            width,
+                            height,
+                            depth_or_array_layers: 1,
+                        },
+                        mip_level_count: 1,
+                        sample_count: 1,
+                        dimension: wgpu::TextureDimension::D2,
+                        format,
+                        usage: usage
+                            | wgpu::TextureUsages::RENDER_ATTACHMENT
+                            | wgpu::TextureUsages::COPY_SRC,
+                        view_formats: &[],
+                    });
+                let mut encoder = context
+                    .runtime
+                    .device
+                    .create_command_encoder(&Default::default());
+                super::encode_canvas_presentation(
+                    &context.runtime.device,
+                    &mut encoder,
+                    source,
+                    &destination,
+                    &mut blitter,
+                );
+                let (buffer, padded, unpadded) = super::copy_texture_to_readback_buffer(
+                    &context.runtime.device,
+                    &mut encoder,
+                    &destination,
+                    width,
+                    height,
+                    format,
+                )
+                .unwrap();
+                context.runtime.queue.submit(Some(encoder.finish()));
+                let screenshot = super::map_readback_buffer_to_rgba(
+                    &context.runtime.device,
+                    &buffer,
+                    padded,
+                    unpadded,
+                    width,
+                    height,
+                    format,
+                )
+                .unwrap();
+                for y in 0..height {
+                    for x in 0..width {
+                        let index = ((y * width + x) * 4) as usize;
+                        let expected = if x < width / 2 {
+                            [255, 0, 0, 255]
+                        } else {
+                            [0, 0, 255, 255]
+                        };
+                        assert_eq!(
+                            &screenshot.rgba[index..index + 4],
+                            &expected,
+                            "{width}x{height} {format:?} at {x},{y}"
+                        );
+                    }
+                }
+            }
+        }
 
         #[test]
         fn maps_standard_compressed_texture_formats_with_their_block_layouts() {
