@@ -525,6 +525,9 @@
                 statusText: state.statusText
             });
             var cloneState = requireResponseState(clone);
+            var cloneHeaders = requireHeaderState(cloneState.headers);
+            cloneHeaders.list = requireHeaderState(state.headers).list.map(function (entry) { return entry.slice(); });
+            cloneHeaders.version++;
             cloneState.redirected = state.redirected;
             cloneState.type = state.type;
             cloneState.url = state.url;

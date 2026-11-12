@@ -45,6 +45,10 @@ describe("fetch (web-platform-tests)", function () {
             }
             const response = await fetch(xhrResources + resource + ".asis");
             expect(response.headers.get(name)).to.equal(value);
+            const clone = response.clone();
+            expect(clone.headers.get(name)).to.equal(value);
+            clone.headers.set(name, "changed");
+            expect(response.headers.get(name)).to.equal(value);
         });
     }
 
