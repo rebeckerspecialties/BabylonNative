@@ -659,6 +659,79 @@ TEST(NativeWebGPUAsyncBridge, AsyncPipelineErrorsRejectWithoutScopeOrEventLeakag
     )JS");
 }
 
+TEST(NativeWebGPUAsyncBridge, RenderPassMethodsAreSharedWithoutCapturingTheFirstDevice)
+{
+    RunNativeWebGpuAsyncScript(R"JS(
+        (async () => {
+            const adapter = await navigator.gpu.requestAdapter();
+            const devices = [await adapter.requestDevice(), await adapter.requestDevice()];
+            const methods = ["setPipeline", "setBindGroup", "setVertexBuffer", "setIndexBuffer",
+                "draw", "drawIndexed", "drawIndirect", "drawIndexedIndirect", "end"];
+            for (const device of devices) device.pushErrorScope("validation");
+            let first;
+            for (const index of [0, 0, 1]) {
+                const device = devices[index];
+                const target = device.createTexture({size: [2, 2], format: "rgba8unorm", usage: GPUTextureUsage.RENDER_ATTACHMENT});
+                const encoder = device.createCommandEncoder();
+                const pass = encoder.beginRenderPass({colorAttachments: [{view: target.createView(),
+                    loadOp: "clear", storeOp: "store", clearValue: [index, 0, 0, 1]}]});
+                for (const name of methods) {
+                    if (Object.prototype.hasOwnProperty.call(pass, name) ||
+                        pass[name] !== GPURenderPassEncoder.prototype[name] ||
+                        (first && pass[name] !== first[name])) {
+                        throw new Error("Render pass method is not shared: " + name);
+                    }
+                }
+                first = first || pass;
+                pass.end();
+                device.queue.submit([encoder.finish()]);
+                await device.queue.onSubmittedWorkDone();
+                target.destroy();
+            }
+            for (const device of devices) {
+                const error = await device.popErrorScope();
+                if (error) throw new Error("Shared method used the wrong device: " + error.message);
+            }
+            __nativeWebGpuTestDone(true, "");
+        })().catch((error) => __nativeWebGpuTestDone(false, String(error)));
+    )JS");
+}
+
+TEST(NativeWebGPUAsyncBridge, SharedRenderPassMethodsReportForeignResourcesToReceiverDevice)
+{
+    RunNativeWebGpuAsyncScript(R"JS(
+        (async () => {
+            const adapter = await navigator.gpu.requestAdapter();
+            const devices = [await adapter.requestDevice(), await adapter.requestDevice()];
+            const buffers = devices.map(device => device.createBuffer({size: 16, usage: GPUBufferUsage.VERTEX}));
+            for (const index of [0, 1]) {
+                const device = devices[index];
+                const other = devices[1 - index];
+                const target = device.createTexture({size: [2, 2], format: "rgba8unorm", usage: GPUTextureUsage.RENDER_ATTACHMENT});
+                const encoder = device.createCommandEncoder();
+                const pass = encoder.beginRenderPass({colorAttachments: [{view: target.createView(),
+                    loadOp: "clear", storeOp: "store"}]});
+                device.pushErrorScope("validation");
+                other.pushErrorScope("validation");
+                GPURenderPassEncoder.prototype.setVertexBuffer.call(pass, 0, buffers[1 - index]);
+                pass.end();
+                device.queue.submit([encoder.finish()]);
+                const error = await device.popErrorScope();
+                if (!(error instanceof GPUValidationError) || !/different GPUDevice/.test(error.message)) {
+                    throw new Error("Receiver device did not capture the foreign-buffer error: " + index);
+                }
+                if (await other.popErrorScope() !== null) {
+                    throw new Error("Foreign-buffer error leaked to the other device: " + index);
+                }
+                await device.queue.onSubmittedWorkDone();
+                target.destroy();
+            }
+            devices.forEach(device => device.destroy());
+            __nativeWebGpuTestDone(true, "");
+        })().catch(error => __nativeWebGpuTestDone(false, String(error) + "\n" + (error.stack || "")));
+    )JS");
+}
+
 TEST(NativeWebGPUAsyncBridge, RenderPassEncoderExposesDebugMarkerMethods)
 {
     RunNativeWebGpuAsyncScript(R"JS(

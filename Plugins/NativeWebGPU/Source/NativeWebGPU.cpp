@@ -378,13 +378,22 @@ namespace Babylon::Plugins::NativeWebGPU
             bool m_rejected;
         };
 
-        template<typename Callback>
+        NativeHandleState* GetNativeHandleState(const Napi::Value& value);
+
+        template<bool ResourceMethod = false, typename Callback>
         Napi::Function MakeGpuFunction(Napi::Env env, Callback callback, const char* name = nullptr)
         {
-            auto device = g_activeDevice;
+            auto device = ResourceMethod ? std::shared_ptr<NativeDeviceState>{} : g_activeDevice;
             return Napi::Function::New(env, [device, callback = std::move(callback)](const Napi::CallbackInfo& info) -> Napi::Value {
-                DeviceCall call{device};
-                auto registry = device ? device->Registry.lock() : nullptr;
+                auto owner = device;
+                if constexpr (ResourceMethod)
+                {
+                    // Shared prototype methods are installed before devices exist.
+                    auto* handle = GetNativeHandleState(info.This());
+                    owner = handle ? handle->Device : nullptr;
+                }
+                DeviceCall call{owner};
+                auto registry = owner ? owner->Registry.lock() : nullptr;
                 try
                 {
                     Napi::Value result = info.Env().Undefined();
@@ -2539,10 +2548,16 @@ namespace Babylon::Plugins::NativeWebGPU
         Napi::Object CreateGpuRenderPassEncoder(Napi::Env env, uint64_t nativePassId)
         {
             auto pass = Napi::Object::New(env);
-            auto noOp = GetNoOpFunction(env);
             AttachNativeHandle(pass, NativeResourceKind::RenderPass, nativePassId);
+            return pass;
+        }
 
-            pass.Set("setPipeline", MakeGpuFunction(env, [](const Napi::CallbackInfo& info) {
+        void InstallRenderPassPrototype(Napi::Env env)
+        {
+            auto pass = env.Global().Get("GPURenderPassEncoder").As<Napi::Object>().Get("prototype").As<Napi::Object>();
+            auto noOp = GetNoOpFunction(env);
+
+            pass.Set("setPipeline", MakeGpuFunction<true>(env, [](const Napi::CallbackInfo& info) {
                 const auto passId = GetNativeHandleId(info.This(), NativeResourceKind::RenderPass);
                 const auto pipelineId = info.Length() > 0 ? GetNativeHandleId(info[0], NativeResourceKind::RenderPipeline) : 0;
                 if (babylon_wgpu_native_render_pass_set_pipeline(passId, pipelineId))
@@ -2550,7 +2565,7 @@ namespace Babylon::Plugins::NativeWebGPU
                     MarkDrawRequestedCallback(info);
                 }
             }));
-            pass.Set("setBindGroup", MakeGpuFunction(env, [](const Napi::CallbackInfo& info) {
+            pass.Set("setBindGroup", MakeGpuFunction<true>(env, [](const Napi::CallbackInfo& info) {
                 const auto passId = GetNativeHandleId(info.This(), NativeResourceKind::RenderPass);
                 const auto index = info.Length() > 0 ? ToUint32(info[0], 0) : 0;
                 const auto bindGroupId = info.Length() > 1 ? GetNativeHandleId(info[1], NativeResourceKind::BindGroup) : 0;
@@ -2562,7 +2577,7 @@ namespace Babylon::Plugins::NativeWebGPU
                     dynamicOffsets.empty() ? nullptr : dynamicOffsets.data(),
                     dynamicOffsets.size());
             }));
-            pass.Set("setVertexBuffer", MakeGpuFunction(env, [](const Napi::CallbackInfo& info) {
+            pass.Set("setVertexBuffer", MakeGpuFunction<true>(env, [](const Napi::CallbackInfo& info) {
                 const auto passId = GetNativeHandleId(info.This(), NativeResourceKind::RenderPass);
                 const auto slot = info.Length() > 0 ? ToUint32(info[0], 0) : 0;
                 const auto bufferId = info.Length() > 1 ? GetNativeHandleId(info[1], NativeResourceKind::Buffer) : 0;
@@ -2570,7 +2585,7 @@ namespace Babylon::Plugins::NativeWebGPU
                 const auto size = info.Length() > 3 && info[3].IsNumber() ? static_cast<uint64_t>(std::max<int64_t>(0, info[3].As<Napi::Number>().Int64Value())) : UINT64_MAX;
                 babylon_wgpu_native_render_pass_set_vertex_buffer(passId, slot, bufferId, offset, size);
             }));
-            pass.Set("setIndexBuffer", MakeGpuFunction(env, [](const Napi::CallbackInfo& info) {
+            pass.Set("setIndexBuffer", MakeGpuFunction<true>(env, [](const Napi::CallbackInfo& info) {
                 const auto passId = GetNativeHandleId(info.This(), NativeResourceKind::RenderPass);
                 const auto bufferId = info.Length() > 0 ? GetNativeHandleId(info[0], NativeResourceKind::Buffer) : 0;
                 const auto format = info.Length() > 1 && info[1].IsString() ? info[1].As<Napi::String>().Utf8Value() : std::string{"uint16"};
@@ -2578,24 +2593,24 @@ namespace Babylon::Plugins::NativeWebGPU
                 const auto size = info.Length() > 3 && info[3].IsNumber() ? static_cast<uint64_t>(std::max<int64_t>(0, info[3].As<Napi::Number>().Int64Value())) : UINT64_MAX;
                 babylon_wgpu_native_render_pass_set_index_buffer(passId, bufferId, format.c_str(), offset, size);
             }));
-            pass.Set("setViewport", MakeGpuFunction(env, [](const Napi::CallbackInfo& info) {
+            pass.Set("setViewport", MakeGpuFunction<true>(env, [](const Napi::CallbackInfo& info) {
                 const auto passId = GetNativeHandleId(info.This(), NativeResourceKind::RenderPass);
                 const auto f = [&info](size_t index, double fallback) {
                     return info.Length() > index && info[index].IsNumber() ? info[index].As<Napi::Number>().DoubleValue() : fallback;
                 };
                 babylon_wgpu_native_render_pass_set_viewport(passId, static_cast<float>(f(0, 0)), static_cast<float>(f(1, 0)), static_cast<float>(f(2, 1)), static_cast<float>(f(3, 1)), static_cast<float>(f(4, 0)), static_cast<float>(f(5, 1)));
             }));
-            pass.Set("setScissorRect", MakeGpuFunction(env, [](const Napi::CallbackInfo& info) {
+            pass.Set("setScissorRect", MakeGpuFunction<true>(env, [](const Napi::CallbackInfo& info) {
                 const auto passId = GetNativeHandleId(info.This(), NativeResourceKind::RenderPass);
                 const auto scissor = ReadScissorRect(info);
                 babylon_wgpu_native_render_pass_set_scissor_rect(passId, scissor.X, scissor.Y, scissor.Width, scissor.Height);
             }));
-            pass.Set("setStencilReference", MakeGpuFunction(env, [](const Napi::CallbackInfo& info) {
+            pass.Set("setStencilReference", MakeGpuFunction<true>(env, [](const Napi::CallbackInfo& info) {
                 babylon_wgpu_native_render_pass_set_stencil_reference(
                     GetNativeHandleId(info.This(), NativeResourceKind::RenderPass),
                     info.Length() > 0 ? ToUint32(info[0], 0) : 0);
             }));
-            pass.Set("setBlendConstant", MakeGpuFunction(env, [](const Napi::CallbackInfo& info) {
+            pass.Set("setBlendConstant", MakeGpuFunction<true>(env, [](const Napi::CallbackInfo& info) {
                 const auto passId = GetNativeHandleId(info.This(), NativeResourceKind::RenderPass);
                 double r{}, g{}, b{}, a{1.0};
                 if (info.Length() > 0 && info[0].IsObject())
@@ -2608,7 +2623,7 @@ namespace Babylon::Plugins::NativeWebGPU
                 }
                 babylon_wgpu_native_render_pass_set_blend_constant(passId, r, g, b, a);
             }));
-            pass.Set("draw", MakeGpuFunction(env, [](const Napi::CallbackInfo& info) {
+            pass.Set("draw", MakeGpuFunction<true>(env, [](const Napi::CallbackInfo& info) {
                 const auto passId = GetNativeHandleId(info.This(), NativeResourceKind::RenderPass);
                 if (babylon_wgpu_native_render_pass_draw(
                         passId,
@@ -2620,7 +2635,7 @@ namespace Babylon::Plugins::NativeWebGPU
                     MarkDrawCallCallback(info);
                 }
             }));
-            pass.Set("drawIndexed", MakeGpuFunction(env, [](const Napi::CallbackInfo& info) {
+            pass.Set("drawIndexed", MakeGpuFunction<true>(env, [](const Napi::CallbackInfo& info) {
                 const auto passId = GetNativeHandleId(info.This(), NativeResourceKind::RenderPass);
                 if (babylon_wgpu_native_render_pass_draw_indexed(
                         passId,
@@ -2633,7 +2648,7 @@ namespace Babylon::Plugins::NativeWebGPU
                     MarkDrawCallCallback(info);
                 }
             }));
-            pass.Set("drawIndirect", MakeGpuFunction(env, [](const Napi::CallbackInfo& info) {
+            pass.Set("drawIndirect", MakeGpuFunction<true>(env, [](const Napi::CallbackInfo& info) {
                 const auto passId = GetNativeHandleId(info.This(), NativeResourceKind::RenderPass);
                 const auto bufferId = info.Length() > 0 ? GetNativeHandleId(info[0], NativeResourceKind::Buffer) : 0;
                 const auto offset = info.Length() > 1 && info[1].IsNumber()
@@ -2644,7 +2659,7 @@ namespace Babylon::Plugins::NativeWebGPU
                     MarkDrawCallCallback(info);
                 }
             }));
-            pass.Set("drawIndexedIndirect", MakeGpuFunction(env, [](const Napi::CallbackInfo& info) {
+            pass.Set("drawIndexedIndirect", MakeGpuFunction<true>(env, [](const Napi::CallbackInfo& info) {
                 const auto passId = GetNativeHandleId(info.This(), NativeResourceKind::RenderPass);
                 const auto bufferId = info.Length() > 0 ? GetNativeHandleId(info[0], NativeResourceKind::Buffer) : 0;
                 const auto offset = info.Length() > 1 && info[1].IsNumber()
@@ -2655,7 +2670,7 @@ namespace Babylon::Plugins::NativeWebGPU
                     MarkDrawCallCallback(info);
                 }
             }));
-            pass.Set("multiDrawIndirect", MakeGpuFunction(env, [](const Napi::CallbackInfo& info) {
+            pass.Set("multiDrawIndirect", MakeGpuFunction<true>(env, [](const Napi::CallbackInfo& info) {
                 const auto passId = GetNativeHandleId(info.This(), NativeResourceKind::RenderPass);
                 const auto bufferId = info.Length() > 0 ? GetNativeHandleId(info[0], NativeResourceKind::Buffer) : 0;
                 const auto offset = info.Length() > 1 && info[1].IsNumber()
@@ -2667,7 +2682,7 @@ namespace Babylon::Plugins::NativeWebGPU
                     MarkMultiDrawCalls(count);
                 }
             }));
-            pass.Set("multiDrawIndexedIndirect", MakeGpuFunction(env, [](const Napi::CallbackInfo& info) {
+            pass.Set("multiDrawIndexedIndirect", MakeGpuFunction<true>(env, [](const Napi::CallbackInfo& info) {
                 const auto passId = GetNativeHandleId(info.This(), NativeResourceKind::RenderPass);
                 const auto bufferId = info.Length() > 0 ? GetNativeHandleId(info[0], NativeResourceKind::Buffer) : 0;
                 const auto offset = info.Length() > 1 && info[1].IsNumber()
@@ -2679,7 +2694,7 @@ namespace Babylon::Plugins::NativeWebGPU
                     MarkMultiDrawCalls(count);
                 }
             }));
-            pass.Set("_recordCommands", MakeGpuFunction(env, [](const Napi::CallbackInfo& info) -> Napi::Value {
+            pass.Set("_recordCommands", MakeGpuFunction<true>(env, [](const Napi::CallbackInfo& info) -> Napi::Value {
                 const auto passId = GetNativeHandleId(info.This(), NativeResourceKind::RenderPass);
                 if (passId == 0 || info.Length() == 0 || !info[0].IsTypedArray())
                 {
@@ -2715,7 +2730,7 @@ namespace Babylon::Plugins::NativeWebGPU
 
                 return Napi::Boolean::New(info.Env(), false);
             }));
-            pass.Set("executeBundles", MakeGpuFunction(env, [](const Napi::CallbackInfo& info) {
+            pass.Set("executeBundles", MakeGpuFunction<true>(env, [](const Napi::CallbackInfo& info) {
                 if (info.Length() == 0 || !info[0].IsArray())
                 {
                     return;
@@ -2763,7 +2778,7 @@ namespace Babylon::Plugins::NativeWebGPU
             pass.Set("pushDebugGroup", noOp);
             pass.Set("popDebugGroup", noOp);
             pass.Set("insertDebugMarker", noOp);
-            pass.Set("end", MakeGpuFunction(env, [](const Napi::CallbackInfo& info) {
+            pass.Set("end", MakeGpuFunction<true>(env, [](const Napi::CallbackInfo& info) {
                 const auto passId = GetNativeHandleId(info.This(), NativeResourceKind::RenderPass);
                 babylon_wgpu_native_render_pass_end(passId);
                 if (auto* state = GetNativeHandleState(info.This()))
@@ -2771,8 +2786,6 @@ namespace Babylon::Plugins::NativeWebGPU
                     state->Id = 0;
                 }
             }));
-
-            return pass;
         }
 
         Napi::Object CreateGpuRenderBundleEncoder(Napi::Env env)
@@ -4529,6 +4542,7 @@ namespace Babylon::Plugins::NativeWebGPU
         const bool developerFeaturesEnabled = IsWebGpuDeveloperFeaturesEnabled(env);
         const bool unsafeWebGpuEnabled = developerFeaturesEnabled || IsUnsafeWebGpuEnabled(env);
         InstallGpuInterfaces(env);
+        InstallRenderPassPrototype(env);
         InstallWebGpuConstants(env);
         auto gpu = CreateGpu(env, developerFeaturesEnabled, unsafeWebGpuEnabled);
         navigator.Set(JS_GPU_NAME, gpu);
