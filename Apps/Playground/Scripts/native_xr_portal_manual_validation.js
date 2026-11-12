@@ -1,4 +1,4 @@
-globalThis.__nativeArPortalExitDelayMs = 180000;
+globalThis.__nativeArPortalExitDelayMs = 600000;
 globalThis.__nativeArPortalLogMeshDiagnostics = true;
 // Hosts without a native status sink (the iOS Playground) would otherwise run this
 // validation silently; mirror the demo's status stream to the console.

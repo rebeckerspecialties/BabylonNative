@@ -1,6 +1,6 @@
 # wgpu Monorepo Integration
 
-Integration checkpoint: November 11, 2026. The canonical branch is `wgpu`.
+Integration checkpoint: November 12, 2026. The canonical branch is `wgpu`.
 The pre-integration tip is preserved as `backup/wgpu-before-reconcile-20261111`.
 
 ## Dependency Baseline
@@ -69,9 +69,12 @@ Verified against the integration on M4 Metal:
 - Nine Node harness/dependency-patch tests pass.
 - 48 runtime tests pass, including 420 JavaScript/polyfill assertions and the
   recovered scheduler tests.
-- The BabylonNative test executable passes 12 selected tests, including 49
-  JavaScript WebGPU cases and seven image-tracking ownership tests.
-- 18 native WebGPU async/C API tests pass, including a GPU buffer round trip.
+- The BabylonNative test executable passes 14 selected tests, including 49
+  JavaScript WebGPU cases, seven image-tracking ownership tests and two ARKit
+  compositor-coordinate tests.
+- 21 native WebGPU async/C API/Metal tests pass, including a GPU buffer round
+  trip, shared render-pass method identity and device ownership in both
+  directions, and wgpu-to-native Metal queue ordering without a CPU wait.
 - Two explicit Rust GPU regression tests pass for independent canvas sizes,
   host resizes, full-image scaling and RGBA/BGRA presentation. They require a
   native adapter and are opt-in for CPU-only test environments.
@@ -87,11 +90,16 @@ The iOS Release app builds and is signed by Rebecker Specialties Inc., using
 Apple Development: Matthew Donovan Hargett (79G4CD2XGC), team 4GWK4YU2PW and
 bundle identifier com.rebeckerspecialties.BabylonNative.Playground.
 
-Physical AR acceptance remains separate: camera authorization and a user-held
-phone aimed into a scene are required before plane placement, compositor
-correctness and sustained post-placement 50+ fps can be accepted. A camera
-permission dialog was observed in a CoreDevice display screenshot during this
-checkpoint; pre-placement/framebuffer data does not establish that acceptance.
+Physical iPhone XS inspection now confirms camera passthrough and an upright
+portal fixed to the floor during phone motion. CoreDevice display captures
+include the camera compositor; framebuffer readback was not used to claim
+passthrough correctness. An app-texture UV inversion in the ARKit compositor
+caused the upside-down image and apparent inverse vertical motion. The camera
+UV transform and world poses did not need a compensating flip.
+
+Sustained post-placement 50+ fps is not restored. The accepted placed run
+measured about 9.8 displayed fps. CPU, GPU and memory results, qualification
+limits and follow-up work are recorded in [NativeXrPortalProfiling.md](NativeXrPortalProfiling.md).
 
 The non-XR full Hill Valley stress run on M4 rendered its materials without
 presentation errors and reported about 25-27 fps with SSAO (roughly 227 draws
@@ -107,8 +115,8 @@ Snapshot/pass ordering with AO needs a focused reproducer before adoption.
 
 The production portal now defers SSAO allocation and passes until placement;
 post-placement AO quality settings remain unchanged. Zero hit-test results
-while the camera authorization dialog is present are not a plane-detection
-regression. No sustained post-placement XS frame-rate claim is made here.
+while the camera authorization dialog is present, or while the phone is not
+aimed into a trackable scene, are not a plane-detection regression.
 
 ## Repeatable Local Commands
 
