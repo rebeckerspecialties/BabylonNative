@@ -5,6 +5,37 @@
 #include <future>
 #include <memory>
 #include <thread>
+#include <vector>
+
+TEST(AppRuntime, QueuedMoveOnlyCallbacksExecuteOnceInOrder)
+{
+    Babylon::AppRuntime runtime{};
+    std::promise<void> started;
+    std::promise<void> release;
+    auto releaseFuture = release.get_future();
+    runtime.Dispatch([&](Napi::Env) {
+        started.set_value();
+        releaseFuture.wait();
+    });
+    started.get_future().wait();
+
+    std::vector<int> observed;
+    for (int i = 0; i < 32; ++i)
+    {
+        runtime.Dispatch([&, value = std::make_unique<int>(i)](Napi::Env) {
+            observed.push_back(*value);
+        });
+    }
+    std::promise<void> drained;
+    runtime.Dispatch([&](Napi::Env) { drained.set_value(); });
+    release.set_value();
+    ASSERT_EQ(drained.get_future().wait_for(std::chrono::seconds(5)), std::future_status::ready);
+    ASSERT_EQ(observed.size(), 32u);
+    for (int i = 0; i < 32; ++i)
+    {
+        EXPECT_EQ(observed[i], i);
+    }
+}
 
 TEST(AppRuntime, DestroyDoesNotDeadlock)
 {

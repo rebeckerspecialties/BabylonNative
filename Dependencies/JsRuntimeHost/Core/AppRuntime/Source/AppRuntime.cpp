@@ -62,6 +62,7 @@ namespace Babylon
 #endif
 
         std::optional<Napi::Env> m_env{};
+        std::shared_ptr<JsRuntime::InternalState> m_jsRuntimeState{};
         std::optional<std::scoped_lock<std::mutex>> m_suspensionLock{};
         arcana::cancellation_source m_cancelSource{};
         arcana::manual_dispatcher<128> m_dispatcher{};
@@ -134,7 +135,7 @@ namespace Babylon
         m_impl->m_thread = std::thread{[this] { RunPlatformTier(); }};
 
         Dispatch([this](Napi::Env env) {
-            JsRuntime::CreateForJavaScript(env, [this](auto func) { Dispatch(std::move(func)); });
+            m_impl->m_jsRuntimeState = JsRuntime::CreateForJavaScript(env, [this](auto func) { Dispatch(std::move(func)); }).m_state;
             Internal::DelayedTaskScheduler::SetForJavaScript(env, GetDelayedTaskScheduler());
             m_impl->m_delayedTaskSchedulerRegistered = true;
         });
@@ -161,6 +162,7 @@ namespace Babylon
         m_impl->RunDispatchLoop();
 
         Napi::HandleScope scope{env};
+        JsRuntime::Close(m_impl->m_jsRuntimeState);
         ShutdownEnvironment(env);
 
         if (m_impl->m_delayedTaskSchedulerRegistered)
@@ -206,6 +208,9 @@ namespace Babylon
         // the missed-notification race covered by DestroyDoesNotDeadlock.
         // The cancelled run loop drops this no-op rather than executing it.
         m_impl->m_dispatcher.queue([]() {});
+#ifdef __APPLE__
+        m_impl->WakeRunLoop();
+#endif
     }
 
     bool AppRuntime::IsTerminationRequested() const noexcept

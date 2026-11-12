@@ -93,11 +93,8 @@ namespace Babylon
 
     void AppRuntime::DrainMicrotasks(Napi::Env)
     {
-        // JavaScriptCore drains Promise jobs at script boundaries, but Apple
-        // platform work such as asynchronous WebAssembly compilation completes
-        // through the current thread's run loop.
-#if __APPLE__
-        CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.0, true);
-#endif
+        // JSC drains Promise jobs at script boundaries. On Apple, RunDispatchLoop
+        // owns the CFRunLoop pump for asynchronous VM work. Pumping it here would
+        // reenter the dispatcher while its current callback buffer is in use.
     }
 }

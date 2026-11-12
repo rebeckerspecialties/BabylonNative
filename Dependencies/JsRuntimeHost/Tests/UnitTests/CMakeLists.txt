@@ -24,6 +24,7 @@ set(SOURCES
     "Source/App.cpp"
     "Source/App.h"
     "Source/Tests.AppRuntime.cpp"
+    "Source/Tests.JsRuntimeScheduler.cpp"
     "Source/Tests.BrowserPolyfills.cpp"
     "Source/Tests.Console.cpp"
     "Source/Tests.DelayedTaskScheduler.cpp"
