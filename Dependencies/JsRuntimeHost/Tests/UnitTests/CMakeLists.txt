@@ -26,6 +26,7 @@ set(SOURCES
     "Source/Tests.AppRuntime.cpp"
     "Source/Tests.JsRuntimeScheduler.cpp"
     "Source/Tests.BrowserPolyfills.cpp"
+    "Source/Tests.CompressionFileReader.cpp"
     "Source/Tests.Console.cpp"
     "Source/Tests.DelayedTaskScheduler.cpp"
     "Source/Tests.JavaScript.cpp"

@@ -150,22 +150,25 @@ namespace Babylon::Polyfills::Internal
                 }
             }
 
-            void CaptureOutput(Napi::Env env, size_t byteLength)
+            void CaptureOutput(size_t byteLength)
             {
                 if (byteLength == 0)
                 {
                     return;
                 }
 
-                auto output = Napi::Uint8Array::New(env, byteLength);
-                std::memcpy(output.Data(), m_outputBuffer.get(), byteLength);
-                m_pendingOutput.emplace_back(std::move(output));
+                // Heap-held Napi values are not roots on every backend. Stage native
+                // bytes until each output can be allocated and immediately enqueued.
+                m_pendingOutput.emplace_back(m_outputBuffer.get(), m_outputBuffer.get() + byteLength);
             }
 
             void EnqueuePending(const Napi::Function& enqueue)
             {
-                for (const auto& output : m_pendingOutput)
+                auto env = enqueue.Env();
+                for (const auto& bytes : m_pendingOutput)
                 {
+                    auto output = Napi::Uint8Array::New(env, bytes.size());
+                    std::memcpy(output.Data(), bytes.data(), bytes.size());
                     enqueue.Call({output});
                 }
                 m_pendingOutput.clear();
@@ -211,7 +214,7 @@ namespace Babylon::Polyfills::Internal
                                                 ? deflate(&m_stream, finishing ? Z_FINISH : Z_NO_FLUSH)
                                                 : inflate(&m_stream, finishing ? Z_FINISH : Z_NO_FLUSH);
                         const auto produced = OUTPUT_BUFFER_SIZE - m_stream.avail_out;
-                        CaptureOutput(env, produced);
+                        CaptureOutput(produced);
 
                         if (result == Z_STREAM_END)
                         {
@@ -308,11 +311,10 @@ namespace Babylon::Polyfills::Internal
                 {
                     m_closed = true;
                     ReleasePendingStorage();
-                    // This error is reported after EnqueuePending has called
-                    // back into JavaScript. Setting the pending exception
-                    // directly avoids a second C++ exception conversion in
-                    // Node-API backends with reentrant callback contexts.
-                    static_cast<void>(napi_throw_type_error(env, nullptr, failure.c_str()));
+                    // Set the pending exception without a second C++ exception
+                    // conversion after the reentrant enqueue callback. The wrapper
+                    // also supports JSI, which has no raw napi_* entry points.
+                    Napi::TypeError::New(Napi::Env{env}, failure).ThrowAsJavaScriptException();
                     return false;
                 }
 
@@ -353,12 +355,12 @@ namespace Babylon::Polyfills::Internal
             void ReleasePendingStorage()
             {
                 m_pendingOutput.clear();
-                std::vector<Napi::Uint8Array>{}.swap(m_pendingOutput);
+                std::vector<std::vector<uint8_t>>{}.swap(m_pendingOutput);
             }
 
             z_stream m_stream{};
             std::unique_ptr<uint8_t[]> m_outputBuffer;
-            std::vector<Napi::Uint8Array> m_pendingOutput;
+            std::vector<std::vector<uint8_t>> m_pendingOutput;
             bool m_compressing{};
             bool m_initialized{};
             bool m_finished{};
