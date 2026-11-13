@@ -2,10 +2,53 @@
 #include <gtest/gtest.h>
 #include <Babylon/ScriptLoader.h>
 #include <Babylon/Polyfills/Scheduling.h>
+#include <Babylon/Polyfills/Performance.h>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <future>
+#include <memory>
+#include <stdexcept>
+#include <thread>
+
+TEST(Performance, TimeOriginIsPerEnvironment)
+{
+    const auto now = [](Babylon::AppRuntime& runtime, bool initialize) {
+        auto result = std::make_shared<std::promise<double>>();
+        auto future = result->get_future();
+        runtime.Dispatch([result, initialize](Napi::Env env) {
+            try
+            {
+                if (initialize)
+                {
+                    Babylon::Polyfills::Performance::Initialize(env);
+                }
+                auto performance = env.Global().Get("performance").As<Napi::Object>();
+                result->set_value(performance.Get("now").As<Napi::Function>().Call(performance, {}).As<Napi::Number>().DoubleValue());
+            }
+            catch (...)
+            {
+                result->set_exception(std::current_exception());
+            }
+        });
+        if (future.wait_for(std::chrono::seconds{10}) != std::future_status::ready)
+        {
+            throw std::runtime_error{"performance.now() dispatch timed out"};
+        }
+        return future.get();
+    };
+
+    Babylon::AppRuntime first{};
+    now(first, true);
+    std::this_thread::sleep_for(std::chrono::milliseconds{50});
+    const double before = now(first, false);
+
+    Babylon::AppRuntime second{};
+    now(second, true);
+    EXPECT_GE(now(first, false), before);
+    // Re-initializing the same environment must also preserve its origin.
+    EXPECT_GE(now(first, true), before);
+}
 
 // The unit test host's UnhandledExceptionHandler fails the whole JavaScript
 // suite, so a throwing timer callback cannot be exercised from the script tests. This
