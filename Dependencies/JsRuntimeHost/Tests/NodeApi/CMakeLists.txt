@@ -136,6 +136,21 @@ node_api_copy_test_sources(NodeApiTests)
 
 add_dependencies(NodeApiTests node_lite)
 
+if(NOT ANDROID AND NOT IOS AND NOT VISIONOS AND NOT TVOS AND NOT WINDOWS_STORE)
+    find_package(Threads REQUIRED)
+    add_executable(ChildProcessTests
+        test_child_process.cpp
+        ${NODE_LITE_CHILD_PROCESS_SRC}
+        string_utils.cpp)
+    target_compile_features(ChildProcessTests PRIVATE cxx_std_17)
+    target_link_libraries(ChildProcessTests PRIVATE Threads::Threads)
+    foreach(CHILD_PROCESS_CASE IN ITEMS empty nonzero interleaved)
+        add_test(NAME ChildProcess.${CHILD_PROCESS_CASE}
+            COMMAND ChildProcessTests --case ${CHILD_PROCESS_CASE})
+        set_tests_properties(ChildProcess.${CHILD_PROCESS_CASE} PROPERTIES TIMEOUT 15)
+    endforeach()
+endif()
+
 add_custom_target(NodeApiModules)
 
 # Always define which tests are available, regardless of whether we build the native modules

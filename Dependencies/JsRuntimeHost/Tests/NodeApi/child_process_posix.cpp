@@ -3,6 +3,7 @@
 #include <cerrno>
 #include <cstdlib>
 #include <fcntl.h>
+#include <poll.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #include <cassert>
@@ -62,7 +63,7 @@ namespace node_api_tests {
 
 namespace {
 
-std::string ReadFromFd(int fd);
+void DrainPipes(int out_fd, int err_fd, std::string* out, std::string* err);
 void ExitOnError(const char* message, posix_spawn_file_actions_t* actions);
 
 }  // namespace
@@ -107,9 +108,11 @@ ProcessResult SpawnSync(std::string_view command,
 
   posix_spawn_file_actions_destroy(&actions);
 
-  // Close the write ends of the pipes.
+  // Drain both pipes while the child runs: waiting first deadlocks when either
+  // pipe fills and the child blocks on write.
   close(stdout_pipe[1]);
   close(stderr_pipe[1]);
+  DrainPipes(stdout_pipe[0], stderr_pipe[0], &result.std_output, &result.std_error);
 
   int wait_status;
   pid_t waited_pid;
@@ -126,9 +129,6 @@ ProcessResult SpawnSync(std::string_view command,
   } else {
     result.status = 1;
   }
-  result.std_output = ReadFromFd(stdout_pipe[0]);
-  result.std_error = ReadFromFd(stderr_pipe[0]);
-
   // Close the read ends of the pipes.
   close(stdout_pipe[0]);
   close(stderr_pipe[0]);
@@ -142,29 +142,42 @@ ProcessResult SpawnSync(std::string_view command,
 
 namespace {
 
-std::string ReadFromFd(int fd) {
-  std::string result;
-  constexpr size_t bufferSize = 4096;
-  char buffer[bufferSize];
-  ssize_t bytesRead;
-  while (true) {
-    bytesRead = read(fd, buffer, bufferSize);
-    if (bytesRead > 0) {
-      result.append(buffer, bytesRead);
-      continue;
+// Service whichever pipe has data until both reach EOF.
+void DrainPipes(int out_fd, int err_fd, std::string* out, std::string* err) {
+  struct Sink {
+    int fd;
+    std::string* target;
+    bool open;
+  };
+  Sink sinks[2] = {{out_fd, out, true}, {err_fd, err, true}};
+  char buffer[4096];
+  while (sinks[0].open || sinks[1].open) {
+    pollfd fds[2];
+    Sink* owners[2];
+    nfds_t count = 0;
+    for (Sink& sink : sinks) {
+      if (sink.open) {
+        fds[count] = pollfd{sink.fd, POLLIN, 0};
+        owners[count] = &sink;
+        ++count;
+      }
     }
-
-    if (bytesRead == 0) {
-      break;
+    if (poll(fds, count, -1) < 0) {
+      if (errno == EINTR) continue;
+      ExitOnError("poll", nullptr);
     }
-
-    if (errno == EINTR) {
-      continue;
+    for (nfds_t i = 0; i < count; ++i) {
+      if (fds[i].revents == 0) continue;  // POLLIN, POLLHUP and POLLERR require a read.
+      ssize_t bytesRead = read(fds[i].fd, buffer, sizeof(buffer));
+      if (bytesRead > 0) {
+        owners[i]->target->append(buffer, static_cast<size_t>(bytesRead));
+      } else if (bytesRead == 0) {
+        owners[i]->open = false;
+      } else if (errno != EINTR && errno != EAGAIN) {
+        ExitOnError("read", nullptr);
+      }
     }
-
-    ExitOnError("read", nullptr);
   }
-  return result;
 }
 
 // Format a readable error message, print it to console, and exit from the
