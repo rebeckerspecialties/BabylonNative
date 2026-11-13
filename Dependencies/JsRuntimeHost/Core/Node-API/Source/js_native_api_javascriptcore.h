@@ -36,7 +36,16 @@ struct napi_env__ {
   JSValueRef wrapper_info_symbol{};
   JSValueRef function_prototype_call{};
   JSValueRef is_bigint_function{};
+  JSValueRef bigint_constructor{};
+  JSValueRef bigint_as_int_n{};
+  JSValueRef bigint_as_uint_n{};
+  JSValueRef bigint_prototype_to_string{};
+  JSValueRef bigint_negate{};
   bool bigint_supported{false};
+  bool value_type_reports_bigint{false};
+  JSValueRef arraybuffer_transfer{};
+  JSValueRef arraybuffer_detached_getter{};
+  JSValueRef arraybuffer_slice{};
 
   // Escapable scope bookkeeping: token -> whether that scope has escaped. Values
   // are rooted by the engine rather than by a scope here, so this exists only to
@@ -60,7 +69,8 @@ struct napi_env__ {
     init_symbol(wrapper_info_symbol, "BabylonNative_WrapperInfo");
     init_function_prototype_call();
     init_is_bigint_function();
-    init_bigint_supported();
+    init_bigint_intrinsics();
+    init_arraybuffer_intrinsics();
   }
 
   ~napi_env__() {
@@ -69,6 +79,14 @@ struct napi_env__ {
       instance_data_finalize_cb(this, instance_data, instance_data_finalize_hint);
     }
     deinit_refs();
+    deinit_symbol(arraybuffer_slice);
+    deinit_symbol(arraybuffer_detached_getter);
+    deinit_symbol(arraybuffer_transfer);
+    deinit_symbol(bigint_negate);
+    deinit_symbol(bigint_prototype_to_string);
+    deinit_symbol(bigint_as_uint_n);
+    deinit_symbol(bigint_as_int_n);
+    deinit_symbol(bigint_constructor);
     deinit_symbol(is_bigint_function);
     deinit_symbol(function_prototype_call);
     deinit_symbol(wrapper_info_symbol);
@@ -78,7 +96,9 @@ struct napi_env__ {
     JSGlobalContextRelease(context);
     {
       std::lock_guard lock{napi_envs_mutex};
-      napi_envs.erase(context);
+      if (const auto it = napi_envs.find(context); it != napi_envs.end() && it->second == this) {
+        napi_envs.erase(it);
+      }
     }
   }
 
@@ -100,7 +120,8 @@ struct napi_env__ {
   void init_symbol(JSValueRef& symbol, const char* description);
   void init_function_prototype_call();
   void init_is_bigint_function();
-  void init_bigint_supported();
+  void init_bigint_intrinsics();
+  void init_arraybuffer_intrinsics();
   void deinit_symbol(JSValueRef symbol);
 };
 
