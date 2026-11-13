@@ -133,6 +133,7 @@ jobs:
       - name: Enable Crash Dumps
         shell: cmd
         run: |
+          if not exist "%RUNNER_TEMP%\Dumps" mkdir "%RUNNER_TEMP%\Dumps"
           reg add "HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps\Playground.exe" /f
           reg add "HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps\Playground.exe" /v DumpType /t REG_DWORD /d 2 /f
           reg add "HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps\Playground.exe" /v DumpCount /t REG_DWORD /d 1 /f
@@ -141,6 +142,14 @@ jobs:
           reg add "HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps\UnitTests.exe" /v DumpType /t REG_DWORD /d 2 /f
           reg add "HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps\UnitTests.exe" /v DumpCount /t REG_DWORD /d 1 /f
           reg add "HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps\UnitTests.exe" /v DumpFolder /t REG_SZ /d "%RUNNER_TEMP%\Dumps" /f
+          reg add "HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps\JsRuntimeHostUnitTests.exe" /f
+          reg add "HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps\JsRuntimeHostUnitTests.exe" /v DumpType /t REG_DWORD /d 2 /f
+          reg add "HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps\JsRuntimeHostUnitTests.exe" /v DumpCount /t REG_DWORD /d 1 /f
+          reg add "HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps\JsRuntimeHostUnitTests.exe" /v DumpFolder /t REG_SZ /d "%RUNNER_TEMP%\Dumps" /f
+          reg add "HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps\UrlLibTests.exe" /f
+          reg add "HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps\UrlLibTests.exe" /v DumpType /t REG_DWORD /d 2 /f
+          reg add "HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps\UrlLibTests.exe" /v DumpCount /t REG_DWORD /d 1 /f
+          reg add "HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps\UrlLibTests.exe" /v DumpFolder /t REG_SZ /d "%RUNNER_TEMP%\Dumps" /f
 
       - name: Add ASAN runtime DLLs to PATH
         if: ${{ inputs.enable-sanitizers }}
@@ -220,12 +229,14 @@ jobs:
           cd build\${{ steps.vars.outputs.solution_name }}\Dependencies\UrlLib\Tests\RelWithDebInfo
           UrlLibTests
 
-      - name: Stage UnitTests Crash Dump
+      - name: Stage Unit Test Crash Dumps
         if: failure()
         shell: powershell
         run: |
           New-Item -ItemType Directory -Force -Path "$env:RUNNER_TEMP\Dumps" | Out-Null
           Copy-Item -Path "build\${{ steps.vars.outputs.solution_name }}\Apps\UnitTests\RelWithDebInfo\UnitTests.*" -Destination "$env:RUNNER_TEMP\Dumps\" -ErrorAction SilentlyContinue
+          Copy-Item -Path "build\${{ steps.vars.outputs.solution_name }}\Dependencies\JsRuntimeHost\Tests\UnitTests\RelWithDebInfo\JsRuntimeHostUnitTests.*" -Destination "$env:RUNNER_TEMP\Dumps\" -ErrorAction SilentlyContinue
+          Copy-Item -Path "build\${{ steps.vars.outputs.solution_name }}\Dependencies\UrlLib\Tests\RelWithDebInfo\UrlLibTests.*" -Destination "$env:RUNNER_TEMP\Dumps\" -ErrorAction SilentlyContinue
 
       - name: Upload Crash Dumps
         if: failure()
