@@ -27,6 +27,7 @@ set(SOURCES
     "Source/Tests.JsRuntimeScheduler.cpp"
     "Source/Tests.BrowserPolyfills.cpp"
     "Source/Tests.CompressionFileReader.cpp"
+    "Source/Tests.DataUrl.cpp"
     "Source/Tests.BlobStorage.cpp"
     "Source/Tests.Console.cpp"
     "Source/Tests.DelayedTaskScheduler.cpp"
@@ -112,6 +113,7 @@ target_link_libraries(${_jsruntimehost_unit_tests_target}
     PRIVATE SchedulingInternal
     PRIVATE ScriptLoader
     PRIVATE URL
+    PRIVATE URLInternal
     PRIVATE UrlLib
     PRIVATE UrlLibTestSupport
     PRIVATE XMLHttpRequest
