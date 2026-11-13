@@ -6,6 +6,7 @@
 #include "ShaderProvider.h"
 #include "VertexArray.h"
 
+#include <unordered_set>
 #include <Babylon/JsRuntime.h>
 #include <Babylon/JsRuntimeScheduler.h>
 
@@ -124,6 +125,8 @@ namespace Babylon
         void UnsetTexture(NativeDataStream::Reader& data);
         void DiscardAllTextures(NativeDataStream::Reader& data);
         void DeleteTexture(const Napi::CallbackInfo& info);
+        void ReleaseTexture(Graphics::Texture* texture);
+        void ReleaseDeletedTextures();
         Napi::Value ReadTexture(const Napi::CallbackInfo& info);
         Napi::Value ReadTexture2(const Napi::CallbackInfo& info);
         Napi::Value ReadTextureImpl(const Napi::CallbackInfo& info, bool preserveFloat);
@@ -277,6 +280,19 @@ namespace Babylon
 
         // TODO: This should be changed to a non-owning ref once multi-update is available.
         NativeDataStream* m_commandStream{};
+
+        // Lifetime of the textures created by createTexture, shared with their JS finalizers.
+        // deleteTexture only marks a texture: it is released after the next SubmitCommands has
+        // decoded the commands queued before the delete, and a texture whose JS object is collected
+        // in between is kept until then instead of being freed under those commands.
+        struct TextureLifetimes
+        {
+            std::unordered_set<Graphics::Texture*> Live{};
+            std::unordered_set<Graphics::Texture*> Deleted{};
+            std::vector<Graphics::Texture*> Collected{};
+            bool EngineDisposed{};
+        };
+        std::shared_ptr<TextureLifetimes> m_textureLifetimes{std::make_shared<TextureLifetimes>()};
 
         // JavaScript feature information used for backwards compatibility.
         struct

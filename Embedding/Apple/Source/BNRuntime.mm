@@ -82,6 +82,7 @@ namespace
         // should use the C++ API. `%{public}.*s` is required — without
         // `{public}` os_log redacts the payload as `<private>` in release.
         options.log = [](Babylon::Embedding::LogLevel level, std::string_view message) {
+            fprintf(stderr, "%.*s\n", static_cast<int>(message.size()), message.data());
             os_log_with_type(BabylonNativeLogger(), ToOSLogType(level),
                              "%{public}.*s",
                              static_cast<int>(message.size()), message.data());

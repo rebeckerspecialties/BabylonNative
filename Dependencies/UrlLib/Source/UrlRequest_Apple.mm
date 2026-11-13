@@ -6,8 +6,33 @@
 
 #import <Foundation/Foundation.h>
 
+@interface BenchMetricsDelegate : NSObject <NSURLSessionTaskDelegate>
+@end
+@implementation BenchMetricsDelegate
+- (void)URLSession:(NSURLSession*)session task:(NSURLSessionTask*)task didFinishCollectingMetrics:(NSURLSessionTaskMetrics*)metrics
+{
+    for (NSURLSessionTaskTransactionMetrics* t in metrics.transactionMetrics)
+    {
+        auto ms = [&](NSDate* a, NSDate* b) { return (a && b) ? [b timeIntervalSinceDate:a] * 1000.0 : -1.0; };
+        fprintf(stderr, "NETM url=%s proto=%s reused=%d fetch=%ld dnsProto=%ld lport=%ld remote=%s:%ld dns=%.1f connect=%.1f tls=%.1f ttfb=%.1f total=%.1f rx=%lld redirects=%lu\n",
+            t.request.URL.absoluteString.UTF8String, t.networkProtocolName.UTF8String ?: "-", (int)t.reusedConnection,
+            (long)t.resourceFetchType, (long)t.domainResolutionProtocol, (long)t.localPort.integerValue,
+            t.remoteAddress.UTF8String ?: "-", (long)t.remotePort.integerValue,
+            ms(t.domainLookupStartDate, t.domainLookupEndDate), ms(t.connectStartDate, t.connectEndDate),
+            ms(t.secureConnectionStartDate, t.secureConnectionEndDate), ms(t.fetchStartDate, t.responseStartDate),
+            ms(t.fetchStartDate, t.responseEndDate), t.countOfResponseBodyBytesReceived, (unsigned long)metrics.redirectCount);
+    }
+}
+@end
+
 namespace
 {
+    NSURLSession* BenchSession()
+    {
+        static NSURLSession* s = [NSURLSession sessionWithConfiguration:[NSURLSessionConfiguration defaultSessionConfiguration] delegate:[BenchMetricsDelegate new] delegateQueue:nil];
+        return s;
+    }
+
     auto URLAllowedCharacterSet = []()
     {
         NSRange range;
@@ -112,7 +137,7 @@ namespace UrlLib
                 // Complete the task, but retain the default status code of 0 to indicate a client side error.
                 return arcana::task_from_result<std::exception_ptr>();
             }
-            NSURLSession* session{[NSURLSession sharedSession]};
+            NSURLSession* session{BenchSession()};
             NSURLRequest* request{[NSURLRequest requestWithURL:m_url]};
 
             NSMutableURLRequest* mutableRequest{[request mutableCopy]};

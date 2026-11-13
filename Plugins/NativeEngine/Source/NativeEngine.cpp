@@ -1275,6 +1275,9 @@ namespace Babylon
         // Cancellation doesn't stop work already running on a threadpool thread, so wait for
         // any in-flight graphics tasks to finish before teardown frees the resources they use.
         m_asyncTaskTracker->Wait();
+
+        m_textureLifetimes->EngineDisposed = true;
+        ReleaseDeletedTextures();
     }
 
     NativeEngine::AsyncTaskTracker::Scope::Scope(std::shared_ptr<AsyncTaskTracker> tracker)
@@ -2039,7 +2042,19 @@ void main() {
     Napi::Value NativeEngine::CreateTexture(const Napi::CallbackInfo& info)
     {
         Graphics::Texture* texture = new Graphics::Texture(m_deviceContext);
-        return Napi::Pointer<Graphics::Texture>::Create(info.Env(), texture, Napi::NapiPointerDeleter(texture));
+        m_textureLifetimes->Live.insert(texture);
+        return Napi::Pointer<Graphics::Texture>::Create(info.Env(), texture, [texture, lifetimes = m_textureLifetimes]() {
+            lifetimes->Live.erase(texture);
+            if (lifetimes->Deleted.erase(texture) != 0 && !lifetimes->EngineDisposed)
+            {
+                // Deleted but not yet released: the next SubmitCommands frees it.
+                lifetimes->Collected.push_back(texture);
+            }
+            else
+            {
+                delete texture;
+            }
+        });
     }
 
     void NativeEngine::InitializeTexture(const Napi::CallbackInfo& info)
@@ -2962,12 +2977,27 @@ void main() {
 
         // deleteTexture is immediate, but commands already queued may still reference the texture
         // (e.g. an effect layer composes with its main texture, then recreates it in the same frame).
-        // WebGL keeps a deleted texture alive for previously issued draws, so drain them first.
+        // WebGL keeps a deleted texture alive for previously issued draws. The queued commands are
+        // staged in JavaScript, so draining them here costs a native -> JS -> native round trip per
+        // delete. For textures this engine created, release after the next SubmitCommands instead.
         if (m_commandStream)
         {
+            if (m_textureLifetimes->Live.count(texture) != 0)
+            {
+                m_textureLifetimes->Deleted.insert(texture);
+                return;
+            }
+
+            // Not created by createTexture (canvas, external texture): its lifetime is not tracked,
+            // so drain the queued commands now.
             SubmitCommands(info);
         }
 
+        ReleaseTexture(texture);
+    }
+
+    void NativeEngine::ReleaseTexture(Graphics::Texture* texture)
+    {
         // Deleting a bound WebGL texture unbinds it.
         for (auto it = m_boundTextures.begin(); it != m_boundTextures.end();)
         {
@@ -2975,6 +3005,22 @@ void main() {
         }
         m_deviceContext.RemoveTexture(texture->Handle());
         texture->Dispose();
+    }
+
+    void NativeEngine::ReleaseDeletedTextures()
+    {
+        for (auto* texture : m_textureLifetimes->Deleted)
+        {
+            ReleaseTexture(texture);
+        }
+        m_textureLifetimes->Deleted.clear();
+
+        for (auto* texture : m_textureLifetimes->Collected)
+        {
+            ReleaseTexture(texture);
+            delete texture;
+        }
+        m_textureLifetimes->Collected.clear();
     }
 
     Napi::Value NativeEngine::ReadTexture(const Napi::CallbackInfo& info)
@@ -4023,6 +4069,11 @@ void main() {
         // Flush the JavaScript staging buffer first so an empty submission can
         // remain a no-op instead of waiting for the next frame.
         NativeDataStream::Reader reader = m_commandStream->GetReader();
+
+        // Textures deleted since the last submit outlive the commands queued before the delete,
+        // including when there are none or when decoding throws.
+        const auto releaseDeletedTextures = gsl::finally([this] { ReleaseDeletedTextures(); });
+
         if (!reader.CanRead())
         {
             return;
