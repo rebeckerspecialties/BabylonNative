@@ -1,4 +1,5 @@
 # Babylon.js source patch stack for NativeWebGPU local validation.
 # The apply script treats missing or non-applying patches as hard failures.
-# No source patches are required for Babylon.js 9.35.0.
-# Recorder fallback and atomicity fixes shipped upstream in 9.34.0.
+# No source patches are required for the verified Babylon.js 9.36.0 package.
+# #19084 retention/replay/atomicity/reporting and #19089 snapshot reuse first
+# shipped in 9.36.0, not 9.34.0 or 9.35.0. See README.md and the UMD contract test.
