@@ -2,6 +2,7 @@
 
 #include <filesystem>
 
+int RunTests(int argc, char** argv);
 int RunTests();
 
 #if defined(__ANDROID__) && defined(NODE_API_AVAILABLE_NATIVE_TESTS)

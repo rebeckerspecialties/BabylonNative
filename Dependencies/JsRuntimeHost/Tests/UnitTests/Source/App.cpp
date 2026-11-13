@@ -192,16 +192,23 @@ namespace
 #endif
 }
 
-int RunTests()
+int RunTests(int argc, char** argv)
 {
 #if defined(__ANDROID__) && defined(NODE_API_AVAILABLE_NATIVE_TESTS)
     ConfigureNodeApiTests();
 #endif
-    testing::InitGoogleTest();
+    testing::InitGoogleTest(&argc, argv);
 #if defined(__ANDROID__) && defined(NODE_API_AVAILABLE_NATIVE_TESTS)
     node_api_tests::RegisterNodeApiTests();
 #endif
     return RUN_ALL_TESTS();
+}
+
+int RunTests()
+{
+    char program[]{"UnitTests"};
+    char* argv[]{program, nullptr};
+    return RunTests(1, argv);
 }
 #if defined(__ANDROID__) && defined(NODE_API_AVAILABLE_NATIVE_TESTS)
 void SetNodeApiTestEnvironment(AAssetManager* assetManager, const std::filesystem::path& baseDir)
