@@ -55,7 +55,7 @@ dependency pins. Newer monorepo behavior was retained.
 | JSC cached intrinsics, runtime type probes, references and registry ownership | `5c68a071` | JsRuntimeHost `f8c8335`, `9a9e06c`, `2503f2`, `cefd4561`, `f8e8152`; retain newer detached-buffer metadata and strict receiver handling |
 | Drain child-process output before waiting | `35bac055` | JsRuntimeHost `9de995b`; three bounded regression cases |
 | Shared Blob storage and reusable stream callbacks | `ea83ae76` | JsRuntimeHost `226ed90b`, `1da1abbf`, `760ae3cd`; additional JSC BYOB detachment coverage |
-| Shared data URL decoder for Fetch and URL consumers | `c17c1fc8` | Consolidated runtime decoder plus percent/base64, header, malformed-input and asset-load tests |
+| Shared data URL decoder for Fetch and URL consumers | `c17c1fc8` | JsRuntimeHost `f30a41c6303d`; percent/base64, header, malformed-input and asset-load tests |
 | Arbitrary abort-reason lifetime and identity | `e1be115f` | JsRuntimeHost `263980909150`, `078d629b92de`; explicit null and inherited-accessor regressions |
 
 ## September Native Stack
@@ -155,6 +155,14 @@ worktree registration. The removed directories occupied about 1.4 GiB before
 removal; this is not a claim about net free-space change while builds ran.
 All 74 archive tags were published to the corresponding forks before remote
 branch retirement. Different local/remote tips have separate tags.
+
+Twenty obsolete remote branches were retired with exact-tip leases and
+published-tag checks: 14 in BabylonNative, three runtime integration stacks in
+JsRuntimeHost, and three UrlLib integration/CI/transport branches. Superseded
+fork PRs BabylonNative #1, #2, #4, #5 and JsRuntimeHost #22 were closed with
+archive and recovery links. Individual upstream review branches/PRs were not
+closed or rewritten. The canonical `wgpu` recovery commits were published
+before those old integration branches were removed.
 
 Older remote rebase/merge snapshots are historical backups, not new production
 patches. The October merge is already an ancestor of `wgpu`; the July snapshot's
