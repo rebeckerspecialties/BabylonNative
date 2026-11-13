@@ -1,11 +1,53 @@
 #include <Babylon/AppRuntime.h>
+#if defined(JSRUNTIMEHOST_TEST_WORKER)
+#include <Babylon/Polyfills/Worker.h>
+#endif
 #include <gtest/gtest.h>
 #include <arcana/threading/blocking_concurrent_queue.h>
 #include <chrono>
 #include <future>
 #include <memory>
+#include <stdexcept>
 #include <thread>
 #include <vector>
+
+#if defined(JSRUNTIMEHOST_TEST_WORKER)
+TEST(Worker, ParentTeardownWithPendingDelivery)
+{
+    for (const bool terminateImmediately : {false, true})
+    {
+        for (size_t iteration = 0; iteration < 16; ++iteration)
+        {
+            auto completed = std::make_shared<std::promise<void>>();
+            auto ready = completed->get_future();
+            Babylon::AppRuntime runtime{};
+            runtime.Dispatch([completed, terminateImmediately](Napi::Env env) {
+                try
+                {
+                    Babylon::Polyfills::Worker::Initialize(env, {});
+                    Napi::Eval(env,
+                        terminateImmediately
+                            ? "var worker = new Worker(\"data:text/javascript,postMessage('ready')\"); worker.terminate();"
+                            : "var worker = new Worker(\"data:text/javascript,postMessage('ready')\");",
+                        "worker-parent-teardown.js");
+                    completed->set_value();
+                }
+                catch (const Napi::Error& error)
+                {
+                    completed->set_exception(std::make_exception_ptr(std::runtime_error{Napi::GetErrorString(error)}));
+                }
+                catch (...)
+                {
+                    completed->set_exception(std::current_exception());
+                }
+            });
+            ASSERT_EQ(ready.wait_for(std::chrono::seconds{10}), std::future_status::ready);
+            EXPECT_NO_THROW(ready.get());
+            // Destruction must safely discard work posted by a worker during parent teardown.
+        }
+    }
+}
+#endif
 
 TEST(AppRuntime, QueuedMoveOnlyCallbacksExecuteOnceInOrder)
 {
