@@ -1,14 +1,15 @@
 # wgpu Monorepo Integration
 
 Integration checkpoint: November 12, 2026. The canonical branch is `wgpu`.
-The pre-integration tip is preserved as `backup/wgpu-before-reconcile-20261111`.
+The pre-integration tip is preserved as
+`archive/2026-11-12/backup/wgpu-before-reconcile-20261111`.
 
 ## Dependency Baseline
 
 | Component | Pin |
 | --- | --- |
 | BabylonNative upstream master | `2a8cad62` |
-| Babylon.js packages | `9.35.0`, exact versions in Apps/package.json |
+| Babylon.js packages | `9.36.0`, exact versions in Apps/package.json |
 | wgpu/core/hal/types/Naga | `30.0.1`, `40f4a34ebaf56f9a046231f54125ad046239d3f3` |
 | wgpu-native parity runtime | `8322fe1a94ad0193c3393d03fd2a2f3c565e320b` |
 | wgpu-native upstream included by parity runtime | `589e6caa4e9fa5596f601e82ca5d3937a1afc829` |
@@ -17,6 +18,10 @@ Upstream wgpu-native still uses wgpu 29.0.1. The published parity runtime suppli
 the 30.x support and proposed runtime fixes; the local compatibility patch aligns
 it with released 30.0.1. Cargo.lock resolves one copy of each wgpu crate.
 The large runtime projection patch and released Babylon.js patches are retired.
+The recorder retention/replay patch was retired prematurely with 9.35.0; it
+actually shipped in 9.36.0. The installed UMD now has executable contract tests.
+See [WgpuBranchAudit.md](WgpuBranchAudit.md) for the subsequent branch-by-branch
+recovery and archive ledger.
 
 Use the ES2015+ UMD packages directly. The upstream switch to ES5 bundles is
 intentionally not used by the fork: see AGENTS.md for the texture-layout defect.
@@ -51,9 +56,10 @@ NativeDawn development remains an independent renderer contribution branch.
 Historical backup and review branches are not extra sources for normal builds.
 The clean `bn-base`, `bn-1891` and `bn-urllib` comparison worktrees were removed
 after verifying their commits were integrated or superseded. Their branches
-remain. The dirty `bn-test` worktree is retained: its benchmark app, network
-metrics logging and experimental NativeEngine deferred texture retirement are
-not production fixes and have not been folded into wgpu.
+remain where needed for review. The former dirty `bn-test` source is preserved
+at `archive/2026-11-12/bench-test` (`5fc50259`), and its worktree is removed.
+Its benchmark app, network metrics logging and experimental NativeEngine
+deferred texture retirement are not production fixes and were not merged.
 
 Native presentation now treats each canvas backing size independently of the
 host drawable. The old coupling could encode a 2560-pixel copy into a 1280-pixel
@@ -132,7 +138,8 @@ node Apps/scripts/applyBabylonJsPatchStack.js --check
 
 Use BABYLON_NATIVE_BUILD_WEBGPU_TESTS=ON for the macOS GPU integration suite;
 it needs the readback hooks. Run JsRuntimeHostUnitTests from its build output
-directory so its relative Worker fixtures resolve. Its filter is GTEST_FILTER.
+directory so its relative Worker fixtures resolve. Both GTEST_FILTER and the
+restored --gtest_filter/--gtest_repeat command-line flags work.
 Select screenshot cases by repeated --test flags. --once stops after the first
 matching case, rather than completing the selected set.
 
