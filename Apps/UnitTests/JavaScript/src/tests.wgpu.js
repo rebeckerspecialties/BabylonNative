@@ -214,6 +214,39 @@
         return buffer;
     }
 
+    function withDataUrlTimeout(promise, operation, onTimeout) {
+        var timer;
+        var timeout = new Promise(function (_resolve, reject) {
+            timer = setTimeout(function () {
+                reject(new Error(operation + " timed out after 10000 ms"));
+                if (onTimeout) {
+                    try {
+                        onTimeout();
+                    } catch (error) {
+                        console.warn(operation + " abort failed: " + String(error));
+                    }
+                }
+            }, 10000);
+        });
+        return Promise.race([promise, timeout]).finally(function () {
+            clearTimeout(timer);
+        });
+    }
+
+    function requestDataUrlAsync(url, useArrayBuffer) {
+        var request;
+        var loaded = new Promise(function (resolve, reject) {
+            request = BABYLON.RequestFile(url, resolve, undefined, undefined, useArrayBuffer, function (_request, error) {
+                reject(error || new Error("RequestFile failed for " + url));
+            });
+        });
+        return withDataUrlTimeout(loaded, "RequestFile " + url, function () {
+            if (request && typeof request.abort === "function") {
+                request.abort();
+            }
+        });
+    }
+
     var tests = [
         ["Canvas.parseColor accepts supported CSS color forms", function () {
             expect(typeof _native === "object", "_native was not installed");
@@ -2005,6 +2038,77 @@
             expectEqual(stats2.externalImageUploadOwnedCount, stats1.externalImageUploadOwnedCount + 1, "flipY upload should allocate exactly one upload buffer");
             expectEqual(stats2.externalImageUploadOwnedBytes, stats1.externalImageUploadOwnedBytes + 16, "flipY owned upload should be exactly the copy size");
             expectPixel(navigator.gpu._testReadTexturePixel(textureFlip, 0, 0), [0, 0, 255, 255], "flipY upload orientation");
+        }],
+        // Ported from bfc4464e: exercise the host transport and real WebGPU texture path.
+        ["Data URLs: RequestFile loads percent-encoded text", async function () {
+            var text = await requestDataUrlAsync("data:text/plain,hello%20data", false);
+            expectEqual(text, "hello data", "percent-encoded data URL text");
+        }],
+        ["Data URLs: RequestFile loads base64 bytes", async function () {
+            var data = await requestDataUrlAsync("data:application/octet-stream;base64,AQID", true);
+            expect(data instanceof ArrayBuffer, "binary RequestFile result should be an ArrayBuffer");
+            expectEqual(Array.from(new Uint8Array(data)).join(","), "1,2,3", "base64 data URL bytes");
+        }],
+        ["Data URLs: WebGPU Texture loads a PNG", async function () {
+            var engine = new BABYLON.WebGPUEngine(makeBabylonWebGPUCanvas(4, 4), {
+                antialias: false,
+                adaptToDeviceRatio: false
+            });
+            var scene;
+            var texture;
+            try {
+                await withDataUrlTimeout(engine.initAsync(), "data URL WebGPU engine initialization");
+                scene = new BABYLON.Scene(engine);
+                var loaded = new Promise(function (resolve, reject) {
+                    texture = new BABYLON.Texture(
+                        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP4z8DwHwAFAAH/VscvDQAAAABJRU5ErkJggg==",
+                        scene, true, false, BABYLON.Texture.NEAREST_SAMPLINGMODE, resolve,
+                        function (message, error) {
+                            reject(error || new Error(message || "data URL texture failed to load"));
+                        });
+                });
+                await withDataUrlTimeout(loaded, "data URL PNG texture loading");
+                expect(texture.isReady(), "data URL texture should be ready");
+                var size = texture.getSize();
+                expectEqual(size.width, 1, "data URL texture width");
+                expectEqual(size.height, 1, "data URL texture height");
+                var pixels = await withDataUrlTimeout(texture.readPixels(), "data URL texture readback");
+                expectPixel(pixels, [255, 0, 0, 255], "data URL texture GPU pixel");
+            } finally {
+                try {
+                    if (scene) {
+                        scene.dispose();
+                    }
+                } finally {
+                    engine.dispose();
+                }
+            }
+        }],
+        ["Data URLs: gzip streams through DecompressionStream", async function () {
+            expect(typeof DecompressionStream !== "undefined", "native DecompressionStream missing");
+            var text = await withDataUrlTimeout(
+                fetch("data:application/gzip;base64,H4sIAAAAAAAC/8tIzcnJV0ivyiwAABlq0t8KAAAA").then(function (response) {
+                    expect(response.body, "gzip data URL response body missing");
+                    return new Response(response.body.pipeThrough(new DecompressionStream("gzip"))).text();
+                }), "gzip data URL decompression");
+            expectEqual(text, "hello gzip", "decompressed data URL text");
+        }],
+        ["Data URLs: Blob object URL round-trips through RequestFile", async function () {
+            expect(typeof URL !== "undefined" && typeof URL.createObjectURL === "function", "native URL.createObjectURL missing");
+            var blob = await withDataUrlTimeout(
+                fetch("data:application/octet-stream;base64,AQID").then(function (response) {
+                    return response.blob();
+                }), "data URL Blob loading");
+            expectEqual(blob.size, 3, "data URL Blob size");
+            var objectUrl = URL.createObjectURL(blob);
+            try {
+                expectEqual(objectUrl.slice(0, 5), "blob:", "native object URL scheme");
+                var data = await requestDataUrlAsync(objectUrl, true);
+                expect(data instanceof ArrayBuffer, "object URL RequestFile result should be an ArrayBuffer");
+                expectEqual(Array.from(new Uint8Array(data)).join(","), "1,2,3", "object URL round-trip bytes");
+            } finally {
+                URL.revokeObjectURL(objectUrl);
+            }
         }]
     ];
 

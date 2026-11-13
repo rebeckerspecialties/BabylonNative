@@ -75,6 +75,7 @@ set(UNITTEST_LIBRARIES
     Streams
     TextDecoder
     TextEncoder
+    URL
     Window
     XMLHttpRequest
     gtest_main)

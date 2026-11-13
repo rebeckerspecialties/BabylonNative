@@ -13,6 +13,7 @@
 #include <Babylon/Polyfills/Streams.h>
 #include <Babylon/Polyfills/TextDecoder.h>
 #include <Babylon/Polyfills/TextEncoder.h>
+#include <Babylon/Polyfills/URL.h>
 #include <Babylon/ScriptLoader.h>
 
 #if defined(HAS_NATIVE_DRACO)
@@ -296,6 +297,7 @@ TEST(JavaScript, All)
         Babylon::Polyfills::Streams::Initialize(env);
         Babylon::Polyfills::Blob::Initialize(env);
         Babylon::Polyfills::File::Initialize(env);
+        Babylon::Polyfills::URL::Initialize(env);
         Babylon::Polyfills::TextDecoder::Initialize(env);
         Babylon::Polyfills::TextEncoder::Initialize(env);
         Babylon::Polyfills::Compression::Initialize(env);
