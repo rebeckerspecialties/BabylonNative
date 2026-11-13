@@ -3,6 +3,71 @@ import { expect } from "chai";
 describe("fetch", function () {
     this.timeout(30000);
 
+    for (const alreadyAborted of [false, true]) {
+        it(`should preserve abort reason identity (alreadyAborted=${alreadyAborted})`, async function () {
+            for (const reason of ["cancelled", 0, false, null, Symbol("reason"), new Error("custom reason")]) {
+                const controller = new AbortController();
+                if (alreadyAborted) {
+                    controller.abort(reason);
+                }
+                const request = fetch(loopbackHttpOrigin + "/xhr/resources/status.py?code=200", { signal: controller.signal });
+                if (!alreadyAborted) {
+                    controller.abort(reason);
+                }
+                let rejected = false;
+                try {
+                    await request;
+                } catch (error) {
+                    rejected = true;
+                    expect(error).to.equal(reason);
+                }
+                expect(rejected).to.equal(true);
+            }
+        });
+
+        it(`should ignore inherited value accessors when aborting (alreadyAborted=${alreadyAborted})`, async function () {
+            for (const reason of ["cancelled", null, new Error("custom reason")]) {
+                const controller = new AbortController();
+                const url = loopbackHttpOrigin + "/xhr/resources/status.py?code=200";
+                let request: Promise<Response>;
+                if (!alreadyAborted) {
+                    request = fetch(url, { signal: controller.signal });
+                }
+                const previous = Object.getOwnPropertyDescriptor(Object.prototype, "value");
+                const create = Object.create;
+                let accessorCalls = 0;
+                const descriptor = Object.create(null);
+                descriptor.configurable = true;
+                descriptor.get = () => { ++accessorCalls; return "inherited reason"; };
+                descriptor.set = () => { ++accessorCalls; };
+                try {
+                    Object.defineProperty(Object.prototype, "value", descriptor);
+                    Object.create = () => { throw new Error("patched Object.create"); };
+                    controller.abort(reason);
+                    if (alreadyAborted) {
+                        request = fetch(url, { signal: controller.signal });
+                    }
+                } finally {
+                    Object.create = create;
+                    delete (Object.prototype as any).value;
+                    if (previous) {
+                        Object.defineProperty(Object.prototype, "value", previous);
+                    }
+                }
+                // Restore global prototypes before yielding to unrelated runtime work.
+                let rejected = false;
+                try {
+                    await request!;
+                } catch (error) {
+                    rejected = true;
+                    expect(error).to.equal(reason);
+                }
+                expect(accessorCalls).to.equal(0);
+                expect(rejected).to.equal(true);
+            }
+        });
+    }
+
     it("should resolve with ok=true and status=200 for a resource that exists", async function () {
         const response = await fetch("https://github.com/");
         expect(response.ok).to.equal(true);

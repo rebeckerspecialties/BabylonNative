@@ -30,7 +30,7 @@ namespace Babylon::Polyfills::Internal
         struct AbortState
         {
             bool aborted{false};
-            Napi::Reference<Napi::Value> reason;
+            Napi::ObjectReference reasonHolder;
             Napi::ObjectReference signal;
             Napi::FunctionReference listener;
         };
@@ -40,7 +40,7 @@ namespace Babylon::Polyfills::Internal
         Napi::Value GetAbortReason(Napi::Env env, const Napi::Object& signal)
         {
             const Napi::Value reason = signal.Get("reason");
-            if (!reason.IsUndefined() && !reason.IsNull())
+            if (!reason.IsUndefined())
             {
                 return reason;
             }
@@ -371,7 +371,10 @@ namespace Babylon::Polyfills::Internal
                             if (!abortState->aborted)
                             {
                                 abortState->aborted = true;
-                                abortState->reason = Napi::Persistent(GetAbortReason(env, abortState->signal.Value()));
+                                // Do not invoke inherited setters or a mutable Object.create.
+                                auto reasonHolder = Napi::Eval(env, "({ __proto__: null })", "jsruntimehost://fetch-abort-reason.js").As<Napi::Object>();
+                                reasonHolder.Set("value", GetAbortReason(env, abortState->signal.Value()));
+                                abortState->reasonHolder = Napi::Persistent(reasonHolder);
                                 // Cancel the in-flight transport; the completion continuation then
                                 // rejects with the AbortError instead of a transport TypeError.
                                 request->Abort();
@@ -405,7 +408,7 @@ namespace Babylon::Polyfills::Internal
                                     {
                                         // Per the fetch spec, an aborted request rejects with the
                                         // signal's reason (an AbortError), not a network error.
-                                        deferred.Reject(abortState->reason.Value());
+                                        deferred.Reject(abortState->reasonHolder.Value().Get("value"));
                                         return;
                                     }
                                 }
