@@ -27,6 +27,7 @@ set(SOURCES
     "Source/Tests.JsRuntimeScheduler.cpp"
     "Source/Tests.BrowserPolyfills.cpp"
     "Source/Tests.CompressionFileReader.cpp"
+    "Source/Tests.BlobStorage.cpp"
     "Source/Tests.Console.cpp"
     "Source/Tests.DelayedTaskScheduler.cpp"
     "Source/Tests.JavaScript.cpp"
@@ -119,6 +120,7 @@ target_link_libraries(${_jsruntimehost_unit_tests_target}
     PRIVATE gtest_main
     PRIVATE FoundationInternal
     PRIVATE Blob
+    PRIVATE BlobInternal
     PRIVATE File
     PRIVATE Performance
     PRIVATE TextDecoder

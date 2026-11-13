@@ -16,9 +16,8 @@ namespace Babylon::Polyfills::Internal
 
         explicit Blob(const Napi::CallbackInfo& info);
 
-        // Synchronous accessors for other polyfills in this repo (URL.createObjectURL). A Blob is
-        // immutable, so the flattened copy stays valid however long the caller keeps it.
-        std::shared_ptr<const std::vector<std::byte>> CopyBytes() const;
+        // Share a whole backing segment, or cache a flattened immutable copy for other polyfills.
+        const std::shared_ptr<const std::vector<std::byte>>& GetBytes() const;
         const std::string& Type() const { return m_type; }
 
     private:
@@ -32,7 +31,7 @@ namespace Babylon::Polyfills::Internal
 
         struct Segment;
         struct Data;
-        struct StreamState;
+        class StreamSource;
 
         bool AppendBlobPart(Data& data, const Napi::Value& blobPart);
         Napi::ArrayBuffer CreateArrayBuffer() const;
@@ -42,6 +41,7 @@ namespace Babylon::Polyfills::Internal
         static size_t NormalizeSliceIndex(double value, size_t size);
 
         std::shared_ptr<const Data> m_data;
+        mutable std::shared_ptr<const std::vector<std::byte>> m_contiguous;
         std::string m_type;
     };
 }
