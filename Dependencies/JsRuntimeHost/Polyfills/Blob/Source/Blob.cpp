@@ -7,6 +7,12 @@
 #include <cmath>
 #include <cstring>
 
+namespace
+{
+    constexpr auto JS_BLOB_CONSTRUCTOR_NAME = "Blob";
+    constexpr auto JS_BLOB_CONSTRUCTOR_KEY = "__jsRuntimeHostBlob";
+}
+
 namespace Babylon::Polyfills::Internal
 {
     struct Blob::Segment
@@ -62,7 +68,6 @@ namespace Babylon::Polyfills::Internal
 
     void Blob::Initialize(Napi::Env env)
     {
-        static constexpr auto JS_BLOB_CONSTRUCTOR_NAME = "Blob";
         if (env.Global().Get(JS_BLOB_CONSTRUCTOR_NAME).IsUndefined())
         {
             Napi::Function func = DefineClass(
@@ -82,6 +87,12 @@ namespace Babylon::Polyfills::Internal
             descriptor.Set("configurable", true);
             descriptor.Set("value", JS_BLOB_CONSTRUCTOR_NAME);
             env.Global().Get("Object").As<Napi::Object>().Get("defineProperty").As<Napi::Function>().Call(env.Global().Get("Object"), {func.Get("prototype"), Napi::Symbol::WellKnown(env, "toStringTag"), descriptor});
+            // Keep identity independent of the replaceable global Blob binding, including in workers.
+            auto constructorDescriptor = Napi::Object::New(env);
+            constructorDescriptor.Set("value", func);
+            env.Global().Get("Object").As<Napi::Object>().Get("defineProperty").As<Napi::Function>().Call(
+                env.Global().Get("Object"),
+                {env.Global(), Napi::String::New(env, JS_BLOB_CONSTRUCTOR_KEY), constructorDescriptor});
             env.Global().Set(JS_BLOB_CONSTRUCTOR_NAME, func);
         }
     }
@@ -568,8 +579,8 @@ namespace Babylon::Polyfills::Blob
         // the JS-level Object.getPrototypeOf. napi_get_prototype is not exposed by every adapter
         // (e.g. JSI) and on JSC returns the raw [[Prototype]], which differs from the JS-visible
         // prototype of a DefineClass instance; napi_instanceof's wrapper requires a Napi::Function.
-        const auto blobConstructor = global.Get("Blob");
-        if (!blobConstructor.IsFunction())
+        const auto blobConstructor = global.Get(JS_BLOB_CONSTRUCTOR_KEY);
+        if (!blobConstructor.IsObject())
         {
             return std::nullopt;
         }
@@ -612,6 +623,10 @@ namespace Babylon::Polyfills::Blob
         }
 
         const auto* blob = Internal::Blob::Unwrap(object);
+        if (blob == nullptr)
+        {
+            return std::nullopt;
+        }
         return BlobData{blob->CopyBytes(), blob->Type()};
     }
 }

@@ -456,6 +456,11 @@ namespace
 
 namespace Babylon::Polyfills::Internal
 {
+    namespace
+    {
+        constexpr auto WebIdlOperationAttributes = static_cast<napi_property_attributes>(napi_writable | napi_enumerable | napi_configurable);
+    }
+
     static constexpr auto JS_URL_CONSTRUCTOR_NAME = "URL";
 
     void URL::Initialize(Napi::Env env)
@@ -485,10 +490,10 @@ namespace Babylon::Polyfills::Internal
                     InstanceMethod("toString", &URL::ToString),
                     InstanceMethod("toJSON", &URL::ToJSON),
                     // Static methods
-                    StaticMethod("canParse", &URL::CanParse),
-                    StaticMethod("parse", &URL::Parse),
-                    StaticMethod("createObjectURL", &URL::CreateObjectURL),
-                    StaticMethod("revokeObjectURL", &URL::RevokeObjectURL),
+                    StaticMethod("canParse", &URL::CanParse, WebIdlOperationAttributes),
+                    StaticMethod("parse", &URL::Parse, WebIdlOperationAttributes),
+                    StaticMethod("createObjectURL", &URL::CreateObjectURL, WebIdlOperationAttributes),
+                    StaticMethod("revokeObjectURL", &URL::RevokeObjectURL, WebIdlOperationAttributes),
                 });
 
             env.Global().Set(JS_URL_CONSTRUCTOR_NAME, func);

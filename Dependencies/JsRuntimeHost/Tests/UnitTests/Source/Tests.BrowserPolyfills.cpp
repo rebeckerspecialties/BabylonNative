@@ -9,6 +9,7 @@
 #include <Babylon/Polyfills/Streams.h>
 #include <Babylon/Polyfills/TextDecoder.h>
 #include <Babylon/Polyfills/TextEncoder.h>
+#include <Babylon/Polyfills/URL.h>
 #include <Babylon/Polyfills/XMLHttpRequest.h>
 #if defined(JSRUNTIMEHOST_TEST_WORKER)
 #include <Babylon/Polyfills/Worker.h>
@@ -23,12 +24,38 @@
 #include <iostream>
 #include <mutex>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <vector>
 
 namespace
 {
+    void RunBlobUrlScript(const char* script)
+    {
+        std::promise<void> completion;
+        auto future = completion.get_future();
+        Babylon::AppRuntime runtime{};
+        runtime.Dispatch([script, &completion](Napi::Env env) {
+            try
+            {
+                Babylon::Polyfills::Blob::Initialize(env);
+                Babylon::Polyfills::URL::Initialize(env);
+                Napi::Eval(env, script, "blob-url-regression.js");
+                completion.set_value();
+            }
+            catch (const Napi::Error& error)
+            {
+                completion.set_exception(std::make_exception_ptr(std::runtime_error{Napi::GetErrorString(error)}));
+            }
+            catch (...)
+            {
+                completion.set_exception(std::current_exception());
+            }
+        });
+        future.get();
+    }
+
     const char* EnumToString(Babylon::Polyfills::Console::LogLevel logLevel)
     {
         switch (logLevel)
@@ -43,6 +70,58 @@ namespace
 
         return "unknown";
     }
+}
+
+TEST(Blob, RetainsIdentityAfterGlobalReplacement)
+{
+    RunBlobUrlScript(R"JS(
+        (function () {
+            var global = Function("return this")();
+            var NativeBlob = global.Blob;
+            var blob = new NativeBlob(["hello"], { type: "text/plain" });
+            function LookAlikeBlob() { this.size = 5; this.type = "text/plain"; }
+            var urls = [];
+            global.Blob = LookAlikeBlob;
+            try {
+                for (var value of [blob, new NativeBlob(["later"])]) {
+                    var url = URL.createObjectURL(value);
+                    urls.push(url);
+                    if (url.indexOf("blob:") !== 0) { throw new Error("Real Blob was rejected"); }
+                }
+                var rejected = false;
+                try { URL.createObjectURL(new LookAlikeBlob()); }
+                catch (error) {
+                    rejected = error.name === "TypeError" && /not a Blob/.test(error.message);
+                }
+                if (!rejected) { throw new Error("Expected a clean TypeError for a foreign Blob"); }
+                global.Blob = undefined;
+                urls.push(URL.createObjectURL(blob));
+            } finally {
+                global.Blob = NativeBlob;
+                for (var url of urls) { URL.revokeObjectURL(url); }
+            }
+        })();
+    )JS");
+}
+
+TEST(URL, StaticOperationsAreWritableEnumerableConfigurable)
+{
+    RunBlobUrlScript(R"JS(
+        (function () {
+            for (var name of ["canParse", "parse", "createObjectURL", "revokeObjectURL"]) {
+                var descriptor = Object.getOwnPropertyDescriptor(URL, name);
+                if (!descriptor || !descriptor.writable || !descriptor.enumerable || !descriptor.configurable) {
+                    throw new Error(name + " must be writable, enumerable and configurable");
+                }
+                try {
+                    URL[name] = function () { return "replaced"; };
+                    if (URL[name]() !== "replaced") { throw new Error(name + " replacement failed"); }
+                } finally {
+                    Object.defineProperty(URL, name, descriptor);
+                }
+            }
+        })();
+    )JS");
 }
 
 TEST(Streams, PreservesHostConstructorsAndIsIdempotent)
