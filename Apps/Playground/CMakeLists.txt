@@ -60,6 +60,7 @@ set(SCRIPTS
     "Scripts/native_xr_portal_ao_layout_3x2.js"
     "Scripts/native_xr_portal_ao_layout_8x4.js"
     "Scripts/native_xr_portal_ao_multibounce.js"
+    "Scripts/native_xr_portal_foliage_occlusion.js"
     "Scripts/native_xr_portal_fast_snapshot_validation.js"
     "Scripts/native_xr_portal_frozen_materials_validation.js"
     "Scripts/native_xr_portal_gtvbao_cosine_validation.js"
