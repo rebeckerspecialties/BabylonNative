@@ -42,7 +42,7 @@
         "2x5-alternating": { slices: 2, steps: 5, paired: false },
         "8x4-paired": { slices: 8, steps: 4, paired: true }
     };
-    var sampleLayoutName = String(globalThis.__nativeArPortalAoSampleLayout ?? "2x2-paired");
+    var sampleLayoutName = String(globalThis.__nativeArPortalAoSampleLayout ?? "3x2-paired");
     var sampleLayout = sampleLayouts[sampleLayoutName];
     if (!sampleLayout) {
         throw new Error("Unknown portal AO sample layout: " + sampleLayoutName);
@@ -51,6 +51,10 @@
         ? "for (var side = -1.0; side <= 1.0; side += 2.0) {"
         : "for (var sideIndex = 0u; sideIndex < 1u; sideIndex++) {\n" +
           "                let side = select(-1.0, 1.0, ((stepIndex + slice + cell.x + cell.y) & 1u) == 0u);";
+    // Slices are a fixed angle apart, so each is the previous one rotated by constants.
+    var sliceAngle = Math.PI / sampleLayout.slices;
+    var sliceCos = Math.cos(sliceAngle).toFixed(9);
+    var sliceSin = Math.sin(sliceAngle).toFixed(9);
     var combine = store.ssaoCombinePixelShader;
     var aoRead = /var ssaoColor:\s*vec4f\s*=\s*textureSample\(textureSampler,\s*textureSamplerSampler,\s*uv\);/;
     if (typeof combine !== "string" || (combine.match(new RegExp(aoRead.source, "g")) || []).length !== 1) {
@@ -248,9 +252,8 @@ fn portalAcos(x: f32) -> f32 {
 // Cumulative share of cos(theta - gamma) * |sin(theta)| over a hemisphere slice,
 // with theta measured from the view vector and gamma the projected normal's angle.
 // Equal steps of this value carry equal cosine-weighted solid angle.
-fn portalSliceCdf(delta: vec3f, view: vec3f, tangent: vec3f, sinGamma: f32, cosGamma: f32, lower: f32, inverseTotal: f32) -> f32 {
-    let x = dot(delta, view);
-    let y = dot(delta, tangent);
+// x and y are the direction's components along the view vector and the slice tangent.
+fn portalSliceCdf(x: f32, y: f32, sinGamma: f32, cosGamma: f32, lower: f32, inverseTotal: f32) -> f32 {
     if (x * cosGamma + y * sinGamma <= 0.0) {
         return select(0.0, 1.0, y >= 0.0);
     }
@@ -278,9 +281,9 @@ fn portalThickness(height: f32, rayNormal: f32, footprint: f32, radius: f32) -> 
     return min(radius * 2.0, max(2.0 * footprint, height / max(-rayNormal, 0.125)));
 }
 
-fn portalClipSlab(delta: vec3f, ray: vec3f, thickness: f32, radius: f32) -> vec2f {
+fn portalClipSlab(delta: vec3f, ray: vec3f, thickness: f32, radiusSquared: f32) -> vec2f {
     let b = dot(delta, ray);
-    let discriminant = b * b - dot(delta, delta) + radius * radius;
+    let discriminant = b * b - dot(delta, delta) + radiusSquared;
     if (discriminant <= 0.0) { return vec2f(0.0); }
     let extent = sqrt(discriminant);
     return vec2f(max(0.0, -b - extent), min(thickness, -b + extent));
@@ -298,6 +301,7 @@ fn portalOrdered(cell: vec2u) -> f32 {
 fn main(input: FragmentInputs) -> FragmentOutputs {
     let dimensions = vec2i(textureDimensions(textureSampler));
     let size = vec2f(dimensions);
+    let inverseSize = 1.0 / size;
     let centerPixel = clamp(vec2i(input.vUV * size), vec2i(0), dimensions - 1);
     let geometry = textureLoad(textureSampler, centerPixel, 0);
     let depth = abs(geometry.a);
@@ -307,7 +311,7 @@ fn main(input: FragmentInputs) -> FragmentOutputs {
         return fragmentOutputs;
     }
     let depthSign = sign(geometry.a);
-    let position = portalViewPosition((vec2f(centerPixel) + 0.5) / size, depth, depthSign);
+    let position = portalViewPosition((vec2f(centerPixel) + 0.5) * inverseSize, depth, depthSign);
     let view = normalize(-position);
     let normalView = dot(normal, view);
     if (normalView <= 1e-5) {
@@ -321,11 +325,16 @@ fn main(input: FragmentInputs) -> FragmentOutputs {
     let basisY = cross(view, basisX);
     let centerClip = uniforms.projection * vec4f(position, 1.0);
     let safeRadius = max(uniforms.radius, 1e-4);
+    let radiusSquared = safeRadius * safeRadius;
+    // Every sample is reconstructed as depth times this ray through its texel.
+    let rayScale = 2.0 * inverseSize * vec2f(uniforms.xViewport, uniforms.yViewport);
+    let rayOffset = (inverseSize - 1.0 - uniforms.projection[2].xy * depthSign) * vec2f(uniforms.xViewport, uniforms.yViewport);
+    let phase = noise.x * (3.14159265359 / f32(PORTAL_SLICE_COUNT));
+    var tangent = basisX * cos(phase) + basisY * sin(phase);
+    var crossTangent = basisY * cos(phase) - basisX * sin(phase);
     let texelFootprint = 2.0 * max(abs(uniforms.xViewport) / size.x, abs(uniforms.yViewport) / size.y);
     var occlusion = 0.0;
     for (var slice = 0u; slice < PORTAL_SLICE_COUNT; slice++) {
-        let phi = (f32(slice) + noise.x) * (3.14159265359 / f32(PORTAL_SLICE_COUNT));
-        let tangent = basisX * cos(phi) + basisY * sin(phi);
         let normalTangent = dot(normal, tangent);
         let projectedSquared = normalTangent * normalTangent + normalView * normalView;
         let inverseProjected = inverseSqrt(projectedSquared);
@@ -344,7 +353,7 @@ fn main(input: FragmentInputs) -> FragmentOutputs {
             ${sideLoop}
                 let clip = centerClip + clipDirection * (side * sampleDistance * sampleDistance);
                 if (clip.w <= 1e-6) { continue; }
-                let uv = clip.xy / clip.w * 0.5 + 0.5;
+                let uv = clip.xy * (0.5 / clip.w) + 0.5;
                 if (any(uv < vec2f(0.0)) || any(uv >= vec2f(1.0))) { continue; }
                 // Reconstruct at the actual nearest texel center, not the unsnapped ray.
                 let pixel = vec2i(uv * size);
@@ -352,25 +361,31 @@ fn main(input: FragmentInputs) -> FragmentOutputs {
                 let sampleDepth = abs(sampleGeometry.a);
                 // Cutouts do not occlude: their coverage flips with sub-texel motion.
                 if (sampleDepth == 0.0 || dot(sampleGeometry.xyz, sampleGeometry.xyz) < 0.5) { continue; }
-                let samplePosition = portalViewPosition((vec2f(pixel) + 0.5) / size, sampleDepth, depthSign);
-                let delta = samplePosition - position;
+                let sampleRay = vec3f(vec2f(pixel) * rayScale + rayOffset, depthSign);
+                let delta = sampleRay * sampleDepth - position;
                 let footprint = sampleDepth * texelFootprint;
                 let height = dot(delta, normal);
                 if (height <= max(footprint * 0.25, 1e-4)) { continue; }
                 // Thickness follows this sample's camera ray, not the center pixel's ray.
-                let ray = normalize(samplePosition);
+                let ray = normalize(sampleRay);
                 let thickness = portalThickness(height, dot(ray, normal), footprint, safeRadius);
-                let interval = portalClipSlab(delta, ray, thickness, safeRadius);
+                let interval = portalClipSlab(delta, ray, thickness, radiusSquared);
                 if (interval.y <= interval.x) { continue; }
-                let front = delta + ray * interval.x;
-                let back = delta + ray * interval.y;
+                // The slab's two ends, as components along the view vector and the tangent.
+                let start = vec2f(dot(delta, view), dot(delta, tangent));
+                let along = vec2f(dot(ray, view), dot(ray, tangent));
+                let front = start + along * interval.x;
+                let back = start + along * interval.y;
                 mask |= portalIntervalMask(
-                    portalSliceCdf(front, view, tangent, sinGamma, cosGamma, lower, inverseTotal),
-                    portalSliceCdf(back, view, tangent, sinGamma, cosGamma, lower, inverseTotal), jitter);
+                    portalSliceCdf(front.x, front.y, sinGamma, cosGamma, lower, inverseTotal),
+                    portalSliceCdf(back.x, back.y, sinGamma, cosGamma, lower, inverseTotal), jitter);
             }
         }
         // Each slice carries the projected normal's length times its unoccluded integral.
         occlusion += projectedSquared * inverseProjected * total * f32(countOneBits(mask));
+        let nextTangent = tangent * ${sliceCos} + crossTangent * ${sliceSin};
+        crossTangent = crossTangent * ${sliceCos} - tangent * ${sliceSin};
+        tangent = nextTangent;
     }
     let fade = 1.0 - smoothstep(uniforms.maxZ * 0.75, uniforms.maxZ, depth);
     let ao = clamp(1.0 - uniforms.totalStrength * fade * occlusion / (32.0 * f32(PORTAL_SLICE_COUNT)) + uniforms.base, 0.0, 1.0);

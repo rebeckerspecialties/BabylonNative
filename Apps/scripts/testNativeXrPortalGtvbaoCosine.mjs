@@ -42,8 +42,10 @@ function sliceCdf(shader) {
         "const clamp = (x, a, b) => Math.min(Math.max(x, a), b); const select = (f, t, c) => (c ? t : f);" +
         "const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];";
     const acos = new Function("x", helpers + toJs(body("portalAcos")));
-    const cdf = new Function("portalAcos", "delta", "view", "tangent", "sinGamma", "cosGamma", "lower", "inverseTotal", helpers + toJs(body("portalSliceCdf")));
-    return { acos, cdf: (...args) => cdf(acos, ...args) };
+    const cdf = new Function("portalAcos", "x", "y", "sinGamma", "cosGamma", "lower", "inverseTotal", helpers + toJs(body("portalSliceCdf")));
+    // Takes a direction with the view vector and the slice tangent it is measured against.
+    const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    return { acos, cdf: (delta, view, tangent, ...slice) => cdf(acos, dot(delta, view), dot(delta, tangent), ...slice) };
 }
 
 test("installs the geometry, AO, filter and upsample shaders together", () => {
@@ -52,7 +54,7 @@ test("installs the geometry, AO, filter and upsample shaders together", () => {
     assert.equal(c.__nativeArPortalBenchmarkLabel, "gtvbao-cosine-v5");
     assert.equal(c.__nativeArPortalSSAORadius, 0.5);
     assert.match(store.portalAoGeometryPixelShader, /uniform normalToView: mat3x3f;/);
-    assert.match(store.ssao2PixelShader, /const PORTAL_SLICE_COUNT: u32 = 2u;\s*const PORTAL_STEPS_PER_SIDE: u32 = 2u;/);
+    assert.match(store.ssao2PixelShader, /const PORTAL_SLICE_COUNT: u32 = 3u;\s*const PORTAL_STEPS_PER_SIDE: u32 = 2u;/);
     // Sixteen ordered phases need a filter that weights every residue modulo four equally.
     assert.match(store.ssao2PixelShader, /for \(var i = -2; i <= 2; i\+\+\)/);
     assert.match(store.ssao2PixelShader, /select\(2\.0, 1\.0, abs\(i\) == 2\)/);
@@ -85,7 +87,7 @@ test("sample layouts set the slice and step counts and how the two sides are rea
     const paired = /for \(var side = -1\.0; side <= 1\.0; side \+= 2\.0\) \{/;
     const alternating = /let side = select\(-1\.0, 1\.0, \(\(stepIndex \+ slice \+ cell\.x \+ cell\.y\) & 1u\) == 0u\);/;
     for (const [layout, slices, steps, pattern, other] of [
-        [undefined, 2, 2, paired, alternating], ["2x3", 2, 3, paired, alternating], ["3x2", 3, 2, paired, alternating],
+        [undefined, 3, 2, paired, alternating], ["2x3", 2, 3, paired, alternating], ["2x2", 2, 2, paired, alternating],
         ["8x4", 8, 4, paired, alternating], ["2x5", 2, 5, alternating, paired],
     ]) {
         const shader = build(layout);
@@ -98,6 +100,43 @@ test("sample layouts set the slice and step counts and how the two sides are rea
     const before = { ...c.BABYLON.ShaderStore.ShadersStoreWGSL };
     assert.throws(() => vm.runInContext(source, c), /Unknown portal AO sample layout: 4x4/);
     assert.deepEqual({ ...c.BABYLON.ShaderStore.ShadersStoreWGSL }, before);
+});
+
+test("slices are rotated by constants and samples are reconstructed without dividing", () => {
+    const build = (layout) => {
+        const c = context();
+        if (layout) c.__nativeArPortalAoSampleLayout = layout;
+        vm.runInContext(source, c);
+        const shader = c.BABYLON.ShaderStore.ShadersStoreWGSL.ssao2PixelShader;
+        return shader.slice(0, shader.indexOf("#else")).replace(/\/\/.*/g, "");
+    };
+    for (const [layout, slices] of [[undefined, 3], ["2x2-paired", 2], ["8x4-paired", 8]]) {
+        const ao = build(layout);
+        const step = /let nextTangent = tangent \* (\d\.\d+) \+ crossTangent \* (\d\.\d+);\s*crossTangent = crossTangent \* (\d\.\d+) - tangent \* (\d\.\d+);\s*tangent = nextTangent;/.exec(ao);
+        assert.ok(step, String(layout));
+        assert.ok(Math.abs(Number(step[1]) - Math.cos(Math.PI / slices)) < 1e-8 && step[1] === step[3]);
+        assert.ok(Math.abs(Number(step[2]) - Math.sin(Math.PI / slices)) < 1e-8 && step[2] === step[4]);
+        // One sine and cosine per texel, for the ordered phase; none per slice.
+        assert.equal(ao.match(/\bcos\(/g).length, 2);
+        assert.equal(ao.match(/\bsin\(/g).length, 2);
+        // Per sample, the only divisions written out are the step spacing by a constant and the perspective divide.
+        const loop = ao.slice(ao.indexOf("for (var stepIndex"), ao.indexOf("occlusion +="));
+        assert.deepEqual(loop.match(/\/ [^;]*/g).map((division) => division.slice(0, 12)), ["/ f32(PORTAL", "/ clip.w) + "]);
+        assert.match(loop, /let sampleRay = vec3f\(vec2f\(pixel\) \* rayScale \+ rayOffset, depthSign\);/);
+    }
+    // Depth times the ray through a texel is the view position the other passes reconstruct.
+    const ao = build();
+    assert.match(ao, /let rayScale = 2\.0 \* inverseSize \* vec2f\(uniforms\.xViewport, uniforms\.yViewport\);/);
+    assert.match(ao, /let rayOffset = \(inverseSize - 1\.0 - uniforms\.projection\[2\]\.xy \* depthSign\) \* vec2f\(uniforms\.xViewport, uniforms\.yViewport\);/);
+    const size = [806, 372], viewport = [0.61, 0.28], center = [0.013, -0.02];
+    for (const [pixel, depth, sign] of [[[0, 0], 3.5, 1], [[805, 371], 40, -1], [[400, 100], 0.7, 1]]) {
+        for (const axis of [0, 1]) {
+            const uv = (pixel[axis] + 0.5) / size[axis];
+            const shared = (uv * 2 - 1 - center[axis] * sign) * viewport[axis] * depth;
+            const ray = pixel[axis] * (2 / size[axis]) * viewport[axis] + (1 / size[axis] - 1 - center[axis] * sign) * viewport[axis];
+            assert.ok(Math.abs(ray * depth - shared) < 1e-12);
+        }
+    }
 });
 
 test("the bilinear switch keeps the published AO read and adds only the cutout visibility", () => {
