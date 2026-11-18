@@ -32,6 +32,25 @@
     if (!(cutoutVisibility > 0 && cutoutVisibility <= 1)) {
         throw new Error("Portal AO cutout visibility must be within (0, 1].");
     }
+    // Slices x distance steps. "paired" reads both sides of the receiver at every
+    // step; "alternating" reads one side per step and swaps sides between
+    // steps, slices and neighbouring texels.
+    var sampleLayouts = {
+        "2x2-paired": { slices: 2, steps: 2, paired: true },
+        "2x3-paired": { slices: 2, steps: 3, paired: true },
+        "3x2-paired": { slices: 3, steps: 2, paired: true },
+        "2x5-alternating": { slices: 2, steps: 5, paired: false },
+        "8x4-paired": { slices: 8, steps: 4, paired: true }
+    };
+    var sampleLayoutName = String(globalThis.__nativeArPortalAoSampleLayout ?? "2x2-paired");
+    var sampleLayout = sampleLayouts[sampleLayoutName];
+    if (!sampleLayout) {
+        throw new Error("Unknown portal AO sample layout: " + sampleLayoutName);
+    }
+    var sideLoop = sampleLayout.paired
+        ? "for (var side = -1.0; side <= 1.0; side += 2.0) {"
+        : "for (var sideIndex = 0u; sideIndex < 1u; sideIndex++) {\n" +
+          "                let side = select(-1.0, 1.0, ((stepIndex + slice + cell.x + cell.y) & 1u) == 0u);";
     var combine = store.ssaoCombinePixelShader;
     var aoRead = /var ssaoColor:\s*vec4f\s*=\s*textureSample\(textureSampler,\s*textureSamplerSampler,\s*uv\);/;
     if (typeof combine !== "string" || (combine.match(new RegExp(aoRead.source, "g")) || []).length !== 1) {
@@ -217,8 +236,8 @@ uniform maxZ: f32;
 uniform projection: mat4x4f;
 uniform xViewport: f32;
 uniform yViewport: f32;
-const PORTAL_SLICE_COUNT: u32 = 2u;
-const PORTAL_STEPS_PER_SIDE: u32 = 2u;
+const PORTAL_SLICE_COUNT: u32 = ${sampleLayout.slices}u;
+const PORTAL_STEPS_PER_SIDE: u32 = ${sampleLayout.steps}u;
 ${reconstruction}
 fn portalAcos(x: f32) -> f32 {
     let a = abs(x);
@@ -322,7 +341,7 @@ fn main(input: FragmentInputs) -> FragmentOutputs {
         for (var stepIndex = 0u; stepIndex < PORTAL_STEPS_PER_SIDE; stepIndex++) {
             let sampleNoise = fract(noise.y + f32(slice + stepIndex * PORTAL_STEPS_PER_SIDE) * 0.61803398875);
             let sampleDistance = (f32(stepIndex) + 0.5 + sampleNoise * 0.5) / f32(PORTAL_STEPS_PER_SIDE);
-            for (var side = -1.0; side <= 1.0; side += 2.0) {
+            ${sideLoop}
                 let clip = centerClip + clipDirection * (side * sampleDistance * sampleDistance);
                 if (clip.w <= 1e-6) { continue; }
                 let uv = clip.xy / clip.w * 0.5 + 0.5;
@@ -519,7 +538,8 @@ fn main(input: FragmentInputs) -> FragmentOutputs {
             throw new Error("Portal AO geometry must be the first post-process.");
         }
         scene.onDisposeObservable.add(function () { geometry.dispose(camera); });
-        status("native-xr-portal:gtvbao=cosine-weighted:slices=2:stepsPerSide=2:bits=32:noise=ordered-4x4:filter=box4*box2" +
+        status("native-xr-portal:gtvbao=cosine-weighted:slices=" + sampleLayout.slices + ":stepsPerSide=" + sampleLayout.steps +
+            ":samples=" + sampleLayout.slices * sampleLayout.steps * (sampleLayout.paired ? 2 : 1) + ":bits=32:noise=ordered-4x4:filter=box4*box2" +
             ":geometry=ao-resolution-plane-filtered:upsample=" + (surfaceAwareUpsample ? "surface-aware" : "bilinear") + ":color-only-panes=" + panes.length + ":cutouts=" + cutouts + ":cutout-visibility=" + cutoutLiteral);
     }
 })();

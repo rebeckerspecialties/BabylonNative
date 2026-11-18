@@ -2,8 +2,8 @@
 // frame-to-frame instability. Scripts are loaded from this checkout, so shader
 // edits need no rebuild. Example:
 //   node Apps/scripts/measurePortalStability.mjs \
-//     --playground build/Apps/Playground/Playground.app/Contents/MacOS/Playground \
-//     --out build/stability --label candidate
+//     --playground build_portal_macos_release/Apps/Playground/Playground.app/Contents/MacOS/Playground \
+//     --out build_portal_macos_release/stability --label candidate
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -51,8 +51,10 @@ export function parseArguments(argv) {
         else throw new Error("Unknown argument: " + name);
     }
     if (!options.playground || !options.out || !/^[a-z0-9-]+$/.test(options.label || "")) {
-        throw new Error("Usage: measurePortalStability.mjs --playground <executable> --out <directory> --label <lowercase-name> " +
-            "[--views final,ao] [--modes whole-pixel,sub-pixel] [--size WxH] [--sdr] [--prelude <script>] [--ao-script <script>]");
+        const missing = [!options.playground && "--playground", !options.out && "--out", !options.label && "--label"].filter(Boolean);
+        throw new Error((missing.length ? "Missing " + missing.join(", ") + ". " : "--label must be lowercase letters, digits and hyphens. ") +
+            "Usage: measurePortalStability.mjs --playground <executable> --out <directory> --label <lowercase-name> " +
+            "[--views final,ao] [--modes whole-pixel,sub-pixel] [--size WxH] [--sdr] [--prelude <script>] [--ao-script <script>] [--timeout <seconds>]");
     }
     if (!/^[1-9][0-9]*x[1-9][0-9]*$/.test(options.size) || !(options.timeoutSeconds > 0) ||
         options.views.some((view) => view !== "final" && view !== "ao") ||

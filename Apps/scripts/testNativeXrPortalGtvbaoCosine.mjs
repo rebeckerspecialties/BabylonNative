@@ -75,6 +75,31 @@ test("a radius chosen before loading is kept", () => {
     assert.equal(c.__nativeArPortalSSAORadius, 0.85);
 });
 
+test("sample layouts set the slice and step counts and how the two sides are read", () => {
+    const build = (layout) => {
+        const c = context();
+        if (layout) vm.runInContext(readFileSync(new URL(`../Playground/Scripts/native_xr_portal_ao_layout_${layout}.js`, import.meta.url), "utf8"), c);
+        vm.runInContext(source, c);
+        return c.BABYLON.ShaderStore.ShadersStoreWGSL.ssao2PixelShader;
+    };
+    const paired = /for \(var side = -1\.0; side <= 1\.0; side \+= 2\.0\) \{/;
+    const alternating = /let side = select\(-1\.0, 1\.0, \(\(stepIndex \+ slice \+ cell\.x \+ cell\.y\) & 1u\) == 0u\);/;
+    for (const [layout, slices, steps, pattern, other] of [
+        [undefined, 2, 2, paired, alternating], ["2x3", 2, 3, paired, alternating], ["3x2", 3, 2, paired, alternating],
+        ["8x4", 8, 4, paired, alternating], ["2x5", 2, 5, alternating, paired],
+    ]) {
+        const shader = build(layout);
+        assert.ok(shader.includes(`const PORTAL_SLICE_COUNT: u32 = ${slices}u;\nconst PORTAL_STEPS_PER_SIDE: u32 = ${steps}u;`), String(layout));
+        assert.match(shader, pattern);
+        assert.doesNotMatch(shader, other);
+    }
+    const c = context();
+    c.__nativeArPortalAoSampleLayout = "4x4";
+    const before = { ...c.BABYLON.ShaderStore.ShadersStoreWGSL };
+    assert.throws(() => vm.runInContext(source, c), /Unknown portal AO sample layout: 4x4/);
+    assert.deepEqual({ ...c.BABYLON.ShaderStore.ShadersStoreWGSL }, before);
+});
+
 test("the bilinear switch keeps the published AO read and adds only the cutout visibility", () => {
     const c = context();
     vm.runInContext(readFileSync(new URL("../Playground/Scripts/native_xr_portal_ao_bilinear_upsample.js", import.meta.url), "utf8"), c);
