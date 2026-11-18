@@ -363,14 +363,10 @@ seconds each, all four fixed-pose captures identical in every pixel:
 | Frozen materials, default path | 7.40 | -24% |
 | Render bundles and frozen materials | 6.98 | -28% |
 | The same with frozen world matrices and the dirty mechanism blocked | 6.88 | -29% |
-| WebGPU snapshot rendering, fast mode | 3.39 | invalid |
 
 Freezing the active mesh list was slower in this scene, because it draws all
-136 meshes where culling draws about 72. Fast snapshot rendering is not usable
-yet: draws that leave the pre-pass targets record single-target pipelines
-inside the three-target pass, which fails validation, and the camera stops
-updating. It is the largest remaining interpreter lever if Babylon.js can
-record that pass correctly.
+136 meshes where culling draws about 72. Fast snapshot rendering goes further
+and is covered in its own section below.
 
 Five-minute runs, cosine estimator with the surface-aware upsample, HDR:
 
@@ -389,6 +385,63 @@ durable: 24% on the A10X and 25 to 30% on the A12 over the whole five minutes. T
 in the next section. A frozen material ignores later changes to lights, clip
 planes and its own properties, so the AR portal needs its own validation before
 this path is used there.
+
+### Fast snapshot rendering
+
+In fast snapshot mode the engine records the draws of one frame and replays
+them, so the scene is not traversed at all: no active-mesh evaluation, no
+material binding and no draw encoding. It first failed here with
+`Render pipeline targets are incompatible with render pass` on every frame.
+The cause was not the pre-pass targets themselves. Every imported mesh is in
+rendering group 1, and the depth/stencil clear before a rendering group ends
+the current render pass. With the groups empty in fast mode that clear was
+skipped, the replayed frame had 10 render passes where the recorded one had
+11, and each later pass replayed the draws of the pass after it. Patch 0008 in
+`Patches/BabylonJS` makes the rendering manager issue the recorded clears
+again.
+
+Two conditions belong to the mode and are handled by
+`native_xr_portal_fast_snapshot_validation.js`:
+
+- **Enable at a frame boundary.** Setting `engine.snapshotRendering` inside a
+  frame records only the rest of that frame, which misaligns every pass in the
+  same way.
+- **Select every mesh first.** A mesh culled in the recorded frame is never
+  drawn again, so the prelude sets `alwaysSelectAsActiveMesh` on all meshes
+  one frame before recording.
+
+The recording also keeps the back-to-front order of blended meshes from the
+recorded frame. Three of the four fixed-pose captures match ordinary rendering
+in every pixel; the fourth differs in 5 of 3.7 million pixels where blended
+meshes overlap. Any change to the mesh list, materials or transforms needs
+`engine.snapshotRenderingReset()`.
+
+JavaScript thread time per frame, 45-second runs, no validation errors:
+
+| Device and surface | Default | Frozen materials | Fast snapshot |
+| --- | ---: | ---: | ---: |
+| M4, HDR | 9.7 ms | 7.0 to 7.3 ms | 4.2 to 4.6 ms |
+| iPhone XS Max (A12), HDR, cosine estimator | 14.2 ms | 10.0 ms | 7.1 ms |
+| Apple TV 4K (A10X), SDR, old estimator | 30.8 ms | 25.3 ms | 10.0 ms |
+| Apple TV 4K (A10X), HDR, old estimator | 29.7 ms | 22.3 ms | 10.5 ms |
+
+Frame rate in the same runs:
+
+| Device and surface | Default | Frozen materials | Fast snapshot |
+| --- | ---: | ---: | ---: |
+| iPhone XS Max (A12), HDR | 44.8 fps | 48.6 fps | 52.5 then 48.7 fps per 30 s |
+| Apple TV 4K (A10X), SDR | 22.4 fps | 27.1 fps | 33.5 fps |
+| Apple TV 4K (A10X), HDR | 16.6 fps | 18.9 fps | 24.4 fps |
+
+With the interpreter out of the way the Apple TV's median frame interval is 18
+to 21 ms, and what holds the frame rate down is the stalls described next: the
+95th percentile interval is 73 ms in SDR and 133 ms in HDR.
+
+A five-minute run on the iPhone XS Max with the bilinear upsample holds 59 and
+58 fps for the first minute, 47 for the next 30 seconds and 41 to 43 fps from
+then on, with 6.5 to 8.3 ms on the JavaScript thread. The phone reports the fair
+thermal state after 72 seconds and never the serious one. The same run with
+frozen materials reached serious within 60 seconds and settled at 31 to 34 fps.
 
 ### Presentation stalls
 
