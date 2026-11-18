@@ -47,23 +47,34 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     }
     #endif
 
-    func applicationWillResignActive(_ application: UIApplication) {
-        runtime?.suspend()
-    }
-
-    func applicationDidBecomeActive(_ application: UIApplication) {
-        runtime?.resume()
-    }
-
     func applicationWillTerminate(_ application: UIApplication) {
         runtime = nil
     }
 }
 
-#if os(tvOS)
+/// UIKit requires the scene life cycle for apps built with the iOS 27 and tvOS 27
+/// SDKs, and then reports activation to the scene instead of the application delegate.
 class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     var window: UIWindow?
 
+    private var runtime: BNRuntime? {
+        return (UIApplication.shared.delegate as? AppDelegate)?.runtime
+    }
+
+    func sceneWillResignActive(_ scene: UIScene) {
+        runtime?.suspend()
+    }
+
+    func sceneDidBecomeActive(_ scene: UIScene) {
+        runtime?.resume()
+    }
+
+    #if !os(tvOS)
+    func scene(_ scene: UIScene, willConnectTo session: UISceneSession, options connectionOptions: UIScene.ConnectionOptions) {
+        // The storyboard named in the scene manifest has already supplied the window.
+        (UIApplication.shared.delegate as? AppDelegate)?.window = window
+    }
+    #else
     func scene(_ scene: UIScene, willConnectTo session: UISceneSession, options connectionOptions: UIScene.ConnectionOptions) {
         guard let windowScene = scene as? UIWindowScene else {
             return
@@ -141,5 +152,5 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         }
         return refreshRate
     }
+    #endif
 }
-#endif
