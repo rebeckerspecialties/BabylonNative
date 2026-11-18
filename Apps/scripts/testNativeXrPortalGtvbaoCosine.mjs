@@ -46,6 +46,7 @@ test("installs the geometry, AO, filter and upsample shaders together", () => {
     const c = install();
     const store = c.BABYLON.ShaderStore.ShadersStoreWGSL;
     assert.equal(c.__nativeArPortalBenchmarkLabel, "gtvbao-cosine-v5");
+    assert.equal(c.__nativeArPortalSSAORadius, 0.5);
     assert.match(store.portalAoGeometryPixelShader, /uniform normalToView: mat3x3f;/);
     assert.match(store.ssao2PixelShader, /const PORTAL_SLICE_COUNT: u32 = 2u;\s*const PORTAL_STEPS_PER_SIDE: u32 = 2u;/);
     // Sixteen ordered phases need a filter that weights every residue modulo four equally.
@@ -56,6 +57,13 @@ test("installs the geometry, AO, filter and upsample shaders together", () => {
     // The AO pass reads only the AO-resolution geometry it is handed.
     const ao = store.ssao2PixelShader.slice(0, store.ssao2PixelShader.indexOf("#else"));
     assert.doesNotMatch(ao, /depthSampler|normalSampler|randomSampler/);
+});
+
+test("a radius chosen before loading is kept", () => {
+    const c = context();
+    c.__nativeArPortalSSAORadius = 0.85;
+    vm.runInContext(source, c);
+    assert.equal(c.__nativeArPortalSSAORadius, 0.85);
 });
 
 test("the bilinear switch leaves the published combine shader untouched", () => {

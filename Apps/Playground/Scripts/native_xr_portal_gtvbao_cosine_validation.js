@@ -364,6 +364,11 @@ fn main(input: FragmentInputs) -> FragmentOutputs {
 `;
 
     globalThis.__nativeArPortalBenchmarkLabel = "gtvbao-cosine-v5";
+    // The occluders within the radius count as unlit. Past contact range that
+    // shades a wall from the pavement it stands on, so the radius stays short.
+    if (globalThis.__nativeArPortalSSAORadius === undefined) {
+        globalThis.__nativeArPortalSSAORadius = 0.5;
+    }
     var previousStart = globalThis.__nativeArPortalStartProfile;
     globalThis.__nativeArPortalStartProfile = function (scene, status) {
         if (previousStart) previousStart(scene, status);
@@ -442,12 +447,14 @@ fn main(input: FragmentInputs) -> FragmentOutputs {
                 bindReconstruction(effect);
             };
         });
-        // Alpha-textured cutouts (foliage, grilles, wires) are lacework far finer
-        // than an AO texel: as occluders or receivers they only alias. They draw
-        // color alone, so AO treats the surface behind them as unobstructed.
+        // AO geometry holds opaque surfaces only. Blended surfaces are drawn back
+        // to front without depth writes, so one that overwrote the geometry would
+        // leave whatever is drawn after it standing in a pit behind a pane. Alpha
+        // cutouts (foliage, grilles, wires) are lacework far finer than an AO
+        // texel: as occluders or receivers they only alias. Both draw color alone.
         var cutouts = scene.materials.filter(function (material) {
             var texture = material.albedoTexture || material.diffuseTexture;
-            return texture && texture.hasAlpha && (material.needAlphaBlending() || material.needAlphaTesting()) &&
+            return (material.needAlphaBlending() || (texture && texture.hasAlpha && material.needAlphaTesting())) &&
                 prepass.excludedMaterials.indexOf(material) === -1;
         });
         cutouts.forEach(function (material) { prepass.excludedMaterials.push(material); });
@@ -457,6 +464,6 @@ fn main(input: FragmentInputs) -> FragmentOutputs {
         }
         scene.onDisposeObservable.add(function () { geometry.dispose(camera); });
         status("native-xr-portal:gtvbao=cosine-weighted:slices=2:stepsPerSide=2:bits=32:noise=ordered-4x4:filter=box4*box2" +
-            ":geometry=ao-resolution-plane-filtered:upsample=" + (surfaceAwareUpsample ? "surface-aware" : "bilinear") + ":cutouts-excluded=" + cutouts.length);
+            ":geometry=ao-resolution-plane-filtered:upsample=" + (surfaceAwareUpsample ? "surface-aware" : "bilinear") + ":color-only-materials=" + cutouts.length);
     }
 })();
