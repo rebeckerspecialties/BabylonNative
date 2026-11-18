@@ -55,6 +55,7 @@ set(SCRIPTS
     "Scripts/native_xr_portal_ao_projection_validation.js"
     "Scripts/native_xr_portal_gtvbao_validation.js"
     "Scripts/native_xr_portal_gtvbao_cosine_validation.js"
+    "Scripts/native_xr_portal_stability_capture.js"
     "Scripts/native_xr_portal_gpu_comparison.js"
     "Scripts/native_xr_portal_f16_material_validation.js"
     "Scripts/native_xr_portal_world_normals_validation.js"
