@@ -250,6 +250,54 @@ the M4 rise from 126.71 to 130.98 MiB. Its AO, filter and geometry passes all
 run at AO resolution; the old blur ran at 0.45 scale against full-resolution
 depth.
 
+### Lit walls and glazing
+
+The teal cafe wall facing the car showed two faults that the stability measure
+does not see, because both are steady.
+
+**A shadow climbing the wall from the pavement.** AO treats every occluder as
+black and the combine multiplies it into fully lit color. With the 0.85 m
+radius the pavement shaded the whole wall below the window sills. Luma of that
+wall from sill to pavement, AO off 115 throughout:
+
+| Estimator | At the sill | Halfway | At the pavement |
+| --- | ---: | ---: | ---: |
+| Old (uniform, 0.85 m) | 110 | 86 | 52 |
+| Cosine, 0.85 m | 115 | 88 | 55 |
+| Cosine, 0.5 m, multi-bounce | 115 | 112 | 82 |
+
+Cosine weighting alone does not help: a floor meeting a wall occludes half of
+either hemisphere. Two changes do. The cosine prelude now defaults the radius
+to 0.5 m unless `__nativeArPortalSSAORadius` is already set, which confines the
+gradient to the lowest third of that wall and keeps the contact shadow under the
+car. `native_xr_portal_ao_multibounce.js` then applies the interreflection fit
+of Jimenez et al. (2016) in the combine, with the lit scene color as the
+reflectance, so bright surfaces get most of their occluded light back and dark
+asphalt under the car keeps its occlusion. It costs three multiply-adds per
+pixel and no texture reads.
+
+**Black marks inside the windows.** Blended materials were written into the AO
+geometry. A pane wrote its depth, then every blended object behind it that
+happened to draw later overwrote single patches, which the estimator saw as pits
+several meters deep behind a flat surface. The AO geometry now holds opaque
+surfaces only; blended and alpha-cutout materials draw color alone.
+
+Whole-pixel instability with both changes, mean temporal standard deviation:
+
+| Pose / region | AO term | Final frame | Final frame, old estimator |
+| --- | ---: | ---: | ---: |
+| Orbit, whole frame | 0.99 | 0.26 | 0.28 |
+| Cafe wall, whole frame | 1.69 | 0.43 | 0.48 |
+| Car, whole frame | 1.44 | 0.36 | 0.40 |
+| Trees, crown | 0.28 | 0.08 | 3.43 |
+| Trees, hedge | 0.69 | 0.19 | 2.34 |
+| Bushes, hedge | 0.53 | 0.16 | 1.35 |
+
+The AO term is less steady than before on the cafe and orbit poses because the
+estimator now resolves the cluttered interiors behind the glazing, where it
+previously saw one flat pane. The final frame stays at or below the old
+estimator everywhere.
+
 ### Frame rate
 
 Moving-camera benchmark, 45 seconds, HDR surface, plain Release build (no

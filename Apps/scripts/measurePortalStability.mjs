@@ -25,6 +25,7 @@ const chain = [
     "native_xr_portal_ao_r8_validation.js",
     "native_xr_portal_color_reuse_validation.js",
     "native_xr_portal_resolution_validation.js",
+    "native_xr_portal_ao_multibounce.js",
     "native_xr_portal_stability_capture.js",
     "native_xr_babylon_portal_demo.js",
 ];
