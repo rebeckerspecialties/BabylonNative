@@ -348,6 +348,94 @@ The four fixed-pose captures on the M4 are identical to the default path in
 every pixel, with no validation errors. This is the non-AR scene over 45
 seconds; the AR portal, sustained thermals and the A10X are not measured.
 
+### Frozen materials
+
+`native_xr_portal_frozen_materials_validation.js` freezes every material once
+the scene has been ready for sixty frames, on the render-bundle path. Babylon.js
+then stops re-deriving defines and rewriting each material's uniform block per
+draw. JavaScript thread time per frame on the M4 with the cosine estimator, 30
+seconds each, all four fixed-pose captures identical in every pixel:
+
+| Path | ms per frame | Change |
+| --- | ---: | ---: |
+| Default | 9.71 | |
+| Render bundles | 8.43 | -13% |
+| Frozen materials, default path | 7.40 | -24% |
+| Render bundles and frozen materials | 6.98 | -28% |
+| The same with frozen world matrices and the dirty mechanism blocked | 6.88 | -29% |
+| WebGPU snapshot rendering, fast mode | 3.39 | invalid |
+
+Freezing the active mesh list was slower in this scene, because it draws all
+136 meshes where culling draws about 72. Fast snapshot rendering is not usable
+yet: draws that leave the pre-pass targets record single-target pipelines
+inside the three-target pass, which fails validation, and the camera stops
+updating. It is the largest remaining interpreter lever if Babylon.js can
+record that pass correctly.
+
+Five-minute runs, cosine estimator with the surface-aware upsample, HDR:
+
+| Device | Path | JavaScript thread, first to last minute | Frame rate per 30 s |
+| --- | --- | --- | --- |
+| iPhone XS Max (A12) | Default, old estimator | 13.8 to 16.3 ms | 50, 46, 33, then 27 to 33 |
+| iPhone XS Max (A12) | Default | 14.0 to 15.8 ms | 47, 35, then 27 to 28 |
+| iPhone XS Max (A12) | Frozen | 9.9 to 12.9 ms | 49, 40, then 28 to 32 |
+| iPhone XS Max (A12) | Frozen, bilinear upsample | 9.7 to 11.8 ms | 56, 49, 36, then 31 to 34 |
+| iPhone XS Max (A12), 2016x932 backing | Frozen, bilinear upsample | 9.7 to 11.3 ms | 56, 55, 54, then 38 to 44 |
+| Apple TV 4K (A10X), 2560x1440 | Default | 28.6 ms | 16 to 17 |
+| Apple TV 4K (A10X), 2560x1440 | Frozen | 21.6 ms | 18 |
+
+The A12 rows other than the last render 2689x1242. The interpreter saving is
+durable: 24% on the A10X and 25 to 30% on the A12 over the whole five minutes. The frame rate does not follow it, for the reason
+in the next section. A frozen material ignores later changes to lights, clip
+planes and its own properties, so the AR portal needs its own validation before
+this path is used there.
+
+### Presentation stalls
+
+Both devices lose their frame rate to stalls of 100 to 140 ms between frames,
+not to slow frames. In the A12 default run the median frame interval is 18.7 ms
+and the 95th percentile is 104 ms; the scene's own render time stays near 14
+ms throughout. The stalls start when the phone reports a fair thermal state,
+35 to 60 seconds into a run, and the phone reaches the serious state within 60
+to 90 seconds in every variant, the old estimator included. At three quarters
+of the linear resolution the stalls are shorter (95th percentile 61 ms) and
+the phone holds 54 to 56 fps for 90 seconds before settling near 40. None of
+these runs sustains 50 fps on the A12.
+
+On the A10X the stalls do not need heat. Short runs at 2560x1440, nominal
+thermal state, old estimator unless noted:
+
+| Surface and backing | Path | Frame rate | Median / p95 interval | JavaScript thread |
+| --- | --- | ---: | --- | ---: |
+| HDR, 2560x1440 | Default | 16.6 fps | 46 / 121 ms | 29.7 ms |
+| HDR, 2560x1440 | Default, cosine bilinear | 16.3 fps | 48 / 127 ms | 30.2 ms |
+| HDR, 2560x1440 | Default, cosine surface-aware | 16.0 fps | 45 / 143 ms | 28.9 ms |
+| HDR, 2560x1440 | Frozen | 18.9 fps | 36 / 123 ms | 22.3 ms |
+| HDR, 1920x1080 | Default | 20.1 fps | 42 / 92 ms | 29.6 ms |
+| HDR, 1920x1080 | Frozen | 23.1 fps | 35 / 90 ms | 22.3 ms |
+| SDR, 2560x1440 | Default | 21.7 fps | 43 / 63 ms | 31.1 ms |
+| SDR, 2560x1440 | Frozen | 26.2 fps | 34 / 57 ms | 25.1 ms |
+
+The AO estimator is not the cost on this device: the three estimators are
+within 4% of each other. The stalls follow the HDR surface, a 3840x2160
+`Rgba16Float` drawable, and remain at a 1080p backing. They match the
+`Wait for Next Drawable` waits recorded for the 4K SDR backing in
+[A10X profiling](NativeXrPortalA10xProfiling.md). In SDR, where the device is
+bound by the interpreter, frozen materials raise the frame rate by 21%.
+
+A diagnostic build ruled out the layer's presentation attributes. Turning off
+`toneMapMode`, dropping the dynamic-range and headroom request, and tagging the
+layer linear BT.2020 instead of extended sRGB each leave the HDR run between
+15.5 and 17.4 fps with the same stalls. What remains is the float drawable
+itself and the scaled copy into it.
+
+The build that was already installed on the Apple TV measures 16.3 fps with the
+same launch, so these figures are not a regression in the newer build. They are
+well below the 27.5 fps recorded for this workload a day earlier with the same
+interpreter cost per frame. The display reported an HDR headroom of 4.0 during
+these runs; the output mode of the television was not checked and is the first
+thing to compare.
+
 ### Status
 
 Validation only, for the single-camera non-AR workload. The geometry pass is
