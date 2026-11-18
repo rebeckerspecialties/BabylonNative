@@ -36,7 +36,8 @@ setNativeArPortalDefault("__nativeArPortalSSAOScale", 0.30);
 setNativeArPortalDefault("__nativeArPortalSSAOBlurScale", 0.45);
 setNativeArPortalDefault("__nativeArPortalSSAOStrength", 0.42);
 setNativeArPortalDefault("__nativeArPortalSSAORadius", 0.85);
-setNativeArPortalDefault("__nativeArPortalSSAOBase", 0.76);
+// SSAO2 adds base to the final visibility factor; a base above strength cancels all AO.
+setNativeArPortalDefault("__nativeArPortalSSAOBase", 0);
 setNativeArPortalDefault("__nativeArPortalSSAOSamples", 8);
 setNativeArPortalDefault("__nativeArPortalIblShadowScale", 0.22);
 setNativeArPortalDefault("__nativeArPortalIblShadowResolutionExp", 3);
@@ -1033,17 +1034,23 @@ setNativeArPortalDefault("__nativeArPortalExitDelayMs", 70000);
                 ssaoRatio: Math.max(0.25, Math.min(1, Number(globalThis.__nativeArPortalSSAOScale || 0.45))),
                 blurRatio: Math.max(0.25, Math.min(1, Number(globalThis.__nativeArPortalSSAOBlurScale || 0.5)))
             };
-            var geometryBufferRenderer = scene.geometryBufferRenderer || (typeof scene.enableGeometryBufferRenderer === "function" ? scene.enableGeometryBufferRenderer() : null);
-            if (!geometryBufferRenderer) {
-                reportStatus("native-xr-portal:ssao2=disabled:no-geometry-buffer");
+            var usePrePass = globalThis.__nativeArPortalSSAOUsePrePass === true;
+            var renderer = usePrePass
+                ? (scene.prePassRenderer || (typeof scene.enablePrePassRenderer === "function" ? scene.enablePrePassRenderer() : null))
+                : (scene.geometryBufferRenderer || (typeof scene.enableGeometryBufferRenderer === "function" ? scene.enableGeometryBufferRenderer() : null));
+            if (!renderer) {
+                reportStatus("native-xr-portal:ssao2=disabled:" + (usePrePass ? "no-pre-pass" : "no-geometry-buffer"));
                 return null;
             }
-            var pipeline = new BABYLON.SSAO2RenderingPipeline("native-xr-portal-ssao2", scene, ratio, [camera], geometryBufferRenderer);
+            if (globalThis.__nativeArPortalWorldNormals === true) {
+                renderer.generateNormalsInWorldSpace = true;
+            }
+            var pipeline = new BABYLON.SSAO2RenderingPipeline("native-xr-portal-ssao2", scene, ratio, [camera], usePrePass ? false : renderer);
             pipeline.samples = Math.max(4, Math.min(16, Number(globalThis.__nativeArPortalSSAOSamples || 8)));
             pipeline.textureSamples = 1;
             pipeline.radius = Math.max(0.05, Number(globalThis.__nativeArPortalSSAORadius || 0.85));
-            pipeline.totalStrength = Math.max(0, Number(globalThis.__nativeArPortalSSAOStrength || 0.42));
-            pipeline.base = Math.max(0, Math.min(1, Number(globalThis.__nativeArPortalSSAOBase || 0.76)));
+            pipeline.totalStrength = Math.max(0, Number(globalThis.__nativeArPortalSSAOStrength ?? 0.42));
+            pipeline.base = Math.max(0, Math.min(1, Number(globalThis.__nativeArPortalSSAOBase ?? 0)));
             pipeline.maxZ = 48;
             pipeline.expensiveBlur = false;
             pipeline.bilateralSamples = 8;
@@ -1062,6 +1069,7 @@ setNativeArPortalDefault("__nativeArPortalExitDelayMs", 70000);
                 ":radius=" + pipeline.radius.toFixed(2) +
                 ":strength=" + pipeline.totalStrength.toFixed(2) +
                 ":base=" + pipeline.base.toFixed(2));
+            reportStatus("native-xr-portal:ssao2-renderer=" + (usePrePass ? "pre-pass" : "geometry-buffer"));
             return pipeline;
         } catch (error) {
             reportStatus("native-xr-portal:ssao2-error:" + String(error && error.message ? error.message : error));
@@ -1985,6 +1993,10 @@ setNativeArPortalDefault("__nativeArPortalExitDelayMs", 70000);
                 rootScene.setEnabled(true);
                 rootOccluder.setEnabled(true);
                 enablePortalSSAO2(scene, xrCamera);
+                // Start after AO creates its geometry renderer so its CPU work is included.
+                if (typeof globalThis.__nativeArPortalStartProfile === "function") {
+                    globalThis.__nativeArPortalStartProfile(scene, reportStatus);
+                }
                 applyMarkerVisibility(false);
                 if (xrTest) {
                     xrTest.paused = true;
@@ -2294,6 +2306,9 @@ setNativeArPortalDefault("__nativeArPortalExitDelayMs", 70000);
         var scene = globalThis.__nativeArPortalForceNonXrStress === true ?
             await createPortalStressScene(engineArg) :
             await createPortalScene(engineArg);
+        if (globalThis.__nativeArPortalForceNonXrStress === true && typeof globalThis.__nativeArPortalStartProfile === "function") {
+            globalThis.__nativeArPortalStartProfile(scene, reportStatus);
+        }
         scene.onAfterRenderObservable.add(function () {
             var now = performance.now();
             if (now - lastFpsLogTime >= 2000) {

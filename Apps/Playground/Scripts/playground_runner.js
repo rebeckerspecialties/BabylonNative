@@ -195,11 +195,16 @@ var engine = null;
         var webgpuEngine = new BABYLON.WebGPUEngine(canvas, {
             antialias: false,
             adaptToDeviceRatio: true,
+            // Explicit validation-only requests retain normal WebGPU feature gating.
+            deviceDescriptor: { requiredFeatures: globalThis.__nativePlaygroundRequiredFeatures || [] },
             // Babylon.js refuses to start a WebGPU XR session on an engine that was not
             // created XR-compatible, so ask for it wherever the host has an XR system.
             xrCompatible: typeof navigator !== "undefined" && !!navigator.xr
         });
         await webgpuEngine.initAsync();
+        if (typeof globalThis.__nativePlaygroundConfigureEngine === "function") {
+            globalThis.__nativePlaygroundConfigureEngine(webgpuEngine);
+        }
         const recorderProvider = globalThis.navigator && navigator.gpu && navigator.gpu.__babylonNativeRenderPassCommandRecorderProvider;
         if (recorderProvider && "renderPassCommandRecorderProvider" in webgpuEngine) {
             // Batch compatibility-mode draws into the native command stream (one bridge
