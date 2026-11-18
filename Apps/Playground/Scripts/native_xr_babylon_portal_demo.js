@@ -2178,6 +2178,11 @@ setNativeArPortalDefault("__nativeArPortalExitDelayMs", 70000);
 
     async function createPortalStressScene(engine) {
         reportStatus("native-xr-portal:stress-createScene");
+        // Float reversed depth keeps distant windows stable without clipping
+        // nearby geometry or the sky. Do not change the XR projection path.
+        if (engine.isWebGPU) {
+            engine.useReverseDepthBuffer = true;
+        }
         ensureBrowserLocationForLoaders();
         installNativePortalDocumentShim();
         installNativeWebGPUImageLoadingShim();
@@ -2195,7 +2200,8 @@ setNativeArPortalDefault("__nativeArPortalExitDelayMs", 70000);
             new BABYLON.Vector3(18, 3.5, -8),
             scene);
         camera.minZ = 0.05;
-        camera.maxZ = 180;
+        // The authored sky dome extends over 500 meters from the scene center.
+        camera.maxZ = 1000;
         camera.fov = 0.74;
         if (canvas && typeof camera.attachControl === "function") {
             camera.attachControl(canvas, true);
