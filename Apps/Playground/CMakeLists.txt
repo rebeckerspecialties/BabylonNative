@@ -56,6 +56,7 @@ set(SCRIPTS
     "Scripts/native_xr_portal_gtvbao_validation.js"
     "Scripts/native_xr_portal_ao_bilinear_upsample.js"
     "Scripts/native_xr_portal_ao_multibounce.js"
+    "Scripts/native_xr_portal_fast_snapshot_validation.js"
     "Scripts/native_xr_portal_frozen_materials_validation.js"
     "Scripts/native_xr_portal_gtvbao_cosine_validation.js"
     "Scripts/native_xr_portal_stability_capture.js"
