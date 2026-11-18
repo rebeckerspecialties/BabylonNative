@@ -1,5 +1,11 @@
 # Babylon.js source patch stack for NativeWebGPU local validation.
 # The apply script treats missing or non-applying patches as hard failures.
-# No source patches are required for the verified Babylon.js 9.36.0 package.
 # #19084 retention/replay/atomicity/reporting and #19089 snapshot reuse first
 # shipped in 9.36.0, not 9.34.0 or 9.35.0. See README.md and the UMD contract test.
+0001-uniform-buffer-comparison-loop.patch
+0002-accessor-inlining.patch
+0003-configurable-compression-passes.patch
+0004-command-stream-inline-words.patch
+0005-shared-material-uniform-buffers.patch
+0006-uniform-loop-invariant.patch
+0007-accessor-state-expressions.patch

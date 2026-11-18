@@ -1,0 +1,16 @@
+diff --git a/packages/public/rollupUMDHelper.mjs b/packages/public/rollupUMDHelper.mjs
+--- a/packages/public/rollupUMDHelper.mjs
++++ b/packages/public/rollupUMDHelper.mjs
+@@ -638,7 +638,11 @@
+  */
+ function createTerserPlugin() {
++    const passes = Number(process.env.BABYLON_MINIFY_PASSES ?? 2);
++    if (!Number.isInteger(passes) || passes < 1 || passes > 10) {
++        throw new Error("BABYLON_MINIFY_PASSES must be an integer from 1 to 10.");
++    }
+     return terser({
+-        compress: { passes: 2, dead_code: true },
++        compress: { passes, dead_code: true },
+         mangle: { reserved: ["_"] },
+         format: { comments: false },
+     });

@@ -130,7 +130,8 @@ for (const mode of ['accepted', 'rejected', 'throwing']) {
             effect: { _pipelineContext: { uniformBuffer: { _markOwnerSlotUsed() { slotUsed++; } } } },
         };
         const engine = {
-            _snapshotRendering: { record: true }, snapshotRenderingReuseDraws: true,
+            // Model the internal class's getter and storage, not a structural substitute.
+            _snapshotRendering: { _record: true, get record() { return this._record; } }, snapshotRenderingReuseDraws: true,
             _recordedDrawsGeneration: 0, _currentRenderTarget: null, currentSampleCount: 1,
             _cacheRenderPipeline: { colorFormats: [] },
             _bundleList: { numDrawCalls: 0, getBundleEncoder: () => pass },

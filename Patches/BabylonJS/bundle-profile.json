@@ -1,0 +1,10 @@
+{
+  "schema": 1,
+  "version": "9.36.0",
+  "revision": "9495e735517f76d0a9a3661089ecf8f8d7e8b653",
+  "accessorMode": "all+expr",
+  "accessorStatic": false,
+  "minifyPasses": 3,
+  "minimumRewrites": 100,
+  "requiredProperties": ["Vector3.x", "Vector3.y", "Vector3.z", "Matrix.m", "UniformBuffer.useUbo", "UniformBuffer.isSync", "Material.isFrozen"]
+}

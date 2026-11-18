@@ -1,0 +1,192 @@
+diff --git a/packages/dev/core/src/Engines/WebGPU/webgpuRenderPassCommandStream.ts b/packages/dev/core/src/Engines/WebGPU/webgpuRenderPassCommandStream.ts
+index 21b34543..36543c8b 100644
+--- a/packages/dev/core/src/Engines/WebGPU/webgpuRenderPassCommandStream.ts
++++ b/packages/dev/core/src/Engines/WebGPU/webgpuRenderPassCommandStream.ts
+@@ -69,6 +69,21 @@ const DefaultBaseVertex = 0;
+ const DefaultFirstInstance = 0;
+ const NoDynamicOffsets = 0;
+ const U64WordCount = 2;
++// Words encoded per command, and the largest draw command (drawIndexed).
++const SetPipelineWordCount = 3;
++const SetIndexBufferWordCount = 8;
++const SetVertexBufferWordCount = 8;
++const SetBindGroupWordCount = 5;
++const MaxDrawWordCount = 6;
++const U32Max = 0xffffffff;
++// A u64 is encoded as two u32 words, low then high. Storing into the Uint32Array applies ToUint32, which
++// truncates the quotient, so `value / U64HighWordDivisor` is the high word of a non-negative safe integer.
++const U64HighWordDivisor = 0x100000000;
++
++// Offsets come from the scene rather than from the host, so anything that is not a positive finite number is encoded as 0.
++function NormalizeU64(value: number): number {
++    return Number.isFinite(value) && value > 0 ? value : 0;
++}
+ 
+ /**
+  * Render pass encoder extended with an optional host recording hook.
+@@ -463,27 +478,42 @@ export class WebGPURenderPassCommandStream {
+         }
+ 
+         this._renderPass = command.renderPass;
++
++        // Reserve the most this draw can encode once, then write the words directly: a capacity check and
++        // a method call per word are not inlined by the interpreter-only JavaScript engines of native hosts.
++        const vertexBufferCount = command.vertexBuffers.length;
++        const bindGroupCount = command.bindGroups.length;
++        this._ensureCapacity(
++            SetPipelineWordCount + SetIndexBufferWordCount + vertexBufferCount * SetVertexBufferWordCount + bindGroupCount * SetBindGroupWordCount + MaxDrawWordCount
++        );
++        const words = this._commandWords;
++        let wordCount = this._commandWordCount;
++
+         if (this._pipelineId !== pipelineId) {
+-            this._pushU32(WebGPURenderPassCommandOpcode.setPipeline);
+-            this._pushU64(pipelineId);
++            words[wordCount++] = WebGPURenderPassCommandOpcode.setPipeline;
++            words[wordCount++] = pipelineId;
++            words[wordCount++] = pipelineId / U64HighWordDivisor;
+             this._retain(command.pipeline);
+             this._pipelineId = pipelineId;
+         }
+ 
+         if (isIndexedDraw) {
+             if (this._indexBufferId !== indexBufferId || this._indexFormat !== command.indexFormat) {
+-                this._pushU32(WebGPURenderPassCommandOpcode.setIndexBuffer);
+-                this._pushU64(indexBufferId);
+-                this._pushU32(command.indexFormat === WebGPUConstants.IndexFormat.Uint32 ? 1 : 0);
+-                this._pushU64(DefaultBufferOffset);
+-                this._pushU64Max();
++                words[wordCount++] = WebGPURenderPassCommandOpcode.setIndexBuffer;
++                words[wordCount++] = indexBufferId;
++                words[wordCount++] = indexBufferId / U64HighWordDivisor;
++                words[wordCount++] = command.indexFormat === WebGPUConstants.IndexFormat.Uint32 ? 1 : 0;
++                words[wordCount++] = DefaultBufferOffset;
++                words[wordCount++] = DefaultBufferOffset;
++                words[wordCount++] = U32Max;
++                words[wordCount++] = U32Max;
+                 this._retain(command.indexBuffer.underlyingResource);
+                 this._indexBufferId = indexBufferId;
+                 this._indexFormat = command.indexFormat;
+             }
+         }
+ 
+-        for (let index = 0; index < command.vertexBuffers.length; index++) {
++        for (let index = 0; index < vertexBufferCount; index++) {
+             const bufferId = vertexBufferIds[index];
+             if (!bufferId) {
+                 continue;
+@@ -491,49 +521,58 @@ export class WebGPURenderPassCommandStream {
+ 
+             const offset = vertexBufferOffsets[index];
+             if (this._vertexBufferIds[index] !== bufferId || this._vertexBufferOffsets[index] !== offset) {
+-                this._pushU32(WebGPURenderPassCommandOpcode.setVertexBuffer);
+-                this._pushU32(index);
+-                this._pushU64(bufferId);
+-                this._pushU64(offset);
+-                this._pushU64Max();
++                const encodedOffset = NormalizeU64(offset);
++                words[wordCount++] = WebGPURenderPassCommandOpcode.setVertexBuffer;
++                words[wordCount++] = index;
++                words[wordCount++] = bufferId;
++                words[wordCount++] = bufferId / U64HighWordDivisor;
++                words[wordCount++] = encodedOffset;
++                words[wordCount++] = encodedOffset / U64HighWordDivisor;
++                words[wordCount++] = U32Max;
++                words[wordCount++] = U32Max;
+                 this._retain(command.vertexBuffers[index].effectiveBuffer!.underlyingResource);
+                 this._vertexBufferIds[index] = bufferId;
+                 this._vertexBufferOffsets[index] = offset;
+             }
+         }
+ 
+-        for (let i = 0; i < command.bindGroups.length; i++) {
++        for (let i = 0; i < bindGroupCount; i++) {
+             const bindGroupId = bindGroupIds[i];
+             if (this._bindGroupIds[i] !== bindGroupId) {
+-                this._pushU32(WebGPURenderPassCommandOpcode.setBindGroup);
+-                this._pushU32(i);
+-                this._pushU64(bindGroupId);
+-                this._pushU32(NoDynamicOffsets);
++                words[wordCount++] = WebGPURenderPassCommandOpcode.setBindGroup;
++                words[wordCount++] = i;
++                words[wordCount++] = bindGroupId;
++                words[wordCount++] = bindGroupId / U64HighWordDivisor;
++                words[wordCount++] = NoDynamicOffsets;
+                 this._retain(command.bindGroups[i]);
+                 this._bindGroupIds[i] = bindGroupId;
+             }
+         }
+ 
+         if (command.indirectDrawBuffer) {
+-            this._pushU32(isIndexedDraw ? WebGPURenderPassCommandOpcode.drawIndexedIndirect : WebGPURenderPassCommandOpcode.drawIndirect);
+-            this._pushU64(indirectDrawBufferId);
+-            this._pushU64(command.indirectDrawByteOffset);
++            const encodedOffset = NormalizeU64(command.indirectDrawByteOffset);
++            words[wordCount++] = isIndexedDraw ? WebGPURenderPassCommandOpcode.drawIndexedIndirect : WebGPURenderPassCommandOpcode.drawIndirect;
++            words[wordCount++] = indirectDrawBufferId;
++            words[wordCount++] = indirectDrawBufferId / U64HighWordDivisor;
++            words[wordCount++] = encodedOffset;
++            words[wordCount++] = encodedOffset / U64HighWordDivisor;
+             this._retain(command.indirectDrawBuffer);
+         } else if (isIndexedDraw) {
+-            this._pushU32(WebGPURenderPassCommandOpcode.drawIndexed);
+-            this._pushU32(command.count);
+-            this._pushU32(command.instancesCount || 1);
+-            this._pushU32(command.start);
+-            this._pushU32(DefaultBaseVertex);
+-            this._pushU32(DefaultFirstInstance);
++            words[wordCount++] = WebGPURenderPassCommandOpcode.drawIndexed;
++            words[wordCount++] = command.count;
++            words[wordCount++] = command.instancesCount || 1;
++            words[wordCount++] = command.start;
++            words[wordCount++] = DefaultBaseVertex;
++            words[wordCount++] = DefaultFirstInstance;
+         } else {
+-            this._pushU32(WebGPURenderPassCommandOpcode.draw);
+-            this._pushU32(command.count);
+-            this._pushU32(command.instancesCount || 1);
+-            this._pushU32(command.start);
+-            this._pushU32(DefaultFirstInstance);
++            words[wordCount++] = WebGPURenderPassCommandOpcode.draw;
++            words[wordCount++] = command.count;
++            words[wordCount++] = command.instancesCount || 1;
++            words[wordCount++] = command.start;
++            words[wordCount++] = DefaultFirstInstance;
+         }
+ 
++        this._commandWordCount = wordCount;
+         this._drawCount++;
+         return true;
+     }
+@@ -663,7 +702,7 @@ export class WebGPURenderPassCommandStream {
+             return;
+         }
+ 
+-        let capacity = this._commandWords.length;
++        let capacity = this._commandWords.length || 1;
+         while (capacity < requiredWords) {
+             capacity *= 2;
+         }
+@@ -671,22 +710,4 @@ export class WebGPURenderPassCommandStream {
+         commands.set(this._commandWords.subarray(0, this._commandWordCount));
+         this._commandWords = commands;
+     }
+-
+-    private _pushU32(value: number): void {
+-        this._ensureCapacity(1);
+-        this._commandWords[this._commandWordCount++] = value >>> 0;
+-    }
+-
+-    private _pushU64(value: number): void {
+-        const normalized = Number.isFinite(value) && value > 0 ? value : 0;
+-        this._ensureCapacity(U64WordCount);
+-        this._commandWords[this._commandWordCount++] = normalized >>> 0;
+-        this._commandWords[this._commandWordCount++] = Math.floor(normalized / 0x100000000) >>> 0;
+-    }
+-
+-    private _pushU64Max(): void {
+-        this._ensureCapacity(U64WordCount);
+-        this._commandWords[this._commandWordCount++] = 0xffffffff;
+-        this._commandWords[this._commandWordCount++] = 0xffffffff;
+-    }
+ }

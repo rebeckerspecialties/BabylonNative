@@ -1,0 +1,1484 @@
+diff --git a/packages/public/accessorInlineTransformer.mjs b/packages/public/accessorInlineTransformer.mjs
+new file mode 100644
+index 0000000000..c56258238c
+--- /dev/null
++++ b/packages/public/accessorInlineTransformer.mjs
+@@ -0,0 +1,1418 @@
++/**
++ * PROTOTYPE: build-time, type-directed "accessor inlining" for the UMD bundles.
++ *
++ * Interpreter-only JavaScript engines (JavaScriptCore without JIT, Hermes, QuickJS, V8 --jitless) pay a full
++ * function call for every `get x() { return this._x; }` read. This TypeScript transformer rewrites property
++ * READS `recv.prop` into `recv._backing` when the type checker proves that `prop` resolves to a single trivial
++ * getter that no class in the program overrides and nothing redefines at run time.
++ *
++ * Switched by the environment:
++ *   BABYLON_ACCESSOR_INLINE         off (default) | math | all | all+cast | all+path | all+expr
++ *   BABYLON_ACCESSOR_INLINE_REPORT  path of the JSON report (optional)
++ *   BABYLON_ACCESSOR_INLINE_MAPPED  "0" to leave receivers typed through mapped types (DeepImmutable<T>) alone
++ *   BABYLON_ACCESSOR_INLINE_DOWNCAST  how to treat narrowing type assertions (`x as Sub`, `<Sub>x`), which let a value
++ *                                     that is NOT a Sub reach a Sub-typed read (duck-typing probes, sibling classes):
++ *                                       site (default)   reads directly on such an assertion (or on a local initialized
++ *                                                        with one) are left alone
++ *                                       class            strict: getters declared between the assertion's source and
++ *                                                        target classes are not inlined anywhere
++ *                                       class+any        same, and also for assertions from `any`/`unknown`
++ *                                       off              assertions are trusted
++ *   BABYLON_ACCESSOR_INLINE_SIBLINGS  "0" to disable the duck-typed sibling rule (see analyze)
++ *
++ * Forms (cumulative in the mode order above):
++ *   field  get p() { return this._p; }
++ *   cast   get p() { return this._p!; } / `as T` / `<T>` (type-only wrappers, identical JavaScript)
++ *   path   get p() { return this._a._b; } (pure property path from `this`, receiver still evaluated once)
++ *   expr   get p() { return this._a != null; } (literals/operators over `this` paths only, no calls, no identifiers)
++ */
++
++import ts from "typescript";
++import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
++import { dirname, join, relative, resolve } from "node:path";
++import { fileURLToPath } from "node:url";
++
++const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
++
++const MATH_PROPS = {
++    Vector2: ["x", "y"],
++    Vector3: ["x", "y", "z"],
++    Vector4: ["x", "y", "z", "w"],
++    Quaternion: ["x", "y", "z", "w"],
++    Color3: ["r", "g", "b"],
++    Color4: ["r", "g", "b", "a"],
++    Matrix: ["m"],
++};
++
++/**
++ * Run-time prototype copies the type checker cannot see: every own member of `source` is assigned onto
++ * `target.prototype` (see applyMixins in Engines/nativeEngine.pure.ts), so those names are treated as redefined.
++ */
++const KNOWN_RUNTIME_MIXIN_SOURCES = ["ThinNativeEngine"];
++
++const MODES = {
++    math: ["field"],
++    all: ["field"],
++    "all+cast": ["field", "cast"],
++    "all+path": ["field", "cast", "path"],
++    "all+expr": ["field", "cast", "path", "expr"],
++};
++
++/**
++ * Reads the transformer options from the environment.
++ * @returns the options, or undefined when the pass is off
++ */
++export function getAccessorInlineOptionsFromEnv() {
++    const mode = process.env.BABYLON_ACCESSOR_INLINE;
++    if (!mode || mode === "off" || mode === "0") {
++        return undefined;
++    }
++    if (!MODES[mode]) {
++        throw new Error(`BABYLON_ACCESSOR_INLINE: unknown mode "${mode}" (expected one of ${Object.keys(MODES).join(", ")})`);
++    }
++    return {
++        mode,
++        reportPath: process.env.BABYLON_ACCESSOR_INLINE_REPORT || undefined,
++        allowMapped: process.env.BABYLON_ACCESSOR_INLINE_MAPPED !== "0",
++        downcastPolicy: process.env.BABYLON_ACCESSOR_INLINE_DOWNCAST || "site",
++        siblingRule: process.env.BABYLON_ACCESSOR_INLINE_SIBLINGS !== "0",
++        scanExternalPackages: process.env.BABYLON_ACCESSOR_INLINE_EXTERNAL !== "0",
++    };
++}
++
++function isTypeOnlyWrapper(node) {
++    return ts.isParenthesizedExpression(node) || ts.isNonNullExpression(node) || ts.isAsExpression(node) || ts.isTypeAssertionExpression(node) || ts.isSatisfiesExpression(node);
++}
++
++function stripTypeOnly(node) {
++    let cast = false;
++    while (isTypeOnlyWrapper(node)) {
++        if (!ts.isParenthesizedExpression(node)) {
++            cast = true;
++        }
++        node = node.expression;
++    }
++    return { node, cast };
++}
++
++const PURE_BINARY = new Set([
++    ts.SyntaxKind.EqualsEqualsToken,
++    ts.SyntaxKind.EqualsEqualsEqualsToken,
++    ts.SyntaxKind.ExclamationEqualsToken,
++    ts.SyntaxKind.ExclamationEqualsEqualsToken,
++    ts.SyntaxKind.LessThanToken,
++    ts.SyntaxKind.LessThanEqualsToken,
++    ts.SyntaxKind.GreaterThanToken,
++    ts.SyntaxKind.GreaterThanEqualsToken,
++    ts.SyntaxKind.PlusToken,
++    ts.SyntaxKind.MinusToken,
++    ts.SyntaxKind.AsteriskToken,
++    ts.SyntaxKind.SlashToken,
++    ts.SyntaxKind.PercentToken,
++    ts.SyntaxKind.AmpersandToken,
++    ts.SyntaxKind.BarToken,
++    ts.SyntaxKind.CaretToken,
++    ts.SyntaxKind.LessThanLessThanToken,
++    ts.SyntaxKind.GreaterThanGreaterThanToken,
++    ts.SyntaxKind.GreaterThanGreaterThanGreaterThanToken,
++    ts.SyntaxKind.AmpersandAmpersandToken,
++    ts.SyntaxKind.BarBarToken,
++    ts.SyntaxKind.QuestionQuestionToken,
++]);
++const SHORT_CIRCUIT = new Set([ts.SyntaxKind.AmpersandAmpersandToken, ts.SyntaxKind.BarBarToken, ts.SyntaxKind.QuestionQuestionToken]);
++const PURE_PREFIX = new Set([ts.SyntaxKind.ExclamationToken, ts.SyntaxKind.MinusToken, ts.SyntaxKind.PlusToken, ts.SyntaxKind.TildeToken]);
++
++/**
++ * Classifies a getter body.
++ * @returns undefined when the body is not one of the supported forms
++ */
++function classifyGetterBody(getter) {
++    const body = getter.body;
++    if (!body || body.statements.length !== 1 || !ts.isReturnStatement(body.statements[0]) || !body.statements[0].expression) {
++        return undefined;
++    }
++    const { node: expr, cast: outerCast } = stripTypeOnly(body.statements[0].expression);
++
++    // Pure property path from `this`.
++    {
++        let cast = outerCast;
++        let cur = expr;
++        const accessNodes = [];
++        let ok = true;
++        for (;;) {
++            const stripped = stripTypeOnly(cur);
++            cast = cast || stripped.cast;
++            cur = stripped.node;
++            if (cur.kind === ts.SyntaxKind.ThisKeyword) {
++                break;
++            }
++            if (ts.isPropertyAccessExpression(cur) && ts.isIdentifier(cur.name) && !cur.questionDotToken && !(cur.flags & ts.NodeFlags.OptionalChain)) {
++                accessNodes.unshift(cur);
++                cur = cur.expression;
++                continue;
++            }
++            ok = false;
++            break;
++        }
++        if (ok && accessNodes.length > 0) {
++            const kind = accessNodes.length > 1 ? "path" : cast ? "cast" : "field";
++            return { kind, accessNodes, roots: [accessNodes[0].name.text] };
++        }
++    }
++
++    // Pure expression over `this` paths and literals.
++    let thisCount = 0;
++    let lazy = false;
++    const roots = new Set();
++    const check = (n) => {
++        n = stripTypeOnly(n).node;
++        switch (n.kind) {
++            case ts.SyntaxKind.ThisKeyword:
++                thisCount++;
++                return true;
++            case ts.SyntaxKind.NumericLiteral:
++            case ts.SyntaxKind.StringLiteral:
++            case ts.SyntaxKind.NoSubstitutionTemplateLiteral:
++            case ts.SyntaxKind.TrueKeyword:
++            case ts.SyntaxKind.FalseKeyword:
++            case ts.SyntaxKind.NullKeyword:
++                return true;
++            case ts.SyntaxKind.Identifier:
++                return n.text === "undefined";
++            case ts.SyntaxKind.PropertyAccessExpression: {
++                if (!ts.isIdentifier(n.name) || n.questionDotToken || n.flags & ts.NodeFlags.OptionalChain) {
++                    return false;
++                }
++                // Property accesses must be rooted at `this` (no free identifiers such as statics or imports).
++                const inner = stripTypeOnly(n.expression).node;
++                if (inner.kind === ts.SyntaxKind.ThisKeyword) {
++                    roots.add(n.name.text);
++                }
++                return check(n.expression);
++            }
++            case ts.SyntaxKind.ElementAccessExpression:
++                if (n.questionDotToken || n.flags & ts.NodeFlags.OptionalChain) {
++                    return false;
++                }
++                return check(n.expression) && check(n.argumentExpression);
++            case ts.SyntaxKind.PrefixUnaryExpression:
++                return PURE_PREFIX.has(n.operator) && check(n.operand);
++            case ts.SyntaxKind.TypeOfExpression:
++                return check(n.expression);
++            case ts.SyntaxKind.BinaryExpression:
++                if (!PURE_BINARY.has(n.operatorToken.kind)) {
++                    return false;
++                }
++                if (SHORT_CIRCUIT.has(n.operatorToken.kind)) {
++                    lazy = true;
++                }
++                return check(n.left) && check(n.right);
++            case ts.SyntaxKind.ConditionalExpression:
++                lazy = true;
++                return check(n.condition) && check(n.whenTrue) && check(n.whenFalse);
++            default:
++                return false;
++        }
++    };
++    if (check(expr) && thisCount > 0) {
++        return { kind: "expr", expr, thisCount, lazy, roots: [...roots] };
++    }
++    return undefined;
++}
++
++function isAssignmentOperator(kind) {
++    return kind >= ts.SyntaxKind.FirstAssignment && kind <= ts.SyntaxKind.LastAssignment;
++}
++
++/**
++ * True when the property access is written to (assignment, compound assignment, ++/--, delete, or a
++ * destructuring/for-in/for-of target) rather than only read.
++ */
++function isWriteOrDeleteTarget(node) {
++    let n = node;
++    let p = n.parent;
++    for (;;) {
++        if (!p) {
++            return false;
++        }
++        if (isTypeOnlyWrapper(p)) {
++            n = p;
++            p = p.parent;
++            continue;
++        }
++        if (ts.isBinaryExpression(p)) {
++            if (p.left === n && isAssignmentOperator(p.operatorToken.kind)) {
++                return true;
++            }
++            return false;
++        }
++        if (ts.isPrefixUnaryExpression(p) || ts.isPostfixUnaryExpression(p)) {
++            return p.operator === ts.SyntaxKind.PlusPlusToken || p.operator === ts.SyntaxKind.MinusMinusToken;
++        }
++        if (ts.isDeleteExpression(p)) {
++            return true;
++        }
++        if ((ts.isForInStatement(p) || ts.isForOfStatement(p)) && p.initializer === n) {
++            return true;
++        }
++        // Possible destructuring assignment target: walk up through the literal pattern.
++        if (ts.isArrayLiteralExpression(p) || ts.isSpreadElement(p) || ts.isSpreadAssignment(p) || ts.isObjectLiteralExpression(p)) {
++            return isPatternAssigned(p);
++        }
++        if (ts.isPropertyAssignment(p) && p.initializer === n) {
++            return isPatternAssigned(p.parent);
++        }
++        return false;
++    }
++}
++
++function isPatternAssigned(literal) {
++    let n = literal;
++    let p = n.parent;
++    for (;;) {
++        if (!p) {
++            return false;
++        }
++        if (ts.isParenthesizedExpression(p) || ts.isSpreadElement(p) || ts.isSpreadAssignment(p) || ts.isArrayLiteralExpression(p) || ts.isObjectLiteralExpression(p)) {
++            n = p;
++            p = p.parent;
++            continue;
++        }
++        if (ts.isPropertyAssignment(p) && p.initializer === n) {
++            n = p.parent;
++            p = n.parent;
++            continue;
++        }
++        if (ts.isBinaryExpression(p) && p.operatorToken.kind === ts.SyntaxKind.EqualsToken && p.left === n) {
++            // Either the outermost `pattern = value`, or a default inside a pattern (`[a = 1] = ...`).
++            return true;
++        }
++        if ((ts.isForInStatement(p) || ts.isForOfStatement(p)) && p.initializer === n) {
++            return true;
++        }
++        return false;
++    }
++}
++
++function hasDecorators(node) {
++    return ts.canHaveDecorators(node) && (ts.getDecorators(node)?.length ?? 0) > 0;
++}
++
++function memberNameText(name) {
++    if (!name) {
++        return undefined;
++    }
++    if (ts.isIdentifier(name) || ts.isStringLiteralLike(name) || ts.isNumericLiteral(name)) {
++        return name.text;
++    }
++    return undefined;
++}
++
++/**
++ * Syntactic collection of names that are (re)defined on objects/prototypes at run time.
++ */
++function collectRuntimeDefinitions(sourceFile, sink, where) {
++    const visit = (node) => {
++        if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression) && ts.isIdentifier(node.expression.expression)) {
++            const owner = node.expression.expression.text;
++            const fn = node.expression.name.text;
++            if ((owner === "Object" || owner === "Reflect") && fn === "defineProperty") {
++                const key = node.arguments[1];
++                if (key && ts.isStringLiteralLike(key)) {
++                    sink.literal(key.text, where(node), "defineProperty");
++                } else {
++                    sink.dynamic(node, where(node), "defineProperty");
++                }
++            } else if (owner === "Object" && fn === "defineProperties") {
++                const map = node.arguments[1];
++                if (map && ts.isObjectLiteralExpression(map)) {
++                    for (const prop of map.properties) {
++                        const name = memberNameText(prop.name);
++                        if (name !== undefined) {
++                            sink.literal(name, where(node), "defineProperty");
++                        } else {
++                            sink.dynamic(node, where(node), "defineProperties");
++                        }
++                    }
++                } else {
++                    sink.dynamic(node, where(node), "defineProperties");
++                }
++            }
++        } else if (ts.isBinaryExpression(node) && isAssignmentOperator(node.operatorToken.kind)) {
++            const left = node.left;
++            if ((ts.isPropertyAccessExpression(left) || ts.isElementAccessExpression(left)) && ts.isPropertyAccessExpression(left.expression) && left.expression.name.text === "prototype") {
++                if (ts.isPropertyAccessExpression(left)) {
++                    sink.literal(left.name.text, where(node), "prototypeAssignment");
++                } else if (ts.isStringLiteralLike(left.argumentExpression)) {
++                    sink.literal(left.argumentExpression.text, where(node), "prototypeAssignment");
++                } else {
++                    sink.dynamic(node, where(node), "prototypeAssignment");
++                }
++            }
++        }
++        ts.forEachChild(node, visit);
++    };
++    visit(sourceFile);
++}
++
++function listSourceFiles(dir, out) {
++    let entries;
++    try {
++        entries = readdirSync(dir, { withFileTypes: true });
++    } catch {
++        return;
++    }
++    for (const entry of entries) {
++        if (entry.name === "node_modules" || entry.name === "dist" || entry.name.startsWith(".")) {
++            continue;
++        }
++        const full = join(dir, entry.name);
++        if (entry.isDirectory()) {
++            listSourceFiles(full, out);
++        } else if (/\.tsx?$/.test(entry.name) && !/\.d\.ts$/.test(entry.name)) {
++            out.push(full);
++        }
++    }
++}
++
++/**
++ * Builds the program-wide analysis: candidate getters and everything that excludes them.
++ */
++function analyze(program, options) {
++    const checker = program.getTypeChecker();
++    const enabledForms = new Set(MODES[options.mode]);
++    const where = (node) => {
++        const sf = node.getSourceFile();
++        const { line } = sf.getLineAndCharacterOfPosition(node.getStart(sf));
++        return `${relative(REPO_ROOT, sf.fileName)}:${line + 1}`;
++    };
++    const sourceFiles = program.getSourceFiles().filter((sf) => !sf.isDeclarationFile && !sf.fileName.includes("/node_modules/"));
++    const programFileSet = new Set(sourceFiles.map((sf) => resolve(sf.fileName)));
++
++    const classes = [];
++    const assertions = [];
++    const redefinedNames = new Map(); // name -> [{where, how}]
++    const dynamicRedefinitions = [];
++    const sink = {
++        literal(name, at, how) {
++            let list = redefinedNames.get(name);
++            if (!list) {
++                redefinedNames.set(name, (list = []));
++            }
++            list.push({ where: at, how });
++        },
++        dynamic(node, at, how) {
++            dynamicRedefinitions.push({ node, where: at, how });
++        },
++    };
++    for (const sf of sourceFiles) {
++        const visit = (node) => {
++            if (ts.isClassLike(node)) {
++                classes.push(node);
++            } else if (ts.isAsExpression(node) || ts.isTypeAssertionExpression(node)) {
++                assertions.push(node);
++            }
++            ts.forEachChild(node, visit);
++        };
++        visit(sf);
++        collectRuntimeDefinitions(sf, sink, where);
++    }
++
++    const className = (cls) => {
++        if (cls.name) {
++            return cls.name.text;
++        }
++        const p = cls.parent;
++        if (p && ts.isVariableDeclaration(p) && ts.isIdentifier(p.name)) {
++            return p.name.text;
++        }
++        return `<anonymous ${where(cls)}>`;
++    };
++    const classSymbol = (cls) => cls.symbol ?? (cls.name ? checker.getSymbolAtLocation(cls.name) : undefined);
++
++    const stats = {
++        gettersTotal: 0,
++        gettersStatic: 0,
++        gettersByForm: { field: 0, cast: 0, path: 0, expr: 0, other: 0 },
++        classes: classes.length,
++        decoratorsOnTrivialAccessors: {},
++    };
++
++    // ---- Rule 1: candidates -------------------------------------------------------------------------------
++    const candidates = [];
++    const candidateByDeclaration = new Map();
++    const candidatesByName = new Map();
++    for (const cls of classes) {
++        for (const member of cls.members) {
++            if (!ts.isGetAccessorDeclaration(member)) {
++                continue;
++            }
++            stats.gettersTotal++;
++            const form = classifyGetterBody(member);
++            stats.gettersByForm[form ? form.kind : "other"]++;
++            if (ts.getCombinedModifierFlags(member) & ts.ModifierFlags.Static) {
++                stats.gettersStatic++;
++                continue;
++            }
++            if (!form || !ts.isIdentifier(member.name)) {
++                continue;
++            }
++            const prop = member.name.text;
++            if (form.roots.includes(prop)) {
++                continue; // self-referential
++            }
++            const symbol = checker.getSymbolAtLocation(member.name);
++            const candidate = {
++                key: `${className(cls)}.${prop}`,
++                className: className(cls),
++                prop,
++                cls,
++                getter: member,
++                setter: undefined,
++                form,
++                where: where(member),
++                excluded: [],
++                sites: 0,
++                sitesByReceiver: {},
++            };
++            for (const declaration of symbol?.declarations ?? []) {
++                if (declaration === member) {
++                    continue;
++                }
++                if (ts.isSetAccessorDeclaration(declaration) && declaration.parent === cls && !candidate.setter) {
++                    candidate.setter = declaration;
++                } else {
++                    candidate.excluded.push({ reason: "multipleDeclarations", by: where(declaration) });
++                }
++            }
++            if (!symbol) {
++                candidate.excluded.push({ reason: "noSymbol" });
++            }
++            if (hasDecorators(member) || (candidate.setter && hasDecorators(candidate.setter))) {
++                const names = [...(ts.getDecorators(member) ?? []), ...((candidate.setter && ts.getDecorators(candidate.setter)) || [])].map((d) => {
++                    const expression = ts.isCallExpression(d.expression) ? d.expression.expression : d.expression;
++                    return expression.getText();
++                });
++                for (const name of names) {
++                    stats.decoratorsOnTrivialAccessors[name] = (stats.decoratorsOnTrivialAccessors[name] || 0) + 1;
++                }
++                candidate.excluded.push({ reason: "decorator", by: names.join(",") });
++            }
++            if (options.mode === "math") {
++                const props = MATH_PROPS[candidate.className];
++                if (!props || !props.includes(prop) || !/\/Maths\/math\.[^/]*$/.test(member.getSourceFile().fileName)) {
++                    candidate.excluded.push({ reason: "notInMathMode" });
++                }
++            }
++            candidates.push(candidate);
++            candidateByDeclaration.set(member, candidate);
++            if (candidate.setter) {
++                candidateByDeclaration.set(candidate.setter, candidate);
++            }
++            let list = candidatesByName.get(prop);
++            if (!list) {
++                candidatesByName.set(prop, (list = []));
++            }
++            list.push(candidate);
++        }
++    }
++
++    // ---- Rule 2: overrides anywhere in the program --------------------------------------------------------
++    const baseTypesOf = (cls) => {
++        const symbol = classSymbol(cls);
++        if (!symbol) {
++            return [];
++        }
++        try {
++            const type = checker.getDeclaredTypeOfSymbol(symbol);
++            return checker.getBaseTypes(type) ?? [];
++        } catch {
++            return [];
++        }
++    };
++    const unresolvedHeritage = [];
++    for (const cls of classes) {
++        const symbol = classSymbol(cls);
++        const hasExtends = cls.heritageClauses?.some((h) => h.token === ts.SyntaxKind.ExtendsKeyword);
++        if (!symbol?.members || !hasExtends) {
++            continue;
++        }
++        const bases = baseTypesOf(cls);
++        if (!bases.length) {
++            unresolvedHeritage.push(`${className(cls)} (${where(cls)})`);
++            continue;
++        }
++        symbol.members.forEach((memberSymbol) => {
++            const name = memberSymbol.name;
++            if (!candidatesByName.has(name)) {
++                return;
++            }
++            for (const base of bases) {
++                const inherited = checker.getPropertyOfType(base, name);
++                for (const declaration of inherited?.declarations ?? []) {
++                    const candidate = candidateByDeclaration.get(declaration);
++                    if (candidate && candidate.cls !== cls) {
++                        candidate.excluded.push({ reason: "overridden", by: `${className(cls)} (${where(memberSymbol.declarations?.[0] ?? cls)})` });
++                    }
++                }
++            }
++        });
++    }
++
++    // ---- Rule 4: run-time redefinition --------------------------------------------------------------------
++    const classesByName = new Map();
++    for (const cls of classes) {
++        const name = className(cls);
++        let list = classesByName.get(name);
++        if (!list) {
++            classesByName.set(name, (list = []));
++        }
++        list.push(cls);
++    }
++    for (const mixinSource of KNOWN_RUNTIME_MIXIN_SOURCES) {
++        for (const cls of classesByName.get(mixinSource) ?? []) {
++            for (const member of cls.members) {
++                const name = memberNameText(member.name);
++                if (name !== undefined && !(ts.getCombinedModifierFlags(member) & ts.ModifierFlags.Static)) {
++                    sink.literal(name, where(member), `runtimeMixin(${mixinSource})`);
++                }
++            }
++        }
++    }
++    const dynamicReport = [];
++    for (const dynamic of dynamicRedefinitions) {
++        const target = ts.isCallExpression(dynamic.node) ? dynamic.node.arguments[0] : dynamic.node.left.expression;
++        let typeText = "?";
++        let hits = 0;
++        if (target) {
++            const type = checker.getTypeAtLocation(target);
++            typeText = checker.typeToString(type);
++            if (!(type.flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown))) {
++                for (const candidate of candidates) {
++                    const property = checker.getPropertyOfType(type, candidate.prop);
++                    if (property?.declarations?.includes(candidate.getter)) {
++                        candidate.excluded.push({ reason: "dynamicDefineProperty", by: dynamic.where });
++                        hits++;
++                    }
++                }
++            }
++        }
++        dynamicReport.push({ where: dynamic.where, how: dynamic.how, targetType: typeText, candidatesExcluded: hits });
++    }
++
++    // ---- First-party packages outside this program (gui, loaders, materials, ...) --------------------------
++    const ancestorCache = new Map();
++    const ancestorsOf = (cls) => {
++        let result = ancestorCache.get(cls);
++        if (result) {
++            return result;
++        }
++        result = new Set();
++        ancestorCache.set(cls, result);
++        const addType = (type) => {
++            if (type.isUnionOrIntersection()) {
++                type.types.forEach(addType);
++                return;
++            }
++            for (const declaration of type.symbol?.declarations ?? []) {
++                if (ts.isClassLike(declaration) && !result.has(declaration)) {
++                    result.add(declaration);
++                    for (const ancestor of ancestorsOf(declaration)) {
++                        result.add(ancestor);
++                    }
++                }
++            }
++        };
++        baseTypesOf(cls).forEach(addType);
++        return result;
++    };
++    const external = { filesScanned: 0, classesDerivingFromProgram: 0, overrides: 0 };
++    if (options.scanExternalPackages) {
++        const files = [];
++        for (const group of ["packages/dev", "packages/tools"]) {
++            const groupDir = join(REPO_ROOT, group);
++            if (!existsSync(groupDir)) {
++                continue;
++            }
++            for (const entry of readdirSync(groupDir, { withFileTypes: true })) {
++                if (entry.isDirectory()) {
++                    listSourceFiles(join(groupDir, entry.name, "src"), files);
++                }
++            }
++        }
++        const externalClasses = new Map(); // name -> [{extendsName, members: Map(name -> where), where}]
++        const externalWhere = (sf) => (node) => `${relative(REPO_ROOT, sf.fileName)}:${sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1}`;
++        for (const file of files) {
++            if (programFileSet.has(resolve(file)) || /\.test\.tsx?$/.test(file)) {
++                continue;
++            }
++            external.filesScanned++;
++            const text = readFileSync(file, "utf8");
++            const mayDefine = text.includes("defineProperty") || text.includes("defineProperties") || text.includes(".prototype");
++            if (!mayDefine && !/\bextends\b/.test(text)) {
++                continue;
++            }
++            const sf = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, file.endsWith("x") ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
++            const at = externalWhere(sf);
++            if (mayDefine) {
++                collectRuntimeDefinitions(sf, { literal: (name, w, how) => sink.literal(name, w, `external:${how}`), dynamic: () => {} }, at);
++            }
++            const visit = (node) => {
++                if (ts.isClassLike(node)) {
++                    const heritage = node.heritageClauses?.find((h) => h.token === ts.SyntaxKind.ExtendsKeyword)?.types[0]?.expression;
++                    let extendsName;
++                    if (heritage && ts.isIdentifier(heritage)) {
++                        extendsName = heritage.text;
++                    } else if (heritage && ts.isPropertyAccessExpression(heritage)) {
++                        extendsName = heritage.name.text;
++                    } else if (heritage) {
++                        extendsName = "<expression>";
++                    }
++                    if (extendsName) {
++                        const members = new Map();
++                        for (const member of node.members) {
++                            if (ts.isConstructorDeclaration(member)) {
++                                for (const parameter of member.parameters) {
++                                    if (ts.isIdentifier(parameter.name) && ts.getCombinedModifierFlags(parameter) & ts.ModifierFlags.ParameterPropertyModifier) {
++                                        members.set(parameter.name.text, at(parameter));
++                                    }
++                                }
++                                continue;
++                            }
++                            const name = memberNameText(member.name);
++                            if (name !== undefined && !(ts.getCombinedModifierFlags(member) & ts.ModifierFlags.Static)) {
++                                members.set(name, at(member));
++                            }
++                        }
++                        const name = node.name?.text ?? `<anonymous ${at(node)}>`;
++                        let list = externalClasses.get(name);
++                        if (!list) {
++                            externalClasses.set(name, (list = []));
++                        }
++                        list.push({ name, extendsName, members, where: at(node) });
++                    }
++                }
++                ts.forEachChild(node, visit);
++            };
++            visit(sf);
++        }
++        // Resolve each external class to the program classes it (transitively, by name) derives from.
++        const rootsCache = new Map();
++        const programRootsOf = (name, seen) => {
++            if (rootsCache.has(name)) {
++                return rootsCache.get(name);
++            }
++            const roots = new Set();
++            if (seen.has(name)) {
++                return roots;
++            }
++            seen.add(name);
++            for (const cls of classesByName.get(name) ?? []) {
++                roots.add(cls);
++            }
++            for (const externalClass of externalClasses.get(name) ?? []) {
++                for (const root of programRootsOf(externalClass.extendsName, seen)) {
++                    roots.add(root);
++                }
++            }
++            rootsCache.set(name, roots);
++            return roots;
++        };
++        for (const list of externalClasses.values()) {
++            for (const externalClass of list) {
++                const roots = programRootsOf(externalClass.extendsName, new Set());
++                if (!roots.size) {
++                    continue;
++                }
++                external.classesDerivingFromProgram++;
++                for (const [memberName, memberWhere] of externalClass.members) {
++                    for (const candidate of candidatesByName.get(memberName) ?? []) {
++                        for (const root of roots) {
++                            if (root === candidate.cls || ancestorsOf(root).has(candidate.cls)) {
++                                candidate.excluded.push({ reason: "externalOverride", by: `${externalClass.name} (${memberWhere})` });
++                                external.overrides++;
++                                break;
++                            }
++                        }
++                    }
++                }
++            }
++        }
++    }
++
++    // ---- Narrowing type assertions: a value of the source type may impersonate the target class ------------
++    const PRIMITIVE =
++        ts.TypeFlags.StringLike | ts.TypeFlags.NumberLike | ts.TypeFlags.BigIntLike | ts.TypeFlags.BooleanLike | ts.TypeFlags.EnumLike | ts.TypeFlags.ESSymbolLike;
++    const classChain = (cls) => new Set([cls, ...ancestorsOf(cls)]);
++    const classesOfType = (type) => {
++        const result = { classes: new Set(), other: false };
++        const add = (t, depth) => {
++            if (depth > 4) {
++                result.other = true;
++                return;
++            }
++            if (t.flags & (ts.TypeFlags.Null | ts.TypeFlags.Undefined | ts.TypeFlags.Void | ts.TypeFlags.Never)) {
++                return;
++            }
++            if (t.flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown)) {
++                result.other = true;
++                return;
++            }
++            if (t.flags & PRIMITIVE) {
++                return;
++            }
++            if (t.isUnion()) {
++                t.types.forEach((member) => add(member, depth + 1));
++                return;
++            }
++            if (t.isIntersection()) {
++                const classMembers = t.types.filter((member) => member.symbol && member.symbol.flags & ts.SymbolFlags.Class);
++                if (classMembers.length) {
++                    classMembers.forEach((member) => add(member, depth + 1));
++                } else {
++                    result.other = true;
++                }
++                return;
++            }
++            if (t.flags & ts.TypeFlags.Instantiable) {
++                const constraint = checker.getBaseConstraintOfType(t);
++                if (constraint && constraint !== t) {
++                    add(constraint, depth + 1);
++                } else {
++                    result.other = true;
++                }
++                return;
++            }
++            if (checker.isArrayType(t)) {
++                const element = checker.getTypeArguments(t)[0];
++                if (element) {
++                    add(element, depth + 1);
++                }
++                return;
++            }
++            if (t.flags & ts.TypeFlags.Object && t.symbol && t.symbol.flags & ts.SymbolFlags.Class) {
++                for (const declaration of t.symbol.declarations ?? []) {
++                    if (ts.isClassLike(declaration)) {
++                        result.classes.add(declaration);
++                    }
++                }
++                return;
++            }
++            result.other = true;
++        };
++        add(type, 0);
++        return result;
++    };
++    const candidatesByClass = new Map();
++    for (const candidate of candidates) {
++        let list = candidatesByClass.get(candidate.cls);
++        if (!list) {
++            candidatesByClass.set(candidate.cls, (list = []));
++        }
++        list.push(candidate);
++    }
++    const assertionKinds = new Map(); // assertion node -> "downcast" | "fromAny"
++    const assertionStats = { total: assertions.length, toClassType: 0, downcast: 0, fromAny: 0 };
++    for (const assertion of assertions) {
++        if (ts.isConstTypeReference(assertion.type)) {
++            continue;
++        }
++        const target = checker.getTypeFromTypeNode(assertion.type);
++        if (target.flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown)) {
++            continue;
++        }
++        const targetInfo = classesOfType(target);
++        if (!targetInfo.classes.size) {
++            continue;
++        }
++        assertionStats.toClassType++;
++        const source = checker.getTypeAtLocation(assertion.expression);
++        let kind;
++        if (source.flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown)) {
++            kind = "fromAny";
++        } else if (checker.isTypeAssignableTo(checker.getNonNullableType(source), target)) {
++            continue; // widening or identity
++        } else {
++            kind = "downcast";
++        }
++        assertionStats[kind]++;
++        assertionKinds.set(assertion, kind);
++        // Classes the value is known to be an instance of regardless of the assertion.
++        let safe = new Set();
++        if (kind === "downcast") {
++            const sourceInfo = classesOfType(source);
++            if (!sourceInfo.other && sourceInfo.classes.size) {
++                let common;
++                for (const cls of sourceInfo.classes) {
++                    const chain = classChain(cls);
++                    common = common ? new Set([...common].filter((c) => chain.has(c))) : chain;
++                }
++                safe = common;
++            }
++        }
++        for (const cls of targetInfo.classes) {
++            for (const link of classChain(cls)) {
++                if (safe.has(link)) {
++                    continue;
++                }
++                for (const candidate of candidatesByClass.get(link) ?? []) {
++                    const taint = (candidate.castTaint ||= {});
++                    if (!taint[kind]) {
++                        taint[kind] = { first: where(assertion), count: 0 };
++                    }
++                    taint[kind].count++;
++                }
++            }
++        }
++    }
++    // ---- Single implementation in the class family: the member name must be declared exactly once among the
++    // classes connected to the declaring class by inheritance. Descendants are real overrides (handled above);
++    // this adds ancestors (the getter is itself an override) and duck-typed siblings that share a base class and
++    // declare the same name without deriving from the declaring class (InstancedMesh mirrors Mesh). Babylon code
++    // routinely reaches those through `x as Mesh`, so a Mesh-typed read can hit another implementation.
++    const declaringClassesByName = new Map();
++    for (const cls of classes) {
++        classSymbol(cls)?.members?.forEach((memberSymbol) => {
++            if (!candidatesByName.has(memberSymbol.name)) {
++                return;
++            }
++            let list = declaringClassesByName.get(memberSymbol.name);
++            if (!list) {
++                declaringClassesByName.set(memberSymbol.name, (list = []));
++            }
++            list.push(cls);
++        });
++    }
++    if (options.siblingRule !== false) {
++        for (const candidate of candidates) {
++            const own = ancestorsOf(candidate.cls);
++            if (!own.size) {
++                continue;
++            }
++            for (const other of declaringClassesByName.get(candidate.prop) ?? []) {
++                if (other === candidate.cls) {
++                    continue;
++                }
++                if (own.has(other)) {
++                    candidate.excluded.push({ reason: "overridesAncestorMember", by: `${className(other)} (${where(other)})` });
++                    break;
++                }
++                const theirs = ancestorsOf(other);
++                if (theirs.has(candidate.cls)) {
++                    continue; // a real override, handled above
++                }
++                let shared = false;
++                for (const ancestor of theirs) {
++                    if (own.has(ancestor)) {
++                        shared = true;
++                        break;
++                    }
++                }
++                if (shared) {
++                    candidate.excluded.push({ reason: "siblingDeclaresSameName", by: `${className(other)} (${where(other)})` });
++                    break;
++                }
++            }
++        }
++    }
++
++    const policy = options.downcastPolicy || "site";
++    if (policy === "class" || policy === "class+any") {
++        for (const candidate of candidates) {
++            if (candidate.castTaint?.downcast) {
++                candidate.excluded.push({ reason: "downcastTarget", by: `${candidate.castTaint.downcast.first} (+${candidate.castTaint.downcast.count - 1})` });
++            }
++            if (policy === "class+any" && candidate.castTaint?.fromAny) {
++                candidate.excluded.push({ reason: "anyCastTarget", by: `${candidate.castTaint.fromAny.first} (+${candidate.castTaint.fromAny.count - 1})` });
++            }
++        }
++    }
++
++    for (const candidate of candidates) {
++        const redefinitions = redefinedNames.get(candidate.prop);
++        if (redefinitions) {
++            candidate.excluded.push({ reason: "runtimeRedefinedName", by: `${redefinitions[0].how} ${redefinitions[0].where}${redefinitions.length > 1 ? ` (+${redefinitions.length - 1})` : ""}` });
++        }
++        // A class is "branded" (nominal) when it or an ancestor has a private/protected instance member.
++        candidate.branded = [candidate.cls, ...ancestorsOf(candidate.cls)].some((cls) =>
++            cls.members.some((m) => !(ts.getCombinedModifierFlags(m) & ts.ModifierFlags.Static) && ts.getCombinedModifierFlags(m) & (ts.ModifierFlags.Private | ts.ModifierFlags.Protected))
++        );
++    }
++
++    return { checker, enabledForms, candidates, candidateByDeclaration, candidatesByName, stats, where, className, classSymbol, unresolvedHeritage, dynamicReport, external, assertionKinds, assertionStats, policy };
++}
++
++/**
++ * Creates the custom transformers for a program.
++ * @param program the TypeScript program being emitted
++ * @param options see getAccessorInlineOptionsFromEnv
++ * @returns `{ before: [factory] }` plus `writeReport()`
++ */
++export function createAccessorInlineTransformers(program, options) {
++    let analysis;
++    const skipped = {};
++    const sitesByForm = { field: 0, cast: 0, path: 0, expr: 0 };
++    const sitesByReceiver = {};
++    const potentialByForm = { field: 0, cast: 0, path: 0, expr: 0 };
++    let total = 0;
++    let filesTouched = 0;
++    const samples = {};
++
++    const ensureAnalysis = () => {
++        if (!analysis) {
++            const start = Date.now();
++            analysis = analyze(program, options);
++            analysis.analysisMs = Date.now() - start;
++        }
++        return analysis;
++    };
++
++    const skip = (reason, node) => {
++        skipped[reason] = (skipped[reason] || 0) + 1;
++        if (node && analysis) {
++            const list = (samples[reason] ||= []);
++            if (list.length < 12) {
++                list.push(`${analysis.where(node)} ${node.getText().slice(0, 80)}`);
++            }
++        }
++        return undefined;
++    };
++
++    const mappedCache = new Map();
++    /** A mapped type counts as "the class" only when it carries the full public surface of the declaring class. */
++    const mappedCoversClass = (type, candidate) => {
++        const { checker, classSymbol } = analysis;
++        let perType = mappedCache.get(type);
++        if (!perType) {
++            mappedCache.set(type, (perType = new Map()));
++        }
++        if (perType.has(candidate.cls)) {
++            return perType.get(candidate.cls);
++        }
++        let ok = true;
++        const classType = checker.getDeclaredTypeOfSymbol(classSymbol(candidate.cls));
++        for (const property of checker.getPropertiesOfType(classType)) {
++            const hidden = property.declarations?.some((d) => ts.getCombinedModifierFlags(d) & (ts.ModifierFlags.Private | ts.ModifierFlags.Protected));
++            if (hidden) {
++                continue;
++            }
++            const mapped = checker.getPropertyOfType(type, property.name);
++            if (!mapped || (mapped.flags & ts.SymbolFlags.Optional && !(property.flags & ts.SymbolFlags.Optional))) {
++                ok = false;
++                break;
++            }
++        }
++        perType.set(candidate.cls, ok);
++        return ok;
++    };
++
++    const ALLOWED = new Set(["class", "mapped"]);
++    const receiverKind = (type, candidate, depth = 0) => {
++        const { checker } = analysis;
++        if (depth > 6) {
++            return "tooDeep";
++        }
++        if (type.flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown)) {
++            return "any";
++        }
++        if (type.flags & ts.TypeFlags.Instantiable) {
++            const constraint = checker.getBaseConstraintOfType(type);
++            if (!constraint || constraint === type) {
++                return "unconstrained";
++            }
++            return receiverKind(constraint, candidate, depth + 1);
++        }
++        if (type.isUnionOrIntersection()) {
++            const union = type.isUnion();
++            let members = type.types.filter((t) => !(t.flags & (ts.TypeFlags.Null | ts.TypeFlags.Undefined | ts.TypeFlags.Void)));
++            if (!union) {
++                // Only the constituents that provide the property matter for an intersection.
++                members = members.filter((t) => checker.getPropertyOfType(t, candidate.prop));
++            }
++            if (!members.length) {
++                return "empty";
++            }
++            const kinds = new Set(members.map((t) => receiverKind(t, candidate, depth + 1)));
++            for (const kind of kinds) {
++                if (!ALLOWED.has(kind)) {
++                    return `${union ? "union" : "intersection"}(${kind})`;
++                }
++            }
++            return kinds.size === 1 ? [...kinds][0] : "mapped";
++        }
++        if (type.flags & ts.TypeFlags.Object) {
++            if (type.objectFlags & ts.ObjectFlags.Mapped) {
++                return mappedCoversClass(type, candidate) ? "mapped" : "mappedPartial";
++            }
++            const symbol = type.symbol;
++            if (symbol && symbol.flags & ts.SymbolFlags.Class) {
++                return "class";
++            }
++            if (symbol && symbol.flags & ts.SymbolFlags.Interface) {
++                return "interface";
++            }
++            return "objectType";
++        }
++        return "otherType";
++    };
++
++    /** The receiver is a narrowing/any type assertion, or a local variable initialized with one. */
++    const receiverAssertion = (receiver) => {
++        const { checker, assertionKinds } = analysis;
++        const direct = (expression) => {
++            let e = expression;
++            while (ts.isParenthesizedExpression(e) || ts.isNonNullExpression(e) || ts.isSatisfiesExpression(e)) {
++                e = e.expression;
++            }
++            while (ts.isAsExpression(e) || ts.isTypeAssertionExpression(e)) {
++                const kind = assertionKinds.get(e);
++                if (kind) {
++                    return kind;
++                }
++                e = e.expression;
++                while (ts.isParenthesizedExpression(e) || ts.isNonNullExpression(e)) {
++                    e = e.expression;
++                }
++            }
++            return e;
++        };
++        const inner = direct(receiver);
++        if (typeof inner === "string") {
++            return inner;
++        }
++        if (ts.isIdentifier(inner)) {
++            const declaration = checker.getSymbolAtLocation(inner)?.valueDeclaration;
++            if (declaration && ts.isVariableDeclaration(declaration) && declaration.initializer) {
++                const viaInitializer = direct(declaration.initializer);
++                if (typeof viaInitializer === "string") {
++                    return `${viaInitializer}(local)`;
++                }
++            }
++        }
++        return undefined;
++    };
++
++    /**
++     * Decides whether a property READ can be rewritten.
++     * @param node an ORIGINAL (parse tree) property access
++     * @param count whether to record skip statistics
++     */
++    const resolveSite = (node, count) => {
++        const { checker, candidateByDeclaration } = analysis;
++        const no = count ? skip : () => undefined;
++        const symbol = checker.getSymbolAtLocation(node.name);
++        if (!symbol) {
++            return no("receiverAnyOrUnresolved");
++        }
++        const declarations = symbol.declarations;
++        if (!declarations?.length) {
++            return no("noDeclaration");
++        }
++        let candidate;
++        for (const declaration of declarations) {
++            const found = candidateByDeclaration.get(declaration);
++            if (!found) {
++                return no(candidate ? "mixedWithNonCandidateDeclaration" : "notACandidateDeclaration");
++            }
++            if (candidate && found !== candidate) {
++                return no("severalCandidateDeclarations", node);
++            }
++            candidate = found;
++        }
++        if (!declarations.includes(candidate.getter)) {
++            return no("setterOnly");
++        }
++        if (candidate.excluded.length) {
++            return no(`excluded:${candidate.excluded[0].reason}`);
++        }
++        if (node.expression.kind === ts.SyntaxKind.SuperKeyword) {
++            return no("superReceiver", node);
++        }
++        if (isWriteOrDeleteTarget(node)) {
++            return no("writeTarget");
++        }
++        // Cross-check with the compiler's own (internal) notion of a write; stay conservative when they disagree.
++        if (typeof ts.isWriteAccess === "function" && ts.isWriteAccess(node)) {
++            return no("writeTarget(compilerOnly)", node);
++        }
++        if (analysis.policy !== "off") {
++            const assertedAs = receiverAssertion(node.expression);
++            if (assertedAs) {
++                return no(`receiverIsAssertion:${assertedAs}`, node);
++            }
++        }
++        const kind = receiverKind(checker.getTypeAtLocation(node.expression), candidate);
++        if (!ALLOWED.has(kind) || (kind === "mapped" && !options.allowMapped)) {
++            return no(`receiver:${kind}`, node);
++        }
++        return { candidate, kind };
++    };
++
++    /** Expands a field/cast/path getter into its (transitively inlined) property path. */
++    const expanding = new Set();
++    const expandPath = (candidate) => {
++        if (candidate.expandedPath) {
++            return candidate.expandedPath;
++        }
++        if (expanding.has(candidate)) {
++            return undefined;
++        }
++        expanding.add(candidate);
++        const names = [];
++        for (const access of candidate.form.accessNodes) {
++            const inner = resolveSite(access, false);
++            const innerPath = inner && inner.candidate.form.kind !== "expr" && analysis.enabledForms.has(inner.candidate.form.kind) ? expandPath(inner.candidate) : undefined;
++            if (innerPath) {
++                names.push(...innerPath);
++                candidate.transitive = true;
++            } else {
++                names.push(access.name.text);
++            }
++        }
++        expanding.delete(candidate);
++        candidate.expandedPath = names;
++        return names;
++    };
++
++    const factory = (context) => {
++        const f = context.factory;
++        ensureAnalysis();
++        const { checker, candidatesByName, enabledForms } = analysis;
++
++        const buildPath = (node, receiver, names) => {
++            const chain = !!(node.flags & ts.NodeFlags.OptionalChain);
++            let expression = receiver;
++            names.forEach((name, index) => {
++                expression = chain
++                    ? f.createPropertyAccessChain(expression, index === 0 ? node.questionDotToken : undefined, f.createIdentifier(name))
++                    : f.createPropertyAccessExpression(expression, f.createIdentifier(name));
++            });
++            return ts.setTextRange(expression, node);
++        };
++
++        /** Clones a pure getter expression with `this` replaced by the receiver. */
++        const cloneExpression = (n, makeReceiver) => {
++            n = stripTypeOnly(n).node;
++            switch (n.kind) {
++                case ts.SyntaxKind.ThisKeyword:
++                    return makeReceiver();
++                case ts.SyntaxKind.NumericLiteral:
++                    return f.createNumericLiteral(n.text);
++                case ts.SyntaxKind.StringLiteral:
++                case ts.SyntaxKind.NoSubstitutionTemplateLiteral:
++                    return f.createStringLiteral(n.text);
++                case ts.SyntaxKind.TrueKeyword:
++                    return f.createTrue();
++                case ts.SyntaxKind.FalseKeyword:
++                    return f.createFalse();
++                case ts.SyntaxKind.NullKeyword:
++                    return f.createNull();
++                case ts.SyntaxKind.Identifier:
++                    return f.createVoidZero();
++                case ts.SyntaxKind.PropertyAccessExpression: {
++                    const inner = resolveSite(n, false);
++                    const receiver = cloneExpression(n.expression, makeReceiver);
++                    const innerPath = inner && inner.candidate.form.kind !== "expr" && enabledForms.has(inner.candidate.form.kind) ? expandPath(inner.candidate) : undefined;
++                    let expression = receiver;
++                    for (const name of innerPath ?? [n.name.text]) {
++                        expression = f.createPropertyAccessExpression(expression, f.createIdentifier(name));
++                    }
++                    return expression;
++                }
++                case ts.SyntaxKind.ElementAccessExpression:
++                    return f.createElementAccessExpression(cloneExpression(n.expression, makeReceiver), cloneExpression(n.argumentExpression, makeReceiver));
++                case ts.SyntaxKind.PrefixUnaryExpression:
++                    return f.createPrefixUnaryExpression(n.operator, cloneExpression(n.operand, makeReceiver));
++                case ts.SyntaxKind.TypeOfExpression:
++                    return f.createTypeOfExpression(cloneExpression(n.expression, makeReceiver));
++                case ts.SyntaxKind.BinaryExpression:
++                    return f.createBinaryExpression(
++                        f.createParenthesizedExpression(cloneExpression(n.left, makeReceiver)),
++                        n.operatorToken.kind,
++                        f.createParenthesizedExpression(cloneExpression(n.right, makeReceiver))
++                    );
++                case ts.SyntaxKind.ConditionalExpression:
++                    return f.createConditionalExpression(
++                        f.createParenthesizedExpression(cloneExpression(n.condition, makeReceiver)),
++                        undefined,
++                        cloneExpression(n.whenTrue, makeReceiver),
++                        undefined,
++                        cloneExpression(n.whenFalse, makeReceiver)
++                    );
++                default:
++                    throw new Error(`accessor inline: unexpected node kind ${ts.SyntaxKind[n.kind]}`);
++            }
++        };
++
++        /** Receivers that can be evaluated several times: `this`, or a local variable/parameter. */
++        const simpleReceiverFactory = (receiver) => {
++            const inner = stripTypeOnly(receiver).node;
++            if (inner.kind === ts.SyntaxKind.ThisKeyword) {
++                return () => f.createThis();
++            }
++            if (ts.isIdentifier(inner)) {
++                const symbol = checker.getSymbolAtLocation(inner);
++                const declaration = symbol?.valueDeclaration;
++                if (declaration && (ts.isVariableDeclaration(declaration) || ts.isParameter(declaration) || ts.isBindingElement(declaration)) && declaration.getSourceFile() === inner.getSourceFile()) {
++                    return () => ts.setOriginalNode(f.createIdentifier(inner.text), inner);
++                }
++            }
++            return undefined;
++        };
++
++        return (sourceFile) => {
++            if (sourceFile.isDeclarationFile) {
++                return sourceFile;
++            }
++            let changed = false;
++            const visitor = (node) => {
++                if (ts.isPropertyAccessExpression(node) && ts.isIdentifier(node.name) && candidatesByName.has(node.name.text)) {
++                    const site = resolveSite(node, true);
++                    if (site) {
++                        const { candidate, kind } = site;
++                        const form = candidate.form.kind;
++                        potentialByForm[form]++;
++                        if (!enabledForms.has(form)) {
++                            skip(`formDisabled:${form}`);
++                        } else {
++                            let replacement;
++                            if (form === "expr") {
++                                const chain = !!(node.flags & ts.NodeFlags.OptionalChain);
++                                const simple = simpleReceiverFactory(node.expression);
++                                if (chain) {
++                                    skip("expr:optionalChainSite");
++                                } else if (simple) {
++                                    replacement = ts.setTextRange(f.createParenthesizedExpression(cloneExpression(candidate.form.expr, simple)), node);
++                                } else if (candidate.form.thisCount === 1 && !candidate.form.lazy) {
++                                    const receiver = ts.visitNode(node.expression, visitor);
++                                    replacement = ts.setTextRange(f.createParenthesizedExpression(cloneExpression(candidate.form.expr, () => receiver)), node);
++                                } else {
++                                    skip("expr:complexReceiver");
++                                }
++                            } else {
++                                const names = expandPath(candidate);
++                                const receiver = ts.visitNode(node.expression, visitor);
++                                replacement =
++                                    names.length === 1 ? f.updatePropertyAccessExpression(node, receiver, f.createIdentifier(names[0])) : buildPath(node, receiver, names);
++                            }
++                            if (replacement) {
++                                changed = true;
++                                total++;
++                                sitesByForm[form]++;
++                                sitesByReceiver[kind] = (sitesByReceiver[kind] || 0) + 1;
++                                candidate.sites++;
++                                candidate.sitesByReceiver[kind] = (candidate.sitesByReceiver[kind] || 0) + 1;
++                                return replacement;
++                            }
++                        }
++                    }
++                }
++                return ts.visitEachChild(node, visitor, context);
++            };
++            const result = ts.visitNode(sourceFile, visitor);
++            if (changed) {
++                filesTouched++;
++            }
++            return result;
++        };
++    };
++
++    const buildReport = () => {
++        ensureAnalysis();
++        const { candidates, stats, unresolvedHeritage, dynamicReport, external } = analysis;
++        const exclusionCounts = {};
++        const excludedList = [];
++        let qualified = 0;
++        const qualifiedByForm = { field: 0, cast: 0, path: 0, expr: 0 };
++        for (const candidate of candidates) {
++            if (!candidate.excluded.length) {
++                qualified++;
++                qualifiedByForm[candidate.form.kind]++;
++                continue;
++            }
++            const reasons = [...new Set(candidate.excluded.map((e) => e.reason))];
++            for (const reason of reasons) {
++                exclusionCounts[reason] = (exclusionCounts[reason] || 0) + 1;
++            }
++            if (!(reasons.length === 1 && reasons[0] === "notInMathMode")) {
++                excludedList.push({ key: candidate.key, form: candidate.form.kind, where: candidate.where, reasons: candidate.excluded.slice(0, 4).map((e) => (e.by ? `${e.reason}: ${e.by}` : e.reason)) });
++            }
++        }
++        const rewritten = candidates.filter((c) => c.sites > 0).sort((a, b) => b.sites - a.sites);
++        const perProp = {};
++        for (const candidate of rewritten) {
++            const key = perProp[candidate.key] ? `${candidate.key} (${candidate.where})` : candidate.key;
++            perProp[key] = candidate.sites;
++        }
++        const unbrandedSites = rewritten.filter((c) => !c.branded).reduce((sum, c) => sum + c.sites, 0);
++        const tainted = (kind) => {
++            const list = candidates.filter((c) => c.castTaint?.[kind]);
++            return { candidates: list.length, rewrittenSites: list.reduce((sum, c) => sum + c.sites, 0) };
++        };
++        return {
++            mode: options.mode,
++            enabledForms: MODES[options.mode],
++            allowMapped: options.allowMapped,
++            total,
++            filesTouched,
++            sitesByForm,
++            sitesByReceiverKind: sitesByReceiver,
++            sitesOnClassesWithoutNominalBrand: unbrandedSites,
++            downcastPolicy: analysis.policy,
++            typeAssertions: { ...analysis.assertionStats, candidatesReachableThroughDowncast: tainted("downcast"), candidatesReachableThroughAnyCast: tainted("fromAny") },
++            sitesIfFormWereEnabled: potentialByForm,
++            getters: {
++                ...stats,
++                instanceCandidates: candidates.length,
++                qualified,
++                qualifiedByForm,
++                excludedByReason: exclusionCounts,
++            },
++            skippedSites: skipped,
++            skippedSiteSamples: samples,
++            perProp,
++            details: rewritten.map((c) => ({ key: c.key, form: c.form.kind, backing: c.expandedPath?.join(".") ?? "<expr>", where: c.where, sites: c.sites, byReceiver: c.sitesByReceiver, branded: c.branded, transitive: !!c.transitive, anyCasts: c.castTaint?.fromAny?.count ?? 0, downcasts: c.castTaint?.downcast?.count ?? 0 })),
++            excluded: excludedList,
++            unresolvedHeritage,
++            dynamicRedefinitions: dynamicReport,
++            externalPackages: external,
++            analysisMs: analysis.analysisMs,
++        };
++    };
++
++    const writeReport = () => {
++        if (!options.reportPath || !analysis) {
++            return;
++        }
++        mkdirSync(dirname(resolve(options.reportPath)), { recursive: true });
++        writeFileSync(resolve(options.reportPath), JSON.stringify(buildReport(), null, 2) + "\n", "utf8");
++    };
++
++    return { before: [factory], buildReport, writeReport };
++}
++
++let exitHookInstalled = false;
++const pendingReports = [];
++
++/**
++ * Convenience for build configurations: returns the custom transformers for `program` when the pass is switched
++ * on through the environment (undefined otherwise) and writes the report when the process exits.
++ * @param program the TypeScript program being emitted
++ * @returns custom transformers or undefined
++ */
++export function accessorInlineTransformersFromEnv(program) {
++    const options = getAccessorInlineOptionsFromEnv();
++    if (!options) {
++        return undefined;
++    }
++    const transformers = createAccessorInlineTransformers(program, options);
++    pendingReports.push(transformers);
++    if (!exitHookInstalled) {
++        exitHookInstalled = true;
++        process.on("exit", () => {
++            // The last program created is the one that was emitted.
++            pendingReports[pendingReports.length - 1]?.writeReport();
++        });
++    }
++    return { before: transformers.before };
++}
+diff --git a/packages/public/rollupTypeScript.mjs b/packages/public/rollupTypeScript.mjs
+index 5863f8d334..2956f04f59 100644
+--- a/packages/public/rollupTypeScript.mjs
++++ b/packages/public/rollupTypeScript.mjs
+@@ -1,5 +1,6 @@
+ import ts from "typescript";
+ import { dirname, resolve } from "node:path";
++import { accessorInlineTransformersFromEnv } from "./accessorInlineTransformer.mjs";
+ 
+ /**
+  * Share TypeScript emit across the sequential entries of one production Rollup invocation.
+@@ -49,7 +50,7 @@ export function createTypeScriptEmitPlugins(tsconfig) {
+                 );
+             }
+             const emitted = new Map();
+-            const result = program.emit(undefined, (fileName, text, _bom, _error, sourceFiles) => {
++            const emitFile = (fileName, text, _bom, _error, sourceFiles) => {
+                 if (sourceFiles?.length !== 1) {
+                     return;
+                 }
+@@ -64,7 +65,9 @@ export function createTypeScriptEmitPlugins(tsconfig) {
+                     output.code = text.replace(/\n?\/\/# sourceMappingURL=.*(?:\r?\n)?$/, "\n");
+                 }
+                 emitted.set(id, output);
+-            });
++            };
++            // PROTOTYPE: type-directed accessor inlining, switched by BABYLON_ACCESSOR_INLINE.
++            const result = program.emit(undefined, emitFile, undefined, undefined, accessorInlineTransformersFromEnv(program));
+             if (result.emitSkipped) {
+                 this.error("TypeScript did not emit the production bundle inputs");
+             }
+diff --git a/packages/public/rollupUMDHelper.mjs b/packages/public/rollupUMDHelper.mjs
+index ab0c333235..d157124d86 100644
+--- a/packages/public/rollupUMDHelper.mjs
++++ b/packages/public/rollupUMDHelper.mjs
+@@ -22,6 +22,7 @@ import { fileURLToPath, pathToFileURL } from "url";
+ import { transform as esbuildTransform } from "esbuild";
+ import { downlevelJavaScriptToEs5 } from "../../scripts/downlevelJavaScriptToEs5.mjs";
+ import { createTypeScriptEmitPlugins } from "./rollupTypeScript.mjs";
++import { accessorInlineTransformersFromEnv, getAccessorInlineOptionsFromEnv } from "./accessorInlineTransformer.mjs";
+ 
+ // Repo root — used as the filterRoot for @rollup/plugin-typescript so that
+ // `**/*.ts` patterns are matched against repo-relative paths (which never start
+@@ -832,6 +833,8 @@ export function commonUMDRollupConfiguration(options) {
+                     // any package (including aliased cross-package tool sources).
+                     filterRoot: REPO_ROOT,
+                     include: ["**/*.ts", "**/*.tsx"],
++                    // PROTOTYPE: type-directed accessor inlining, switched by BABYLON_ACCESSOR_INLINE.
++                    transformers: getAccessorInlineOptionsFromEnv() ? accessorInlineTransformersFromEnv : undefined,
+                 }),
+                 // Fallback: transpile .ts files that are outside the tsconfig rootDir
+                 // (e.g. aliased tool sources) which @rollup/plugin-typescript skips.
+@@ -955,6 +958,7 @@ export function commonUMDRollupConfiguration(options) {
+                                 inlineSources: true,
+                                 filterRoot: REPO_ROOT,
+                                 include: ["**/*.ts", "**/*.tsx"],
++                                transformers: getAccessorInlineOptionsFromEnv() ? accessorInlineTransformersFromEnv : undefined,
+                             }),
+                       transpileExternalTsPlugin(),
+                   ];

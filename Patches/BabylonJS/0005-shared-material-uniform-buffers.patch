@@ -1,0 +1,896 @@
+diff --git a/packages/dev/core/src/Materials/uniformBuffer.ts b/packages/dev/core/src/Materials/uniformBuffer.ts
+index 2441c4d1..031b99f0 100644
+--- a/packages/dev/core/src/Materials/uniformBuffer.ts
++++ b/packages/dev/core/src/Materials/uniformBuffer.ts
+@@ -624,6 +624,7 @@ export class UniformBuffer {
+         if (this._trackUBOsInFrame) {
+             this._buffers.push([this._buffer, this._engine._features.checkUbosContentBeforeUpload ? this._bufferData.slice() : undefined]);
+             this._bufferIndex = this._buffers.length - 1;
++            this._slotGeneration[this._bufferIndex] = this._dataGeneration;
+             this._createBufferOnWrite = false;
+         }
+     }
+@@ -708,13 +709,15 @@ export class UniformBuffer {
+             return;
+         }
+ 
+-        if (!this._dynamic && !this._needSync) {
++        if (!this._dynamic && (!this._needSync || (this._trackUBOsInFrame && this._slotGeneration[this._bufferIndex] === this._dataGeneration))) {
++            this._needSync = false;
+             this._createBufferOnWrite = this._trackUBOsInFrame;
+             return;
+         }
+ 
+         if (this._buffers && this._buffers.length > 1 && this._buffers[this._bufferIndex][1]) {
+             if (this._buffersEqual(this._bufferData, this._buffers[this._bufferIndex][1]!)) {
++                this._slotGeneration[this._bufferIndex] = this._dataGeneration;
+                 this._needSync = false;
+                 this._createBufferOnWrite = this._trackUBOsInFrame;
+                 return;
+@@ -727,6 +730,10 @@ export class UniformBuffer {
+ 
+         this._engine.updateUniformBuffer(this._buffer, this._bufferData);
+ 
++        if (this._trackUBOsInFrame) {
++            this._slotGeneration[this._bufferIndex] = this._dataGeneration;
++        }
++
+         this._needSync = false;
+         this._createBufferOnWrite = this._trackUBOsInFrame;
+     }
+diff --git a/packages/dev/core/src/Materials/material.pure.ts b/packages/dev/core/src/Materials/material.pure.ts
+index 1f097a5e..7bf95aed 100644
+--- a/packages/dev/core/src/Materials/material.pure.ts
++++ b/packages/dev/core/src/Materials/material.pure.ts
+@@ -1279,6 +1279,11 @@ export class Material implements IAnimatable, IClipPlanesHolder {
+         Material.OnEventObservable.notifyObservers(this, MaterialPluginEvent.Created);
+     }
+ 
++    /** Whether the WGSL shader declares its material uniforms in a shared buffer. */
++    protected get _useMaterialUniformBufferInWGSL(): boolean {
++        return false;
++    }
++
+     /** @internal */
+     public _createUniformBuffer() {
+         const engine = this.getScene().getEngine();
+@@ -1286,8 +1291,8 @@ export class Material implements IAnimatable, IClipPlanesHolder {
+         this._uniformBuffer?.dispose();
+ 
+         if (engine.isWebGPU && !this._forceGLSL) {
+-            // Switch main UBO to non UBO to connect to leftovers UBO in webgpu
+-            this._uniformBuffer = new UniformBuffer(engine, undefined, undefined, this.name, true);
++            // Shaders without explicitly owned uniforms still forward their values to the effect's leftover buffer.
++            this._uniformBuffer = new UniformBuffer(engine, undefined, undefined, this.name, !this._useMaterialUniformBufferInWGSL);
+             this._shaderLanguage = ShaderLanguage.WGSL;
+         } else {
+             this._uniformBuffer = new UniformBuffer(this._scene.getEngine(), undefined, undefined, this.name);
+diff --git a/packages/dev/core/src/Materials/PBR/pbrBaseMaterial.pure.ts b/packages/dev/core/src/Materials/PBR/pbrBaseMaterial.pure.ts
+index 6fea5a1e..46f7a9be 100644
+--- a/packages/dev/core/src/Materials/PBR/pbrBaseMaterial.pure.ts
++++ b/packages/dev/core/src/Materials/PBR/pbrBaseMaterial.pure.ts
+@@ -905,6 +905,10 @@ export abstract class PBRBaseMaterial extends PBRBaseMaterialBase {
+ 
+     protected _cacheHasRenderTargetTextures = false;
+ 
++    protected override get _useMaterialUniformBufferInWGSL(): boolean {
++        return !this.customShaderNameResolve;
++    }
++
+     /**
+      * Instantiates a new PBRMaterial instance.
+      *
+@@ -1057,9 +1061,7 @@ export abstract class PBRBaseMaterial extends PBRBaseMaterialBase {
+      * @returns - boolean indicating that the submesh is ready or not.
+      */
+     public override isReadyForSubMesh(mesh: AbstractMesh, subMesh: SubMesh, useInstances?: boolean): boolean {
+-        if (!this._uniformBufferLayoutBuilt) {
+-            this.buildUniformLayout();
+-        }
++        this._ensureUniformBufferLayout();
+ 
+         const drawWrapper = subMesh._drawWrapper;
+ 
+@@ -1553,7 +1555,7 @@ export abstract class PBRBaseMaterial extends PBRBaseMaterialBase {
+             shaderName = this.customShaderNameResolve(shaderName, uniforms, uniformBuffers, samplers, defines, attribs, csnrOptions);
+         }
+ 
+-        const join = defines.toString();
++        const join = defines.toString() + (this._uniformBuffer.useUbo ? "" : "\n#define DISABLE_MATERIAL_UNIFORM_BUFFER\n");
+         const effect = engine.createEffect(
+             shaderName,
+             <IEffectCreationOptions>{
+@@ -1878,9 +1880,7 @@ export abstract class PBRBaseMaterial extends PBRBaseMaterialBase {
+             ...options,
+         };
+ 
+-        if (!this._uniformBufferLayoutBuilt) {
+-            this.buildUniformLayout();
+-        }
++        this._ensureUniformBufferLayout();
+ 
+         this._callbackPluginEventGeneric(MaterialPluginEvent.GetDefineNames, this._eventInfo);
+         const checkReady = () => {
+@@ -1905,10 +1905,24 @@ export abstract class PBRBaseMaterial extends PBRBaseMaterialBase {
+         checkReady();
+     }
+ 
++    private _ensureUniformBufferLayout(): void {
++        if (this.getScene().getEngine().isWebGPU && !this._forceGLSL && this._uniformBuffer.useUbo !== this._useMaterialUniformBufferInWGSL) {
++            this._createUniformBuffer();
++            this.markAsDirty(Material.AllDirtyFlag);
++        }
++        if (!this._uniformBufferLayoutBuilt) {
++            this.buildUniformLayout();
++        }
++    }
++
+     /**
+      * Initializes the uniform buffer layout for the shader.
+      */
+     public override buildUniformLayout(): void {
++        // A custom shader may still declare loose material uniforms. Preserve its existing update path.
++        if (this.getScene().getEngine().isWebGPU && !this._forceGLSL && this._uniformBuffer.useUbo !== this._useMaterialUniformBufferInWGSL) {
++            this._createUniformBuffer();
++        }
+         // Order is important !
+         const ubo = this._uniformBuffer;
+         ubo.addUniform("vAlbedoInfos", 2);
+diff --git a/packages/dev/core/src/Materials/materialPluginManager.pure.ts b/packages/dev/core/src/Materials/materialPluginManager.pure.ts
+index 731d2ab2..a1259419 100644
+--- a/packages/dev/core/src/Materials/materialPluginManager.pure.ts
++++ b/packages/dev/core/src/Materials/materialPluginManager.pure.ts
+@@ -308,6 +308,7 @@ export class MaterialPluginManager {
+                                     const arraySize = uniform.arraySize ?? 0;
+                                     eventData.ubo.addUniform(uniform.name, uniform.size, arraySize);
+                                     if (isWebGPU) {
++                                        const declaration = eventData.ubo.useUbo ? "uniform<Material>" : "uniform";
+                                         let type: string;
+                                         switch (uniform.type) {
+                                             case "mat4":
+@@ -322,9 +323,9 @@ export class MaterialPluginManager {
+                                         }
+ 
+                                         if (arraySize > 0) {
+-                                            uboDeclaration.push(`uniform ${uniform.name}: array<${type}, ${arraySize}>;\n`);
++                                            uboDeclaration.push(`${declaration} ${uniform.name}: array<${type}, ${arraySize}>;\n`);
+                                         } else {
+-                                            uboDeclaration.push(`uniform ${uniform.name}: ${type};\n`);
++                                            uboDeclaration.push(`${declaration} ${uniform.name}: ${type};\n`);
+                                         }
+                                     } else {
+                                         uboDeclaration.push(`${uniform.type} ${uniform.name}${arraySize > 0 ? `[${arraySize}]` : ""};\n`);
+diff --git a/packages/dev/core/src/Engines/WebGPU/webgpuShaderProcessorsWGSL.pure.ts b/packages/dev/core/src/Engines/WebGPU/webgpuShaderProcessorsWGSL.pure.ts
+index 26030743..efa8a8f9 100644
+--- a/packages/dev/core/src/Engines/WebGPU/webgpuShaderProcessorsWGSL.pure.ts
++++ b/packages/dev/core/src/Engines/WebGPU/webgpuShaderProcessorsWGSL.pure.ts
+@@ -19,6 +19,8 @@ const builtInName_frag_depth = "fragmentOutputs.fragDepth";
+ const leftOverVarName = "uniforms";
+ const internalsVarName = "internals";
+ 
++type UniformDescription = { name: string; type: string; length: number };
++
+ const gpuTextureViewDimensionByWebGPUTextureFunction: { [key: string]: Nullable<GPUTextureViewDimension> } = {
+     texture_1d: WebGPUConstants.TextureViewDimension.E1d,
+     texture_2d: WebGPUConstants.TextureViewDimension.E2d,
+@@ -48,9 +50,11 @@ export class WebGPUShaderProcessorWGSL extends WebGPUShaderProcessor {
+     protected _varyingsWGSL: string[];
+     protected _varyingNamesWGSL: string[];
+     protected _stridedUniformArrays: string[];
++    private _namedUniformBuffers: Map<string, UniformDescription[]>;
++    private _uniformBufferByName: Map<string, string>;
+ 
+     public override shaderLanguage = ShaderLanguage.WGSL;
+-    public uniformRegexp = /uniform\s+(\w+)\s*:\s*(.+)\s*;/;
++    public uniformRegexp = /uniform(?:\s*<\s*(\w+)\s*>)?\s+(\w+)\s*:\s*(.+)\s*;/;
+     public textureRegexp = /var\s+(\w+)\s*:\s*((array<\s*)?(texture_\w+)\s*(<\s*(.+)\s*>)?\s*(,\s*\w+\s*>\s*)?);/;
+     public noPrecision = true;
+     public pureMode = false;
+@@ -88,6 +92,8 @@ export class WebGPUShaderProcessorWGSL extends WebGPUShaderProcessor {
+         this._varyingsWGSL = [];
+         this._varyingNamesWGSL = [];
+         this._stridedUniformArrays = [];
++        this._namedUniformBuffers = new Map();
++        this._uniformBufferByName = new Map();
+     }
+ 
+     public preProcessShaderCode(code: string): string {
+@@ -167,10 +173,36 @@ export class WebGPUShaderProcessorWGSL extends WebGPUShaderProcessor {
+     public uniformProcessor(uniform: string, isFragment: boolean, preProcessors: { [key: string]: string }): string {
+         const match = this.uniformRegexp.exec(uniform);
+         if (match !== null) {
+-            const uniformType = match[2];
+-            const name = match[1];
++            const bufferName = match[1] === "Material" && "DISABLE_MATERIAL_UNIFORM_BUFFER" in preProcessors ? undefined : match[1];
++            const name = match[2];
++            const uniformType = match[3];
++            const previousBuffer = this._uniformBufferByName.get(name);
++            const targetBuffer = bufferName || WebGPUShaderProcessor.LeftOvertUBOName;
++            if (previousBuffer !== undefined && previousBuffer !== targetBuffer) {
++                throw new Error(`Uniform ${name} is declared in both ${previousBuffer} and ${targetBuffer}.`);
++            }
++            this._uniformBufferByName.set(name, targetBuffer);
+ 
+-            this._addUniformToLeftOverUBO(name, uniformType, preProcessors);
++            if (bufferName) {
++                if (bufferName === WebGPUShaderProcessor.LeftOvertUBOName || bufferName === WebGPUShaderProcessor.InternalsUBOName) {
++                    throw new Error(`Uniform buffer name ${bufferName} is reserved.`);
++                }
++                let uniforms = this._namedUniformBuffers.get(bufferName);
++                if (!uniforms) {
++                    uniforms = [];
++                    this._namedUniformBuffers.set(bufferName, uniforms);
++                }
++                const [, type, length] = this._getArraySize(name, uniformType, preProcessors);
++                const previous = uniforms.find((uniform) => uniform.name === name);
++                if (previous && (previous.type !== type || previous.length !== length)) {
++                    throw new Error(`Uniform ${name} has inconsistent declarations in ${bufferName}.`);
++                }
++                if (!previous) {
++                    uniforms.push({ name, type, length });
++                }
++            } else {
++                this._addUniformToLeftOverUBO(name, uniformType, preProcessors);
++            }
+ 
+             uniform = "";
+         }
+@@ -351,6 +383,19 @@ export class WebGPUShaderProcessorWGSL extends WebGPUShaderProcessor {
+     public finalizeShaders(vertexCode: string, fragmentCode: string): { vertexCode: string; fragmentCode: string } {
+         const enabledExtensions: string[] = [];
+ 
++        // Explicitly owned uniforms keep the existing uniforms.member spelling, including plugin code.
++        // Their layout is shared by both shader stages and matches UniformBuffer.addUniform order.
++        let namedBuffers = "";
++        for (const [name, uniforms] of this._namedUniformBuffers) {
++            namedBuffers += this._generateUniformBufferStruct(name, uniforms) + `var<uniform> _uniforms${name}: ${name};\n`;
++        }
++        const replaceUniform = (match: string, name: string) => {
++            const buffer = this._uniformBufferByName.get(name);
++            return buffer && this._namedUniformBuffers.has(buffer) ? `_uniforms${buffer}.${name}` : match;
++        };
++        vertexCode = namedBuffers + vertexCode.replace(/\buniforms\s*\.\s*(\w+)\b/g, replaceUniform);
++        fragmentCode = namedBuffers + fragmentCode.replace(/\buniforms\s*\.\s*(\w+)\b/g, replaceUniform);
++
+         const fragCoordCode =
+             fragmentCode.indexOf("fragmentInputs.position") >= 0 && !this.pureMode
+                 ? `
+@@ -578,9 +623,16 @@ export class WebGPUShaderProcessorWGSL extends WebGPUShaderProcessor {
+     }
+ 
+     protected _generateLeftOverUBOCode(name: string, uniformBufferDescription: WebGPUBufferDescription): string {
++        return (
++            this._generateUniformBufferStruct(name, this._webgpuProcessingContext.leftOverUniforms) +
++            `@group(${uniformBufferDescription.binding.groupIndex}) @binding(${uniformBufferDescription.binding.bindingIndex}) var<uniform> ${leftOverVarName} : ${name};\n`
++        );
++    }
++
++    private _generateUniformBufferStruct(name: string, uniforms: UniformDescription[]): string {
+         let stridedArrays = "";
+         let ubo = `struct ${name} {\n`;
+-        for (const leftOverUniform of this._webgpuProcessingContext.leftOverUniforms) {
++        for (const leftOverUniform of uniforms) {
+             const type = leftOverUniform.type.replace(/^(.*?)(<.*>)?$/, "$1");
+             const size = WebGPUShaderProcessor.UniformSizes[type];
+ 
+@@ -589,7 +641,7 @@ export class WebGPUShaderProcessorWGSL extends WebGPUShaderProcessor {
+                     const stridedArrayType = `${name}_${this._stridedUniformArrays.length}_strided_arr`;
+                     stridedArrays += `struct ${stridedArrayType} {
+                         @size(16)
+-                        el: ${type},
++                        el: ${leftOverUniform.type},
+                     }`;
+                     this._stridedUniformArrays.push(leftOverUniform.name);
+ 
+@@ -603,8 +655,6 @@ export class WebGPUShaderProcessorWGSL extends WebGPUShaderProcessor {
+         }
+         ubo += "};\n";
+         ubo = `${stridedArrays}\n${ubo}`;
+-        ubo += `@group(${uniformBufferDescription.binding.groupIndex}) @binding(${uniformBufferDescription.binding.bindingIndex}) var<uniform> ${leftOverVarName} : ${name};\n`;
+-
+         return ubo;
+     }
+ 
+@@ -671,7 +721,11 @@ export class WebGPUShaderProcessorWGSL extends WebGPUShaderProcessor {
+ 
+             let bufferInfo = this._webgpuProcessingContext.availableBuffers[name];
+             if (!bufferInfo) {
+-                const knownUBO = type === "uniform" ? WebGPUShaderProcessingContext.KnownUBOs[structName] : null;
++                const knownUBO =
++                    type === "uniform"
++                        ? WebGPUShaderProcessingContext.KnownUBOs[structName] ||
++                          (this._namedUniformBuffers.has(structName) ? { binding: { groupIndex: -1, bindingIndex: -1 } } : null)
++                        : null;
+ 
+                 let binding;
+                 if (knownUBO) {
+diff --git a/packages/dev/core/src/ShadersWGSL/ShadersInclude/pbrUboDeclaration.fx b/packages/dev/core/src/ShadersWGSL/ShadersInclude/pbrUboDeclaration.fx
+index 6de5ac1e..1aff447a 100644
+--- a/packages/dev/core/src/ShadersWGSL/ShadersInclude/pbrUboDeclaration.fx
++++ b/packages/dev/core/src/ShadersWGSL/ShadersInclude/pbrUboDeclaration.fx
+@@ -1,73 +1,73 @@
+-uniform vAlbedoInfos: vec2f;
+-uniform vBaseWeightInfos: vec2f;
+-uniform vBaseDiffuseRoughnessInfos: vec2f;
+-uniform vAmbientInfos: vec4f;
+-uniform vBentNormalInfos: vec2f;
+-uniform vOpacityInfos: vec2f;
+-uniform vEmissiveInfos: vec2f;
+-uniform vLightmapInfos: vec2f;
+-uniform vReflectivityInfos: vec3f;
+-uniform vMicroSurfaceSamplerInfos: vec2f;
+-uniform vBumpInfos: vec3f;
+-uniform albedoMatrix: mat4x4f;
+-uniform baseWeightMatrix: mat4x4f;
+-uniform baseDiffuseRoughnessMatrix: mat4x4f;
+-uniform ambientMatrix: mat4x4f;
+-uniform bentNormalMatrix: mat4x4f;
+-uniform opacityMatrix: mat4x4f;
+-uniform emissiveMatrix: mat4x4f;
+-uniform lightmapMatrix: mat4x4f;
+-uniform reflectivityMatrix: mat4x4f;
+-uniform microSurfaceSamplerMatrix: mat4x4f;
+-uniform bumpMatrix: mat4x4f;
+-uniform vTangentSpaceParams: vec2f;
+-uniform vAlbedoColor: vec4f;
+-uniform baseWeight: f32;
+-uniform baseDiffuseRoughness: f32;
+-uniform vLightingIntensity: vec4f;
+-uniform pointSize: f32;
+-uniform vReflectivityColor: vec4f;
+-uniform vEmissiveColor: vec3f;
+-uniform vAmbientColor: vec3f;
++uniform<Material> vAlbedoInfos: vec2f;
++uniform<Material> vBaseWeightInfos: vec2f;
++uniform<Material> vBaseDiffuseRoughnessInfos: vec2f;
++uniform<Material> vAmbientInfos: vec4f;
++uniform<Material> vBentNormalInfos: vec2f;
++uniform<Material> vOpacityInfos: vec2f;
++uniform<Material> vEmissiveInfos: vec2f;
++uniform<Material> vLightmapInfos: vec2f;
++uniform<Material> vReflectivityInfos: vec3f;
++uniform<Material> vMicroSurfaceSamplerInfos: vec2f;
++uniform<Material> vBumpInfos: vec3f;
++uniform<Material> albedoMatrix: mat4x4f;
++uniform<Material> baseWeightMatrix: mat4x4f;
++uniform<Material> baseDiffuseRoughnessMatrix: mat4x4f;
++uniform<Material> ambientMatrix: mat4x4f;
++uniform<Material> bentNormalMatrix: mat4x4f;
++uniform<Material> opacityMatrix: mat4x4f;
++uniform<Material> emissiveMatrix: mat4x4f;
++uniform<Material> lightmapMatrix: mat4x4f;
++uniform<Material> reflectivityMatrix: mat4x4f;
++uniform<Material> microSurfaceSamplerMatrix: mat4x4f;
++uniform<Material> bumpMatrix: mat4x4f;
++uniform<Material> vTangentSpaceParams: vec2f;
++uniform<Material> vAlbedoColor: vec4f;
++uniform<Material> baseWeight: f32;
++uniform<Material> baseDiffuseRoughness: f32;
++uniform<Material> vLightingIntensity: vec4f;
++uniform<Material> pointSize: f32;
++uniform<Material> vReflectivityColor: vec4f;
++uniform<Material> vEmissiveColor: vec3f;
++uniform<Material> vAmbientColor: vec3f;
+ 
+-uniform vDebugMode: vec2f;
++uniform<Material> vDebugMode: vec2f;
+ 
+-uniform vMetallicReflectanceFactors: vec4f;
+-uniform vMetallicReflectanceInfos: vec2f;
+-uniform metallicReflectanceMatrix: mat4x4f;
+-uniform vReflectanceInfos: vec2f;
+-uniform reflectanceMatrix: mat4x4f;
+-uniform cameraInfo: vec4f;
+-uniform vTextureRepetitionHexTilingParams: vec4f;
++uniform<Material> vMetallicReflectanceFactors: vec4f;
++uniform<Material> vMetallicReflectanceInfos: vec2f;
++uniform<Material> metallicReflectanceMatrix: mat4x4f;
++uniform<Material> vReflectanceInfos: vec2f;
++uniform<Material> reflectanceMatrix: mat4x4f;
++uniform<Material> cameraInfo: vec4f;
++uniform<Material> vTextureRepetitionHexTilingParams: vec4f;
+ 
+-uniform vReflectionInfos: vec2f;
+-uniform reflectionMatrix: mat4x4f;
+-uniform vReflectionMicrosurfaceInfos: vec3f;
+-uniform vReflectionPosition: vec3f;
+-uniform vReflectionSize: vec3f;
+-uniform vReflectionFilteringInfo: vec2f;
+-uniform vReflectionDominantDirection: vec3f;
+-uniform vReflectionColor: vec3f;
++uniform<Material> vReflectionInfos: vec2f;
++uniform<Material> reflectionMatrix: mat4x4f;
++uniform<Material> vReflectionMicrosurfaceInfos: vec3f;
++uniform<Material> vReflectionPosition: vec3f;
++uniform<Material> vReflectionSize: vec3f;
++uniform<Material> vReflectionFilteringInfo: vec2f;
++uniform<Material> vReflectionDominantDirection: vec3f;
++uniform<Material> vReflectionColor: vec3f;
+ 
+-uniform vSphericalL00: vec3f;
+-uniform vSphericalL1_1: vec3f;
+-uniform vSphericalL10: vec3f;
+-uniform vSphericalL11: vec3f;
+-uniform vSphericalL2_2: vec3f;
+-uniform vSphericalL2_1: vec3f;
+-uniform vSphericalL20: vec3f;
+-uniform vSphericalL21: vec3f;
+-uniform vSphericalL22: vec3f;
++uniform<Material> vSphericalL00: vec3f;
++uniform<Material> vSphericalL1_1: vec3f;
++uniform<Material> vSphericalL10: vec3f;
++uniform<Material> vSphericalL11: vec3f;
++uniform<Material> vSphericalL2_2: vec3f;
++uniform<Material> vSphericalL2_1: vec3f;
++uniform<Material> vSphericalL20: vec3f;
++uniform<Material> vSphericalL21: vec3f;
++uniform<Material> vSphericalL22: vec3f;
+ 
+-uniform vSphericalX: vec3f;
+-uniform vSphericalY: vec3f;
+-uniform vSphericalZ: vec3f;
+-uniform vSphericalXX_ZZ: vec3f;
+-uniform vSphericalYY_ZZ: vec3f;
+-uniform vSphericalZZ: vec3f;
+-uniform vSphericalXY: vec3f;
+-uniform vSphericalYZ: vec3f;
+-uniform vSphericalZX: vec3f;
++uniform<Material> vSphericalX: vec3f;
++uniform<Material> vSphericalY: vec3f;
++uniform<Material> vSphericalZ: vec3f;
++uniform<Material> vSphericalXX_ZZ: vec3f;
++uniform<Material> vSphericalYY_ZZ: vec3f;
++uniform<Material> vSphericalZZ: vec3f;
++uniform<Material> vSphericalXY: vec3f;
++uniform<Material> vSphericalYZ: vec3f;
++uniform<Material> vSphericalZX: vec3f;
+ 
+ #define ADDITIONAL_UBO_DECLARATION
+ 
+diff --git a/packages/dev/core/test/unit/Materials/babylon.uniformBuffer.sharedVersions.test.ts b/packages/dev/core/test/unit/Materials/babylon.uniformBuffer.sharedVersions.test.ts
+new file mode 100644
+index 00000000..b1fa4013
+--- /dev/null
++++ b/packages/dev/core/test/unit/Materials/babylon.uniformBuffer.sharedVersions.test.ts
+@@ -0,0 +1,119 @@
++import { beforeEach, describe, expect, it, vi } from "vitest";
++import { UniformBuffer } from "core/Materials/uniformBuffer";
++import { Matrix } from "core/Maths/math.vector";
++
++interface GpuBuffer {
++    uniqueId: number;
++    gpu: Float32Array;
++}
++
++describe("Shared uniform buffer versions", () => {
++    let engine: any;
++    let material: UniformBuffer;
++    const current = (ubo: UniformBuffer) => ubo.getBuffer() as unknown as GpuBuffer;
++
++    beforeEach(() => {
++        let nextId = 0;
++        engine = {
++            supportsUniformBuffers: true,
++            frameId: 1,
++            _uniformBuffers: [],
++            _features: { trackUbosInFrame: true, checkUbosContentBeforeUpload: true, uniformBufferHardCheckMatrix: false },
++            createUniformBuffer: vi.fn((data: Float32Array) => ({ uniqueId: nextId++, gpu: data.slice() })),
++            updateUniformBuffer: vi.fn((buffer: GpuBuffer, data: Float32Array) => {
++                buffer.gpu = data.slice();
++            }),
++            _releaseBuffer: vi.fn(() => true),
++        };
++        material = new UniformBuffer(engine);
++        material.addUniform("color", 4);
++        material.create();
++    });
++
++    function draw(value: number) {
++        material.updateFloat4("color", value, 0.5, 0.25, 1);
++        material.update();
++        return current(material);
++    }
++
++    it.each([0, 1, 40])("does not scan, upload, or allocate for %i additional unchanged draws", (count) => {
++        const first = draw(1);
++        engine.updateUniformBuffer.mockClear();
++        engine.createUniformBuffer.mockClear();
++        const compare = vi.spyOn(material as any, "_buffersEqual");
++        for (let i = 0; i < count; i++) expect(draw(1)).toBe(first);
++        expect(compare).not.toHaveBeenCalled();
++        expect(engine.updateUniformBuffer).not.toHaveBeenCalled();
++        expect(engine.createUniformBuffer).not.toHaveBeenCalled();
++    });
++
++    it("preserves every earlier draw when a material changes twice in the same frame", () => {
++        const first = draw(1);
++        const second = draw(2);
++        const third = draw(1);
++        expect(first).not.toBe(second);
++        expect(second).not.toBe(third);
++        expect([first.gpu[0], second.gpu[0], third.gpu[0]]).toEqual([1, 2, 1]);
++    });
++
++    it("reuses unchanged versions across frames without a full-buffer comparison", () => {
++        draw(1);
++        engine.updateUniformBuffer.mockClear();
++        const compare = vi.spyOn(material as any, "_buffersEqual");
++        for (let frame = 2; frame < 50; frame++) {
++            engine.frameId = frame;
++            draw(1);
++        }
++        expect(compare).not.toHaveBeenCalled();
++        expect(engine.updateUniformBuffer).not.toHaveBeenCalled();
++        expect(material._numBuffers).toBe(1);
++    });
++
++    it("keeps multiple views separate while sharing the unchanged material", () => {
++        const view = new UniformBuffer(engine);
++        view.addUniform("viewProjection", 16);
++        view.create();
++        const materialBuffers: GpuBuffer[] = [];
++        const viewBuffers: GpuBuffer[] = [];
++        const matrices = [Matrix.Translation(1, 0, 0), Matrix.Translation(2, 0, 0)];
++        for (const matrix of [matrices[0], matrices[1], matrices[0]]) {
++            view.updateMatrix("viewProjection", matrix);
++            view.update();
++            viewBuffers.push(current(view));
++            materialBuffers.push(draw(1));
++        }
++        expect(new Set(materialBuffers).size).toBe(1);
++        expect(viewBuffers.map((buffer) => buffer.gpu[12])).toEqual([1, 2, 1]);
++        expect(new Set(viewBuffers).size).toBe(3);
++    });
++
++    it("retains per-view material changes and bounds buffer reuse over many frames", () => {
++        for (let frame = 1; frame <= 100; frame++) {
++            engine.frameId = frame;
++            const left = draw(1);
++            const right = draw(2);
++            expect(left.gpu[0]).toBe(1);
++            expect(right.gpu[0]).toBe(2);
++            expect(left).not.toBe(right);
++        }
++        expect(material._numBuffers).toBe(2);
++    });
++
++    it("does not confuse equal version numbers in different materials", () => {
++        const other = new UniformBuffer(engine);
++        other.addUniform("color", 4);
++        other.create();
++        const first = draw(1);
++        other.updateFloat4("color", 2, 0.5, 0.25, 1);
++        other.update();
++        expect(first).not.toBe(current(other));
++        expect([first.gpu[0], current(other).gpu[0]]).toEqual([1, 2]);
++    });
++
++    it("recreates GPU data after context loss instead of trusting stale versions", () => {
++        const first = draw(3);
++        material._rebuildAfterContextLost();
++        expect(draw(3)).not.toBe(first);
++        expect(current(material).gpu[0]).toBe(3);
++    });
++});
+diff --git a/packages/dev/core/test/unit/Materials/babylon.pbrMaterial.uniformBuffer.test.ts b/packages/dev/core/test/unit/Materials/babylon.pbrMaterial.uniformBuffer.test.ts
+new file mode 100644
+index 00000000..702af028
+--- /dev/null
++++ b/packages/dev/core/test/unit/Materials/babylon.pbrMaterial.uniformBuffer.test.ts
+@@ -0,0 +1,77 @@
++import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
++import { readFileSync } from "node:fs";
++import { NullEngine } from "core/Engines/nullEngine";
++import { Scene } from "core/scene";
++import { PBRMaterial } from "core/Materials/PBR/pbrMaterial";
++import { StandardMaterial } from "core/Materials/standardMaterial";
++import { ShaderLanguage } from "core/Materials/shaderLanguage";
++import { WebGPUShaderProcessorWGSL } from "core/Engines/WebGPU/webgpuShaderProcessorsWGSL";
++import { WebGPUShaderProcessingContext } from "core/Engines/WebGPU/webgpuShaderProcessingContext";
++
++describe("PBR WGSL material buffer ownership", () => {
++    let engine: NullEngine;
++    let scene: Scene;
++
++    beforeEach(() => {
++        engine = new NullEngine();
++        Object.defineProperties(engine, { isWebGPU: { value: true }, supportsUniformBuffers: { value: true } });
++        engine.createUniformBuffer = vi.fn(() => ({ references: 1 }) as any);
++        scene = new Scene(engine);
++    });
++
++    afterEach(() => {
++        scene.dispose();
++        engine.dispose();
++    });
++
++    it("uses one material buffer with matching base and plugin field order", () => {
++        const material = new PBRMaterial("shared", scene);
++        material.buildUniformLayout();
++        expect(material._uniformBuffer.useUbo).toBe(true);
++        const processor = new WebGPUShaderProcessorWGSL();
++        const context = new WebGPUShaderProcessingContext(ShaderLanguage.WGSL, true);
++        processor.initializeShaders(context);
++        const source = readFileSync("packages/dev/core/src/ShadersWGSL/ShadersInclude/pbrUboDeclaration.fx", "utf8").replace(
++            "#define ADDITIONAL_UBO_DECLARATION",
++            (material.pluginManager as any)._uboDeclaration
++        );
++        for (const line of source.split(/\r?\n/)) if (processor.uniformRegexp.test(line)) processor.uniformProcessor(line, true, {});
++        expect((processor as any)._namedUniformBuffers.get("Material").map((uniform: any) => uniform.name)).toEqual((material._uniformBuffer as any)._uniformNames);
++        expect(context.leftOverUniforms).toEqual([]);
++    });
++
++    it("keeps the existing loose-uniform path for other WGSL material shaders", () => {
++        const material = new StandardMaterial("standard", scene);
++        expect(material._uniformBuffer.useUbo).toBe(false);
++    });
++
++    it("preserves custom PBR shader update behavior", () => {
++        const material = new PBRMaterial("custom", scene);
++        material.customShaderNameResolve = () => "customPbr";
++        material.buildUniformLayout();
++        expect(material._uniformBuffer.useUbo).toBe(false);
++        expect((material.pluginManager as any)._uboDeclaration).not.toContain("uniform<Material>");
++    });
++
++    it("does not change GLSL material buffer ownership", () => {
++        const material = new PBRMaterial("glsl", scene, true);
++        material.buildUniformLayout();
++        expect(material.shaderLanguage).toBe(ShaderLanguage.GLSL);
++        expect(material._uniformBuffer.useUbo).toBe(true);
++        expect((material.pluginManager as any)._uboDeclaration).not.toContain("uniform<Material>");
++    });
++
++    it("rebuilds ownership when a custom shader is installed or removed after compilation", () => {
++        const material = new PBRMaterial("custom-later", scene);
++        material.buildUniformLayout();
++        expect(material._uniformBuffer.useUbo).toBe(true);
++        const version = material._drawCacheVersion;
++        material.customShaderNameResolve = () => "customPbr";
++        (material as any)._ensureUniformBufferLayout();
++        expect(material._uniformBuffer.useUbo).toBe(false);
++        expect(material._drawCacheVersion).toBeGreaterThan(version);
++        material.customShaderNameResolve = undefined;
++        (material as any)._ensureUniformBufferLayout();
++        expect(material._uniformBuffer.useUbo).toBe(true);
++    });
++});
+diff --git a/packages/dev/core/test/unit/Engines/WebGPU/webgpuShaderProcessorWGSL.uniformBuffers.test.ts b/packages/dev/core/test/unit/Engines/WebGPU/webgpuShaderProcessorWGSL.uniformBuffers.test.ts
+new file mode 100644
+index 00000000..5f97075b
+--- /dev/null
++++ b/packages/dev/core/test/unit/Engines/WebGPU/webgpuShaderProcessorWGSL.uniformBuffers.test.ts
+@@ -0,0 +1,107 @@
++import { beforeEach, describe, expect, it } from "vitest";
++import { WebGPUShaderProcessorWGSL } from "core/Engines/WebGPU/webgpuShaderProcessorsWGSL";
++import { WebGPUShaderProcessingContext } from "core/Engines/WebGPU/webgpuShaderProcessingContext";
++import { ShaderLanguage } from "core/Materials/shaderLanguage";
++
++describe("WGSL explicitly owned uniforms", () => {
++    let processor: WebGPUShaderProcessorWGSL;
++    let context: WebGPUShaderProcessingContext;
++
++    beforeEach(() => {
++        processor = new WebGPUShaderProcessorWGSL();
++        context = new WebGPUShaderProcessingContext(ShaderLanguage.WGSL, true);
++        processor.pureMode = true;
++        processor.initializeShaders(context);
++    });
++
++    function shaders(expression = "uniforms.color") {
++        return processor.finalizeShaders(
++            "@vertex fn main(input: VertexInputs) -> FragmentInputs {}",
++            `@fragment fn main(input: FragmentInputs) -> FragmentOutputs { fragmentOutputs.color = ${expression}; }`
++        );
++    }
++
++    it("leaves ordinary uniforms in the effect buffer", () => {
++        processor.uniformProcessor("uniform color: vec4f;", true, {});
++        const result = shaders();
++        expect(context.leftOverUniforms).toEqual([{ name: "color", type: "vec4f", length: 0 }]);
++        expect(result.fragmentCode).toContain("uniforms.color");
++        expect(context.availableBuffers.Material).toBeUndefined();
++    });
++
++    it("shares an explicit buffer between stages without duplicating its fields", () => {
++        processor.uniformProcessor("uniform<Material> color: vec4f;", false, {});
++        processor.uniformProcessor("uniform<Material> color: vec4f;", true, {});
++        const result = shaders();
++        expect(context.leftOverUniforms).toEqual([]);
++        expect(context.availableBuffers.Material).toBeDefined();
++        for (const code of [result.vertexCode, result.fragmentCode]) {
++            expect(code.match(/color : vec4f/g)).toHaveLength(1);
++            expect(code).toContain("var<uniform> _uniformsMaterial: Material");
++        }
++        expect(result.fragmentCode).toContain("_uniformsMaterial.color");
++    });
++
++    it("can retain the loose-uniform path for a custom material shader", () => {
++        processor.uniformProcessor("uniform<Material> color: vec4f;", true, { DISABLE_MATERIAL_UNIFORM_BUFFER: "" });
++        expect(shaders().fragmentCode).toContain("uniforms.color");
++        expect(context.leftOverUniforms).toEqual([{ name: "color", type: "vec4f", length: 0 }]);
++        expect(context.availableBuffers.Material).toBeUndefined();
++    });
++
++    it("keeps material, custom shared, and per-draw values separate", () => {
++        processor.uniformProcessor("uniform<Material> color: vec4f;", true, {});
++        processor.uniformProcessor("uniform<SharedParameters> intensity: f32;", true, {});
++        processor.uniformProcessor("uniform world: mat4x4f;", false, {});
++        const result = shaders("uniforms.color * uniforms.intensity + uniforms.world[0]");
++        expect(context.leftOverUniforms.map((uniform) => uniform.name)).toEqual(["world"]);
++        expect(context.availableBuffers.SharedParameters).toBeDefined();
++        expect(result.fragmentCode).toContain("_uniformsMaterial.color * _uniformsSharedParameters.intensity + uniforms.world[0]");
++    });
++
++    it("preserves std140 array strides and preprocessor array lengths", () => {
++        processor.uniformProcessor("uniform<Material> weights: array<f32, COUNT>;", true, { COUNT: "3" });
++        processor.uniformProcessor("uniform<Material> matrix: mat4x4f;", true, {});
++        const result = shaders("vec4f(uniforms.weights[2]) + uniforms.matrix[0]");
++        expect(result.fragmentCode).toContain("@size(16)");
++        expect(result.fragmentCode).toMatch(/weights : array<Material_\d+_strided_arr, 3>/);
++        expect(result.fragmentCode).toContain("_uniformsMaterial.weights[2].el");
++        expect(result.fragmentCode).toContain("_uniformsMaterial.matrix[0]");
++    });
++
++    it("does not rewrite longer identifiers or other objects", () => {
++        processor.uniformProcessor("uniform<Material> color: vec4f;", true, {});
++        const result = shaders("uniforms.color + uniforms.colorScale + other.color + myuniforms.color");
++        expect(result.fragmentCode).toContain("_uniformsMaterial.color + uniforms.colorScale + other.color + myuniforms.color");
++    });
++
++    it("retains the component type in padded vector arrays", () => {
++        processor.uniformProcessor("uniform<Material> offsets: array<vec2<f32>, 2>;", true, {});
++        const result = shaders("vec4f(uniforms.offsets[0], 0.0, 1.0)");
++        expect(result.fragmentCode).toContain("el: vec2<f32>");
++        expect(result.fragmentCode).toContain("_uniformsMaterial.offsets[0].el");
++    });
++
++    it.each(["uniform color: vec4f;", "uniform<Other> color: vec4f;"])("rejects ambiguous ownership: %s", (declaration) => {
++        processor.uniformProcessor("uniform<Material> color: vec4f;", false, {});
++        expect(() => processor.uniformProcessor(declaration, true, {})).toThrow("Uniform color is declared in both Material");
++    });
++
++    it("rejects inconsistent declarations across stages", () => {
++        processor.uniformProcessor("uniform<Material> color: vec4f;", false, {});
++        expect(() => processor.uniformProcessor("uniform<Material> color: vec3f;", true, {})).toThrow("inconsistent declarations");
++    });
++
++    it.each(["LeftOver", "Internals"])("rejects the reserved buffer name %s", (name) => {
++        expect(() => processor.uniformProcessor(`uniform<${name}> color: vec4f;`, false, {})).toThrow("reserved");
++    });
++
++    it("does not retain ownership when reused for another effect", () => {
++        processor.uniformProcessor("uniform<Material> color: vec4f;", false, {});
++        context = new WebGPUShaderProcessingContext(ShaderLanguage.WGSL, true);
++        processor.initializeShaders(context);
++        processor.uniformProcessor("uniform color: vec4f;", true, {});
++        expect(shaders().fragmentCode).not.toContain("_uniformsMaterial");
++        expect(context.availableBuffers.Material).toBeUndefined();
++    });
++});
+diff --git a/packages/dev/core/src/Meshes/mesh.pure.ts b/packages/dev/core/src/Meshes/mesh.pure.ts
+index 5a2095dd..19fb9f1e 100644
+--- a/packages/dev/core/src/Meshes/mesh.pure.ts
++++ b/packages/dev/core/src/Meshes/mesh.pure.ts
+@@ -2842,7 +2842,8 @@ export class Mesh extends AbstractMesh implements IGetSetVerticesData {
+             drawWrapper._recordedIndexBuffer !== this._getDrawnIndexBuffer() ||
+             drawWrapper._recordedInstances !== this._getDrawnInstanceCount() ||
+             drawWrapper._recordedSceneUbo !== this.getScene().getSceneUniformBuffer() ||
+-            !this._areSharedBuffersFirst(effectiveMesh, withLights)
++            drawWrapper._recordedMaterialBuffer !== material._uniformBuffer.getBuffer() ||
++            !this._areSharedBuffersFirst(effectiveMesh, withLights, material)
+         ) {
+             return false;
+         }
+@@ -2895,17 +2896,23 @@ export class Mesh extends AbstractMesh implements IGetSetVerticesData {
+     }
+ 
+     /**
+-     * Whether the shared uniform buffers a draw binds (the scene's, the mesh's and the lights') are on the first buffer of their frame.
++     * Whether the shared uniform buffers a draw binds (scene, mesh, material and lights) are on the first buffer of their frame.
+      * A draw recorded with a later one depends on the order of the frame's writes, and one encoded again while a buffer moved on (written
+      * again by an earlier pass of the frame) would bind the first buffer, with the earlier values, where a full draw binds the new one.
+      * Never in floating origin mode, where a bind writes the world matrix minus the eye in the mesh's uniform buffer
+      * @param effectiveMesh the mesh providing the world matrix and the lights
+      * @param withLights whether the draw binds the lights
++     * @param material the material providing the shared uniform values
+      * @returns true if they all are
+      */
+-    private _areSharedBuffersFirst(effectiveMesh: AbstractMesh, withLights: boolean): boolean {
++    private _areSharedBuffersFirst(effectiveMesh: AbstractMesh, withLights: boolean, material: Material): boolean {
+         const scene = this.getScene();
+-        if (scene.floatingOriginMode || !scene.getSceneUniformBuffer()._isFirstBufferBound() || !effectiveMesh.getMeshUniformBuffer()._isFirstBufferBound()) {
++        if (
++            scene.floatingOriginMode ||
++            !scene.getSceneUniformBuffer()._isFirstBufferBound() ||
++            !effectiveMesh.getMeshUniformBuffer()._isFirstBufferBound() ||
++            !material._uniformBuffer._isFirstBufferBound()
++        ) {
+             return false;
+         }
+         if (withLights) {
+@@ -2989,7 +2996,7 @@ export class Mesh extends AbstractMesh implements IGetSetVerticesData {
+         domainState = 0
+     ): void {
+         const scene = this.getScene();
+-        const kept = scene.getEngine()._canKeepRecordedDraw(drawWrapper) && this._areSharedBuffersFirst(effectiveMesh, withLights);
++        const kept = scene.getEngine()._canKeepRecordedDraw(drawWrapper) && this._areSharedBuffersFirst(effectiveMesh, withLights, material);
+         // the per-draw values this full bind wrote: the reference of this frame for the draws of this material with this effect
+         material._keepRecordedDrawReference(drawWrapper.effect!, kept ? drawWrapper : null, domain);
+         if (!kept) {
+@@ -3013,6 +3020,7 @@ export class Mesh extends AbstractMesh implements IGetSetVerticesData {
+         drawWrapper._recordedDomainState = this._getConfiguredState(domainState);
+         drawWrapper._recordedIndexBuffer = this._getDrawnIndexBuffer();
+         drawWrapper._recordedSceneUbo = scene.getSceneUniformBuffer();
++        drawWrapper._recordedMaterialBuffer = material._uniformBuffer.getBuffer();
+         const recordedVertexBuffers = (drawWrapper._recordedVertexBuffers ??= []);
+         recordedVertexBuffers.length = 0;
+         const vertexBuffers = this._geometry?.getVertexBuffers();
+@@ -3130,6 +3138,7 @@ export class Mesh extends AbstractMesh implements IGetSetVerticesData {
+                 subMesh.getMaterial()!._setStates(recordedDrawWrapper._recordedReverse);
+                 engine._replayRecordedDraw(recordedDrawWrapper);
+                 this._uniformBuffer._markBufferUsed();
++                subMesh.getMaterial()!._uniformBuffer._markBufferUsed();
+                 for (const step of scene._afterRenderingMeshStage) {
+                     step.action(this, subMesh, batch, recordedEffect);
+                 }
+diff --git a/packages/dev/core/src/Materials/drawWrapper.ts b/packages/dev/core/src/Materials/drawWrapper.ts
+index c4274303..eec7606b 100644
+--- a/packages/dev/core/src/Materials/drawWrapper.ts
++++ b/packages/dev/core/src/Materials/drawWrapper.ts
+@@ -91,6 +91,8 @@ export class DrawWrapper {
+      * of two active cameras) takes another one for each render, on the same draw contexts
+      */
+     public _recordedSceneUbo: Nullable<object> = null;
++    /** @internal The shared material GPU buffer referenced by the recorded bind groups. */
++    public _recordedMaterialBuffer: Nullable<object> = null;
+     /**
+      * @internal The vertex buffers of the geometry and of the thin instances, each with the GPU buffer it binds, where it is read and
+      * its hash code (the vertex layout of the pipeline)
+diff --git a/packages/dev/core/test/unit/Meshes/babylon.mesh.recordedDraws.test.ts b/packages/dev/core/test/unit/Meshes/babylon.mesh.recordedDraws.test.ts
+index f3e58fb1..1a756e5f 100644
+--- a/packages/dev/core/test/unit/Meshes/babylon.mesh.recordedDraws.test.ts
++++ b/packages/dev/core/test/unit/Meshes/babylon.mesh.recordedDraws.test.ts
+@@ -670,6 +670,28 @@ describe("Mesh recorded draws", () => {
+             expect(material._getRecordedDrawReference(drawWrapper.effect!)).toBeNull();
+         });
+ 
++        it("rejects a shared material buffer changed within the frame", () => {
++            material._uniformBuffer.addUniform("sharedValue", 4);
++            material._uniformBuffer.updateFloat4("sharedValue", 1, 2, 3, 4);
++            material._uniformBuffer.update();
++            keep(drawWrapper);
++            expect(unchanged()).toBe(true);
++            material._uniformBuffer.updateFloat4("sharedValue", 2, 2, 3, 4);
++            material._uniformBuffer.update();
++            expect(unchanged()).toBe(false);
++            keep(other);
++            expect(other._recordedMaterial).toBeNull();
++        });
++
++        it("rejects a replaced shared material buffer even when it is the first version", () => {
++            keep(drawWrapper);
++            material._uniformBuffer = new UniformBuffer(engine);
++            material._uniformBuffer.addUniform("sharedValue", 4);
++            material._uniformBuffer.create();
++            expect(material._uniformBuffer._isFirstBufferBound()).toBe(true);
++            expect(unchanged()).toBe(false);
++        });
++
+         it("is not encoded again for a camera whose view moved off the first buffer when the order of two cameras of a pass changes", () => {
+             // a camera of the pass: its view is written to the scene's uniform buffer, in a new buffer if another camera used it
+             const cameraA = Matrix.Translation(1, 0, 0);
+@@ -911,10 +933,13 @@ describe("Mesh recorded draws", () => {
+             vi.spyOn(engine, "_canEncodeRecordedDraw").mockReturnValue(true);
+             const replay = vi.spyOn(engine, "_replayRecordedDraw").mockReturnValue(true);
+             const mark = vi.spyOn(mesh._uniformBuffer, "_markBufferUsed");
++            const markMaterial = vi.spyOn(material._uniformBuffer, "_markBufferUsed");
+             mesh.render(subMesh, false);
+             expect(replay).toHaveBeenCalledTimes(1);
+             expect(mark).toHaveBeenCalledTimes(1);
+             expect(mark.mock.invocationCallOrder[0]).toBeGreaterThan(replay.mock.invocationCallOrder[0]);
++            expect(markMaterial).toHaveBeenCalledTimes(1);
++            expect(markMaterial.mock.invocationCallOrder[0]).toBeGreaterThan(replay.mock.invocationCallOrder[0]);
+         });
+ 
+         it("renders a mesh with draw observers", () => {

@@ -12,11 +12,13 @@ const seriesPath = path.join(patchesDir, "series");
 
 function usage() {
     console.error(`Usage:
-  node scripts/applyBabylonJsPatchStack.js --check [--babylon-js-dir <path>]
+  node scripts/applyBabylonJsPatchStack.js --check [--babylon-js-dir <path>] [--ref <revision>]
   node scripts/applyBabylonJsPatchStack.js --apply [--babylon-js-dir <path>]
 
 Environment:
-  BABYLON_JS_DIR  Overrides the default sibling Babylon.js checkout path.`);
+  BABYLON_JS_DIR  Overrides the default sibling Babylon.js checkout path.
+
+Check defaults to the pinned bundle-profile revision; apply preflights HEAD.`);
 }
 
 function fail(message) {
@@ -56,6 +58,7 @@ function gitResult(cwd, args) {
 function parseArgs(argv) {
     const options = {
         mode: "check",
+        ref: JSON.parse(fs.readFileSync(path.join(patchesDir, "bundle-profile.json"), "utf8")).revision,
         babylonJsDir: process.env.BABYLON_JS_DIR || path.resolve(repoRoot, "..", "Babylon.js"),
     };
 
@@ -65,6 +68,9 @@ function parseArgs(argv) {
             options.mode = "check";
         } else if (arg === "--apply") {
             options.mode = "apply";
+        } else if (arg === "--ref") {
+            options.ref = argv[++i];
+            if (!options.ref) fail("--ref requires a revision");
         } else if (arg === "--babylon-js-dir") {
             const value = argv[++i];
             if (!value) {
@@ -153,7 +159,7 @@ function applyPatch(dir, patch) {
     fail(`patch does not apply and is not already present: ${patch}`);
 }
 
-function preflightApplyStack(targetDir, patches) {
+function preflightApplyStack(targetDir, patches, ref) {
     if (patches.length === 0) {
         return;
     }
@@ -161,7 +167,7 @@ function preflightApplyStack(targetDir, patches) {
     const tempWorktree = path.join(tempRoot, "Babylon.js");
 
     try {
-        run(targetDir, ["worktree", "add", "--detach", "--quiet", tempWorktree, "HEAD"]);
+        run(targetDir, ["worktree", "add", "--detach", "--quiet", tempWorktree, ref]);
         for (const patch of patches) {
             applyPatch(tempWorktree, patch);
         }
@@ -181,7 +187,7 @@ function main() {
     console.log(`Babylon.js checkout: ${options.babylonJsDir}`);
     console.log(`Patch stack: ${patches.length} patch(es) from ${patchesDir}`);
 
-    preflightApplyStack(options.babylonJsDir, patches);
+    preflightApplyStack(options.babylonJsDir, patches, options.mode === "apply" ? "HEAD" : options.ref);
     console.log("Patch stack preflight passed.");
 
     if (options.mode === "apply") {
