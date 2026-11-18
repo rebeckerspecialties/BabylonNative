@@ -17,8 +17,8 @@
 #
 # <target> is an imported static library produced by cargo in the shared target
 # directory ${CMAKE_BINARY_DIR}/cargo; <target>_rust is the custom target that runs
-# cargo. Multi-config generators build the debug and release profiles and select the
-# library per configuration. All crates belong to the Cargo workspace at the repository
+# cargo. Multi-config generators build only the profile selected by the active
+# configuration. All crates belong to the Cargo workspace at the repository
 # root, so one Cargo.lock pins every build.
 
 set(BABYLON_RUST_CARGO_COMMAND)
@@ -96,8 +96,8 @@ set(BABYLON_RUST_BUILD_STD_ARGS "")
 set(BABYLON_RUST_RELEASE_RUSTFLAGS "")
 set(BABYLON_RUST_RELEASE_BUILD_STD_ARGS "")
 
-if(CMAKE_BUILD_TYPE MATCHES "^[Rr]el")
-    # Match Release, RelWithDebInfo, and RelMinSize to the Rust release profile.
+if(CMAKE_BUILD_TYPE MATCHES "^[Rr]el" OR CMAKE_BUILD_TYPE STREQUAL "MinSizeRel")
+    # Match the optimized CMake configurations to the Rust release profile.
     set(BABYLON_RUST_PROFILE_DIR "release")
     set(BABYLON_RUST_BUILD_FLAG "--release")
     list(APPEND BABYLON_RUST_PROFILE_ENV
@@ -307,7 +307,7 @@ set(BABYLON_RUST_RELEASE_RUSTFLAGS "${BABYLON_RUST_PLATFORM_RUSTFLAGS}")
 if(BABYLON_NATIVE_LTO_BITCODE_STATIC_LIBS)
     string(APPEND BABYLON_RUST_RELEASE_RUSTFLAGS " -C linker-plugin-lto -C embed-bitcode=yes -C codegen-units=1")
 endif()
-if(CMAKE_BUILD_TYPE MATCHES "^[Rr]el")
+if(BABYLON_RUST_PROFILE_DIR STREQUAL "release")
     set(BABYLON_RUST_PROFILE_RUSTFLAGS "${BABYLON_RUST_RELEASE_RUSTFLAGS}")
 endif()
 string(STRIP "${BABYLON_RUST_PLATFORM_RUSTFLAGS}" BABYLON_RUST_PLATFORM_RUSTFLAGS)
@@ -326,6 +326,12 @@ if(BABYLON_NATIVE_WGPU_USE_UPSTREAM_NATIVE AND BABYLON_NATIVE_WGPU_NATIVE_RLIB)
     list(APPEND BABYLON_RUST_WORKSPACE_CARGO_ARGS
         "--config"
         "patch.\"https://github.com/rebeckerspecialties/wgpu-native.git\".wgpu-native.path=\"${wgpu_native_rlib_SOURCE_DIR}\"")
+    if(NOT DEFINED wgpu_shader_codegen_SOURCE_DIR OR wgpu_shader_codegen_SOURCE_DIR STREQUAL "")
+        message(FATAL_ERROR "Native WebGPU requires the pinned, patched Naga source.")
+    endif()
+    list(APPEND BABYLON_RUST_WORKSPACE_CARGO_ARGS
+        "--config" "patch.\"https://github.com/gfx-rs/wgpu.git\".naga.path=\"${wgpu_shader_codegen_SOURCE_DIR}/naga\""
+        "--config" "patch.\"https://github.com/gfx-rs/wgpu.git\".naga-types.path=\"${wgpu_shader_codegen_SOURCE_DIR}/naga-types\"")
 endif()
 
 # Environment of every cargo invocation: per profile for multi-config generators, per
@@ -385,22 +391,37 @@ function(babylon_add_rust_static_crate target)
 
     _babylon_rust_output_lib(_lib_debug "${BABYLON_RUST_TARGET_DIR}" "${BABYLON_RUST_TARGET_TRIPLE}" "debug" "${_crate_LIB_NAME}")
     _babylon_rust_output_lib(_lib_release "${BABYLON_RUST_TARGET_DIR}" "${BABYLON_RUST_TARGET_TRIPLE}" "release" "${_crate_LIB_NAME}")
+    # Cargo includes path dependencies and generated inputs in its dep-info.
+    # Without it, edits outside the explicitly listed crate sources are stale.
+    string(REGEX REPLACE "\\.(a|lib)$" ".d" _depfile_debug "${_lib_debug}")
+    string(REGEX REPLACE "\\.(a|lib)$" ".d" _depfile_release "${_lib_release}")
 
     if(BABYLON_RUST_MULTI_CONFIG)
-        set(_outputs "${_lib_debug}" "${_lib_release}")
+        set(_is_debug "$<CONFIG:Debug>")
+        set(_outputs "$<IF:${_is_debug},${_lib_debug},${_lib_release}>")
         add_custom_command(
             OUTPUT ${_outputs}
-            COMMAND ${CMAKE_COMMAND} -E env ${BABYLON_RUST_ENV_DEBUG} ${_crate_CARGO_ENV} ${BABYLON_RUST_CARGO_COMMAND} build --locked ${BABYLON_RUST_BUILD_STD_ARGS} --manifest-path "${_manifest}" --target-dir "${BABYLON_RUST_TARGET_DIR}" ${BABYLON_RUST_TARGET_FLAG} ${BABYLON_RUST_WORKSPACE_CARGO_ARGS} ${_crate_CARGO_ARGS}
-            COMMAND ${CMAKE_COMMAND} -E env ${BABYLON_RUST_ENV_RELEASE} ${_crate_CARGO_ENV} ${BABYLON_RUST_CARGO_COMMAND} build --locked ${BABYLON_RUST_BUILD_STD_ARGS} ${BABYLON_RUST_RELEASE_BUILD_STD_ARGS} --manifest-path "${_manifest}" --target-dir "${BABYLON_RUST_TARGET_DIR}" --release ${BABYLON_RUST_TARGET_FLAG} ${BABYLON_RUST_WORKSPACE_CARGO_ARGS} ${_crate_CARGO_ARGS}
+            COMMAND ${CMAKE_COMMAND} -E env
+                "$<IF:${_is_debug},${BABYLON_RUST_ENV_DEBUG},${BABYLON_RUST_ENV_RELEASE}>"
+                ${_crate_CARGO_ENV} ${BABYLON_RUST_CARGO_COMMAND} build --locked
+                ${BABYLON_RUST_BUILD_STD_ARGS}
+                "$<$<NOT:${_is_debug}>:${BABYLON_RUST_RELEASE_BUILD_STD_ARGS}>"
+                --manifest-path "${_manifest}" --target-dir "${BABYLON_RUST_TARGET_DIR}"
+                "$<$<NOT:${_is_debug}>:--release>"
+                ${BABYLON_RUST_TARGET_FLAG} ${BABYLON_RUST_WORKSPACE_CARGO_ARGS} ${_crate_CARGO_ARGS}
             WORKING_DIRECTORY "${_crate_CRATE_DIR}"
             DEPENDS ${_depends}
-            COMMENT "${_crate_COMMENT} (debug + release)"
+            DEPFILE "$<IF:${_is_debug},${_depfile_debug},${_depfile_release}>"
+            COMMENT "${_crate_COMMENT} (selected configuration)"
+            COMMAND_EXPAND_LISTS
             VERBATIM)
     else()
         if(BABYLON_RUST_PROFILE_DIR STREQUAL "release")
             set(_lib "${_lib_release}")
+            set(_depfile "${_depfile_release}")
         else()
             set(_lib "${_lib_debug}")
+            set(_depfile "${_depfile_debug}")
         endif()
         set(_outputs "${_lib}")
         add_custom_command(
@@ -408,6 +429,7 @@ function(babylon_add_rust_static_crate target)
             COMMAND ${CMAKE_COMMAND} -E env ${BABYLON_RUST_ENV} ${_crate_CARGO_ENV} ${BABYLON_RUST_CARGO_COMMAND} build --locked ${BABYLON_RUST_BUILD_STD_ARGS} ${BABYLON_RUST_RELEASE_BUILD_STD_ARGS} --manifest-path "${_manifest}" --target-dir "${BABYLON_RUST_TARGET_DIR}" ${BABYLON_RUST_BUILD_FLAG} ${BABYLON_RUST_TARGET_FLAG} ${BABYLON_RUST_WORKSPACE_CARGO_ARGS} ${_crate_CARGO_ARGS}
             WORKING_DIRECTORY "${_crate_CRATE_DIR}"
             DEPENDS ${_depends}
+            DEPFILE "${_depfile}"
             COMMENT "${_crate_COMMENT}"
             VERBATIM)
     endif()

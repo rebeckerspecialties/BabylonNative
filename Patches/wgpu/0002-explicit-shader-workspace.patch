@@ -1,0 +1,16 @@
+diff --git a/naga/Cargo.toml b/naga/Cargo.toml
+--- a/naga/Cargo.toml
++++ b/naga/Cargo.toml
+@@ -1,3 +1,4 @@
+ [package]
++workspace = ".."
+ name = "naga"
+ version.workspace = true
+diff --git a/naga-types/Cargo.toml b/naga-types/Cargo.toml
+--- a/naga-types/Cargo.toml
++++ b/naga-types/Cargo.toml
+@@ -1,3 +1,4 @@
+ [package]
++workspace = ".."
+ name = "naga-types"
+ version.workspace = true

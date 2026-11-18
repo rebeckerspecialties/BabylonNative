@@ -1,0 +1,129 @@
+diff --git a/naga/src/back/msl/writer.rs b/naga/src/back/msl/writer.rs
+index 119b41edb..94c15ea69 100644
+--- a/naga/src/back/msl/writer.rs
++++ b/naga/src/back/msl/writer.rs
+@@ -5382,6 +5382,8 @@ template <typename A>
+                 Ok((name, 8, Some(VectorSize::Quad), Scalar::F32))
+             }
+             Snorm16 => {
++                // Keep normalization explicit, as for the other integer formats.
++                // The Metal unpack intrinsic spills for vertex inputs on A12.
+                 let name = self.namer.call("unpackSnorm16");
+                 writeln!(
+                     self.out,
+@@ -5390,7 +5392,7 @@ template <typename A>
+                 )?;
+                 writeln!(
+                     self.out,
+-                    "{}return metal::unpack_snorm2x16_to_float(b1 << 8 | b0).x;",
++                    "{}return metal::max(float(as_type<short>(metal::ushort(b1 << 8 | b0))) / 32767.0f, -1.0f);",
+                     back::INDENT
+                 )?;
+                 writeln!(self.out, "}}")?;
+@@ -5407,7 +5409,8 @@ template <typename A>
+                 )?;
+                 writeln!(
+                     self.out,
+-                    "{}return metal::unpack_snorm2x16_to_float(b3 << 24 | b2 << 16 | b1 << 8 | b0);",
++                    "{}return metal::max(metal::float2(as_type<short>(metal::ushort(b1 << 8 | b0)), \
++                                            as_type<short>(metal::ushort(b3 << 8 | b2))) / 32767.0f, -1.0f);",
+                     back::INDENT
+                 )?;
+                 writeln!(self.out, "}}")?;
+@@ -5428,8 +5431,10 @@ template <typename A>
+                 )?;
+                 writeln!(
+                     self.out,
+-                    "{}return metal::float4(metal::unpack_snorm2x16_to_float(b3 << 24 | b2 << 16 | b1 << 8 | b0), \
+-                                            metal::unpack_snorm2x16_to_float(b7 << 24 | b6 << 16 | b5 << 8 | b4));",
++                    "{}return metal::max(metal::float4(as_type<short>(metal::ushort(b1 << 8 | b0)), \
++                                            as_type<short>(metal::ushort(b3 << 8 | b2)), \
++                                            as_type<short>(metal::ushort(b5 << 8 | b4)), \
++                                            as_type<short>(metal::ushort(b7 << 8 | b6))) / 32767.0f, -1.0f);",
+                     back::INDENT
+                 )?;
+                 writeln!(self.out, "}}")?;
+diff --git a/naga/tests/out/msl/wgsl-msl-vpt-formats-x1.metal b/naga/tests/out/msl/wgsl-msl-vpt-formats-x1.metal
+index 33658c71a..a58e661bc 100644
+--- a/naga/tests/out/msl/wgsl-msl-vpt-formats-x1.metal
++++ b/naga/tests/out/msl/wgsl-msl-vpt-formats-x1.metal
+@@ -122,13 +122,13 @@ metal::float4 unpackUnorm16x4_(metal::ushort b0, metal::ushort b1, metal::ushort
+     return metal::float4(float(b1 << 8 | b0) / 65535.0f, float(b3 << 8 | b2) / 65535.0f, float(b5 << 8 | b4) / 65535.0f, float(b7 << 8 | b6) / 65535.0f);
+ }
+ float unpackSnorm16_(metal::ushort b0, metal::ushort b1) {
+-    return metal::unpack_snorm2x16_to_float(b1 << 8 | b0).x;
++    return metal::max(float(as_type<short>(metal::ushort(b1 << 8 | b0))) / 32767.0f, -1.0f);
+ }
+ metal::float2 unpackSnorm16x2_(uint b0, uint b1, uint b2, uint b3) {
+-    return metal::unpack_snorm2x16_to_float(b3 << 24 | b2 << 16 | b1 << 8 | b0);
++    return metal::max(metal::float2(as_type<short>(metal::ushort(b1 << 8 | b0)), as_type<short>(metal::ushort(b3 << 8 | b2))) / 32767.0f, -1.0f);
+ }
+ metal::float4 unpackSnorm16x4_(uint b0, uint b1, uint b2, uint b3, uint b4, uint b5, uint b6, uint b7) {
+-    return metal::float4(metal::unpack_snorm2x16_to_float(b3 << 24 | b2 << 16 | b1 << 8 | b0), metal::unpack_snorm2x16_to_float(b7 << 24 | b6 << 16 | b5 << 8 | b4));
++    return metal::max(metal::float4(as_type<short>(metal::ushort(b1 << 8 | b0)), as_type<short>(metal::ushort(b3 << 8 | b2)), as_type<short>(metal::ushort(b5 << 8 | b4)), as_type<short>(metal::ushort(b7 << 8 | b6))) / 32767.0f, -1.0f);
+ }
+ float unpackFloat16_(metal::ushort b0, metal::ushort b1) {
+     return float(as_type<half>(metal::ushort(b1 << 8 | b0)));
+diff --git a/naga/tests/out/msl/wgsl-msl-vpt-formats-x2.metal b/naga/tests/out/msl/wgsl-msl-vpt-formats-x2.metal
+index 7459d2a81..b08075eb3 100644
+--- a/naga/tests/out/msl/wgsl-msl-vpt-formats-x2.metal
++++ b/naga/tests/out/msl/wgsl-msl-vpt-formats-x2.metal
+@@ -122,13 +122,13 @@ metal::float4 unpackUnorm16x4_(metal::ushort b0, metal::ushort b1, metal::ushort
+     return metal::float4(float(b1 << 8 | b0) / 65535.0f, float(b3 << 8 | b2) / 65535.0f, float(b5 << 8 | b4) / 65535.0f, float(b7 << 8 | b6) / 65535.0f);
+ }
+ float unpackSnorm16_(metal::ushort b0, metal::ushort b1) {
+-    return metal::unpack_snorm2x16_to_float(b1 << 8 | b0).x;
++    return metal::max(float(as_type<short>(metal::ushort(b1 << 8 | b0))) / 32767.0f, -1.0f);
+ }
+ metal::float2 unpackSnorm16x2_(uint b0, uint b1, uint b2, uint b3) {
+-    return metal::unpack_snorm2x16_to_float(b3 << 24 | b2 << 16 | b1 << 8 | b0);
++    return metal::max(metal::float2(as_type<short>(metal::ushort(b1 << 8 | b0)), as_type<short>(metal::ushort(b3 << 8 | b2))) / 32767.0f, -1.0f);
+ }
+ metal::float4 unpackSnorm16x4_(uint b0, uint b1, uint b2, uint b3, uint b4, uint b5, uint b6, uint b7) {
+-    return metal::float4(metal::unpack_snorm2x16_to_float(b3 << 24 | b2 << 16 | b1 << 8 | b0), metal::unpack_snorm2x16_to_float(b7 << 24 | b6 << 16 | b5 << 8 | b4));
++    return metal::max(metal::float4(as_type<short>(metal::ushort(b1 << 8 | b0)), as_type<short>(metal::ushort(b3 << 8 | b2)), as_type<short>(metal::ushort(b5 << 8 | b4)), as_type<short>(metal::ushort(b7 << 8 | b6))) / 32767.0f, -1.0f);
+ }
+ float unpackFloat16_(metal::ushort b0, metal::ushort b1) {
+     return float(as_type<half>(metal::ushort(b1 << 8 | b0)));
+diff --git a/naga/tests/out/msl/wgsl-msl-vpt-formats-x3.metal b/naga/tests/out/msl/wgsl-msl-vpt-formats-x3.metal
+index 17aea4e72..ee18b3d36 100644
+--- a/naga/tests/out/msl/wgsl-msl-vpt-formats-x3.metal
++++ b/naga/tests/out/msl/wgsl-msl-vpt-formats-x3.metal
+@@ -122,13 +122,13 @@ metal::float4 unpackUnorm16x4_(metal::ushort b0, metal::ushort b1, metal::ushort
+     return metal::float4(float(b1 << 8 | b0) / 65535.0f, float(b3 << 8 | b2) / 65535.0f, float(b5 << 8 | b4) / 65535.0f, float(b7 << 8 | b6) / 65535.0f);
+ }
+ float unpackSnorm16_(metal::ushort b0, metal::ushort b1) {
+-    return metal::unpack_snorm2x16_to_float(b1 << 8 | b0).x;
++    return metal::max(float(as_type<short>(metal::ushort(b1 << 8 | b0))) / 32767.0f, -1.0f);
+ }
+ metal::float2 unpackSnorm16x2_(uint b0, uint b1, uint b2, uint b3) {
+-    return metal::unpack_snorm2x16_to_float(b3 << 24 | b2 << 16 | b1 << 8 | b0);
++    return metal::max(metal::float2(as_type<short>(metal::ushort(b1 << 8 | b0)), as_type<short>(metal::ushort(b3 << 8 | b2))) / 32767.0f, -1.0f);
+ }
+ metal::float4 unpackSnorm16x4_(uint b0, uint b1, uint b2, uint b3, uint b4, uint b5, uint b6, uint b7) {
+-    return metal::float4(metal::unpack_snorm2x16_to_float(b3 << 24 | b2 << 16 | b1 << 8 | b0), metal::unpack_snorm2x16_to_float(b7 << 24 | b6 << 16 | b5 << 8 | b4));
++    return metal::max(metal::float4(as_type<short>(metal::ushort(b1 << 8 | b0)), as_type<short>(metal::ushort(b3 << 8 | b2)), as_type<short>(metal::ushort(b5 << 8 | b4)), as_type<short>(metal::ushort(b7 << 8 | b6))) / 32767.0f, -1.0f);
+ }
+ float unpackFloat16_(metal::ushort b0, metal::ushort b1) {
+     return float(as_type<half>(metal::ushort(b1 << 8 | b0)));
+diff --git a/naga/tests/out/msl/wgsl-msl-vpt-formats-x4.metal b/naga/tests/out/msl/wgsl-msl-vpt-formats-x4.metal
+index a2df5a83f..4e2a89d7a 100644
+--- a/naga/tests/out/msl/wgsl-msl-vpt-formats-x4.metal
++++ b/naga/tests/out/msl/wgsl-msl-vpt-formats-x4.metal
+@@ -122,13 +122,13 @@ metal::float4 unpackUnorm16x4_(metal::ushort b0, metal::ushort b1, metal::ushort
+     return metal::float4(float(b1 << 8 | b0) / 65535.0f, float(b3 << 8 | b2) / 65535.0f, float(b5 << 8 | b4) / 65535.0f, float(b7 << 8 | b6) / 65535.0f);
+ }
+ float unpackSnorm16_(metal::ushort b0, metal::ushort b1) {
+-    return metal::unpack_snorm2x16_to_float(b1 << 8 | b0).x;
++    return metal::max(float(as_type<short>(metal::ushort(b1 << 8 | b0))) / 32767.0f, -1.0f);
+ }
+ metal::float2 unpackSnorm16x2_(uint b0, uint b1, uint b2, uint b3) {
+-    return metal::unpack_snorm2x16_to_float(b3 << 24 | b2 << 16 | b1 << 8 | b0);
++    return metal::max(metal::float2(as_type<short>(metal::ushort(b1 << 8 | b0)), as_type<short>(metal::ushort(b3 << 8 | b2))) / 32767.0f, -1.0f);
+ }
+ metal::float4 unpackSnorm16x4_(uint b0, uint b1, uint b2, uint b3, uint b4, uint b5, uint b6, uint b7) {
+-    return metal::float4(metal::unpack_snorm2x16_to_float(b3 << 24 | b2 << 16 | b1 << 8 | b0), metal::unpack_snorm2x16_to_float(b7 << 24 | b6 << 16 | b5 << 8 | b4));
++    return metal::max(metal::float4(as_type<short>(metal::ushort(b1 << 8 | b0)), as_type<short>(metal::ushort(b3 << 8 | b2)), as_type<short>(metal::ushort(b5 << 8 | b4)), as_type<short>(metal::ushort(b7 << 8 | b6))) / 32767.0f, -1.0f);
+ }
+ float unpackFloat16_(metal::ushort b0, metal::ushort b1) {
+     return float(as_type<half>(metal::ushort(b1 << 8 | b0)));

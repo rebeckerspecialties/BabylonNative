@@ -64,6 +64,7 @@ set(SCRIPTS
     "Scripts/native_xr_portal_ao_r8_validation.js"
     "Scripts/native_xr_portal_color_reuse_validation.js"
     "Scripts/native_xr_portal_render_bundle_validation.js"
+    "Scripts/webgpu_spill_probe.js"
     "Scripts/native_xr_portal_fallback_validation.js"
     "Scripts/native_xr_portal_hillvalley_stress.js"
     "Scripts/native_xr_portal_manual_validation.js"
