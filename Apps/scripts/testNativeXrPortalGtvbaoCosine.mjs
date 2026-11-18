@@ -8,10 +8,24 @@ const require = createRequire(import.meta.url);
 const B = require("babylonjs/babylon.max.js");
 const source = readFileSync(new URL("../Playground/Scripts/native_xr_portal_gtvbao_cosine_validation.js", import.meta.url), "utf8");
 
-function context(transform = (store) => store) {
+function context(transform = (store) => store, transformIncludes = (includes) => includes) {
     const published = B.ShaderStore.ShadersStoreWGSL;
     const store = transform({ ssao2PixelShader: published.ssao2PixelShader, ssaoCombinePixelShader: published.ssaoCombinePixelShader });
-    return vm.createContext({ BABYLON: { ShaderStore: { ShadersStoreWGSL: store }, Camera: B.Camera, Constants: B.Constants, ShaderLanguage: B.ShaderLanguage } });
+    const includes = transformIncludes({ pbrBlockPrePass: B.ShaderStore.IncludesShadersStoreWGSL.pbrBlockPrePass });
+    return vm.createContext({ BABYLON: { ShaderStore: { ShadersStoreWGSL: store, IncludesShadersStoreWGSL: includes }, Camera: B.Camera, Constants: B.Constants, ShaderLanguage: B.ShaderLanguage } });
+}
+
+// The body of a WGSL function in a shader string.
+function functionBody(shader, name) {
+    const start = shader.indexOf("fn " + name + "(");
+    assert.ok(start >= 0, name);
+    const open = shader.indexOf("{", start);
+    let depth = 0;
+    for (let i = open; i < shader.length; i++) {
+        depth += shader[i] === "{" ? 1 : shader[i] === "}" ? -1 : 0;
+        if (depth === 0) return shader.slice(open + 1, i);
+    }
+    throw new Error("unterminated " + name);
 }
 
 function install() {
@@ -22,17 +36,7 @@ function install() {
 
 // Evaluates the shader's own cumulative-distribution code, not a copy of it.
 function sliceCdf(shader) {
-    const body = (name) => {
-        const start = shader.indexOf("fn " + name + "(");
-        assert.ok(start >= 0, name);
-        const open = shader.indexOf("{", start);
-        let depth = 0;
-        for (let i = open; i < shader.length; i++) {
-            depth += shader[i] === "{" ? 1 : shader[i] === "}" ? -1 : 0;
-            if (depth === 0) return shader.slice(open + 1, i);
-        }
-        throw new Error("unterminated " + name);
-    };
+    const body = (name) => functionBody(shader, name);
     const toJs = (text) => text.replace(/\blet\b/g, "const").replace(/(\d+\.\d+(?:e-?\d+)?)/g, "$1");
     const helpers = "const abs = Math.abs, sqrt = Math.sqrt, max = Math.max; const inverseSqrt = (x) => 1 / Math.sqrt(x);" +
         "const clamp = (x, a, b) => Math.min(Math.max(x, a), b); const select = (f, t, c) => (c ? t : f);" +
@@ -53,6 +57,11 @@ test("installs the geometry, AO, filter and upsample shaders together", () => {
     assert.match(store.ssao2PixelShader, /for \(var i = -2; i <= 2; i\+\+\)/);
     assert.match(store.ssao2PixelShader, /select\(2\.0, 1\.0, abs\(i\) == 2\)/);
     assert.match(store.ssaoCombinePixelShader, /var ssaoColor: vec4f = vec4f\(portalUpsampleAo\(uv\)\);/);
+    assert.match(store.ssaoCombinePixelShader, /return mix\(portalSurfaceAo\(uv\), 0\.8500, coverage\);/);
+    // Texels whose depth belongs to a cutout neither receive nor occlude, and no filter or upsample tap reads them.
+    assert.equal(store.ssao2PixelShader.match(/dot\((sampleGeometry|tapGeometry)\.xyz, \1\.xyz\) < 0\.5/g).length, 2);
+    assert.match(store.ssaoCombinePixelShader, /tapDepth == 0\.0 \|\| dot\(geometry\.xyz, geometry\.xyz\) < 0\.5/);
+    assert.match(store.portalAoGeometryPixelShader, /if \(farLength < 0\.6\)/);
     assert.equal(store.ssaoCombinePixelShader.match(/@fragment/g).length, 1);
     // The AO pass reads only the AO-resolution geometry it is handed.
     const ao = store.ssao2PixelShader.slice(0, store.ssao2PixelShader.indexOf("#else"));
@@ -66,28 +75,93 @@ test("a radius chosen before loading is kept", () => {
     assert.equal(c.__nativeArPortalSSAORadius, 0.85);
 });
 
-test("the bilinear switch leaves the published combine shader untouched", () => {
+test("the bilinear switch keeps the published AO read and adds only the cutout visibility", () => {
     const c = context();
     vm.runInContext(readFileSync(new URL("../Playground/Scripts/native_xr_portal_ao_bilinear_upsample.js", import.meta.url), "utf8"), c);
     vm.runInContext(source, c);
     const store = c.BABYLON.ShaderStore.ShadersStoreWGSL;
-    assert.equal(store.ssaoCombinePixelShader, B.ShaderStore.ShadersStoreWGSL.ssaoCombinePixelShader);
+    const published = B.ShaderStore.ShadersStoreWGSL.ssaoCombinePixelShader;
+    const read = /var ssaoColor:\s*vec4f\s*=\s*textureSample\(textureSampler,\s*textureSamplerSampler,\s*uv\);/.exec(published)[0];
+    assert.ok(store.ssaoCombinePixelShader.includes(read + "\nssaoColor = vec4f(mix(ssaoColor.r, 0.8500, portalCutoutCoverage(uv)));"));
+    assert.doesNotMatch(store.ssaoCombinePixelShader, /portalUpsampleAo|geometrySampler|depthSampler/);
+    assert.equal(store.ssaoCombinePixelShader.match(/@fragment/g).length, 1);
     assert.match(store.ssao2PixelShader, /fn portalSliceCdf/);
     // The filter is centered on the texel, so the plain read needs no offset.
     assert.match(store.ssao2PixelShader, /for \(var i = -2; i <= 2; i\+\+\)/);
 });
 
-test("fails closed on a drifted SSAO layout or combine contract", () => {
-    for (const drift of [
-        (store) => ({ ...store, ssao2PixelShader: store.ssao2PixelShader.replace("#ifdef SSAO", "#ifdef OTHER") }),
-        (store) => ({ ...store, ssaoCombinePixelShader: store.ssaoCombinePixelShader.replace("textureSample(textureSampler", "textureSampleLevel(textureSampler") }),
-        (store) => ({ ...store, ssaoCombinePixelShader: store.ssaoCombinePixelShader + "\n@fragment\n" }),
-        (store) => ({ ...store, ssaoCombinePixelShader: undefined }),
+test("fails closed on a drifted SSAO layout, combine contract or pre-pass normal output", () => {
+    const same = (value) => value;
+    for (const [drift, driftIncludes] of [
+        [(store) => ({ ...store, ssao2PixelShader: store.ssao2PixelShader.replace("#ifdef SSAO", "#ifdef OTHER") }), same],
+        [(store) => ({ ...store, ssaoCombinePixelShader: store.ssaoCombinePixelShader.replace("textureSample(textureSampler", "textureSampleLevel(textureSampler") }), same],
+        [(store) => ({ ...store, ssaoCombinePixelShader: store.ssaoCombinePixelShader + "\n@fragment\n" }), same],
+        [(store) => ({ ...store, ssaoCombinePixelShader: undefined }), same],
+        [same, (includes) => ({ pbrBlockPrePass: includes.pbrBlockPrePass.replace("vec4f(normalW,", "vec4f(normalV,") })],
+        [same, (includes) => ({ pbrBlockPrePass: includes.pbrBlockPrePass + includes.pbrBlockPrePass })],
+        [same, () => ({})],
     ]) {
-        const c = context(drift);
+        const c = context(drift, driftIncludes);
         const before = { ...c.BABYLON.ShaderStore.ShadersStoreWGSL };
+        const includesBefore = { ...c.BABYLON.ShaderStore.IncludesShadersStoreWGSL };
         assert.throws(() => vm.runInContext(source, c), /Portal AO requires/);
         assert.deepEqual({ ...c.BABYLON.ShaderStore.ShadersStoreWGSL }, before);
+        assert.deepEqual({ ...c.BABYLON.ShaderStore.IncludesShadersStoreWGSL }, includesBefore);
+    }
+});
+
+test("cutout materials write a zero normal blended by their alpha, other materials their normal", () => {
+    const published = B.ShaderStore.IncludesShadersStoreWGSL.pbrBlockPrePass;
+    const block = install().BABYLON.ShaderStore.IncludesShadersStoreWGSL.pbrBlockPrePass;
+    const marker = "\n#if defined(ALPHABLEND) || defined(ALPHATEST)\nfragData[PREPASS_NORMAL_INDEX] = vec4f(vec3f(0.0), finalColor.a);\n#else\n";
+    // Only the world-space and the view-space normal outputs are wrapped.
+    let expected = published;
+    for (const write of [
+        /fragData\[PREPASS_NORMAL_INDEX\]\s*=\s*vec4f\(normalW,\s*writeGeometryInfo\);/,
+        /fragData\[PREPASS_NORMAL_INDEX\]\s*=\s*vec4f\(normalize\(\(scene\.view\s*\*\s*vec4f\(normalW,\s*0\.0\)\)\.rgb\),\s*writeGeometryInfo\);/,
+    ]) {
+        const original = write.exec(published)[0];
+        expected = expected.replace(original, marker + original + "\n#endif\n");
+    }
+    assert.notEqual(expected, published);
+    assert.equal(block, expected);
+});
+
+test("cutout coverage is the share of the normal that the cutouts removed", () => {
+    const combine = install().BABYLON.ShaderStore.ShadersStoreWGSL.ssaoCombinePixelShader;
+    const expression = /return (clamp\(.*\));/.exec(functionBody(combine, "portalCutoutCoverage"))[1];
+    const coverage = new Function("normal", "const clamp = (x, a, b) => Math.min(Math.max(x, a), b), min = Math.min; const length = (v) => Math.hypot(...v); return " + expression + ";");
+    const texel = (normalLength, alpha) => ({ xyz: [0, normalLength, 0], a: alpha });
+    // An opaque surface, including half-float rounding of its unit normal.
+    assert.equal(coverage(texel(1, 1)), 0);
+    assert.equal(coverage(texel(0.995, 1)), 0);
+    // Nothing drawn.
+    assert.equal(coverage(texel(0, 0)), 0);
+    // One cutout of alpha 0.3 over an opaque surface (alpha accumulates past one), and over nothing.
+    assert.ok(Math.abs(coverage(texel(0.7, 1.3)) - 0.3) < 0.03);
+    assert.ok(Math.abs(coverage(texel(0, 0.3)) - 0.3) < 0.03);
+    // Two cutouts of alpha 0.5 over an opaque surface, and a fully covering one.
+    assert.ok(Math.abs(coverage(texel(0.25, 2)) - 0.75) < 0.03);
+    assert.equal(coverage(texel(0, 1)), 1);
+    let previous = 0;
+    for (let alpha = 0; alpha <= 1.0001; alpha += 0.05) {
+        const value = coverage(texel(1 - alpha, 1 + alpha));
+        assert.ok(value >= previous && value <= 1);
+        previous = value;
+    }
+});
+
+test("the cutout visibility is configurable and validated", () => {
+    const c = context();
+    c.__nativeArPortalCutoutAoVisibility = 0.9;
+    vm.runInContext(source, c);
+    assert.match(c.BABYLON.ShaderStore.ShadersStoreWGSL.ssaoCombinePixelShader, /mix\(portalSurfaceAo\(uv\), 0\.9000, coverage\)/);
+    for (const invalid of [0, -0.1, 1.5, "none"]) {
+        const rejected = context();
+        rejected.__nativeArPortalCutoutAoVisibility = invalid;
+        const before = { ...rejected.BABYLON.ShaderStore.ShadersStoreWGSL };
+        assert.throws(() => vm.runInContext(source, rejected), /cutout visibility/);
+        assert.deepEqual({ ...rejected.BABYLON.ShaderStore.ShadersStoreWGSL }, before);
     }
 });
 

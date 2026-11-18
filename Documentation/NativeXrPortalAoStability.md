@@ -279,8 +279,9 @@ pixel and no texture reads.
 **Black marks inside the windows.** Blended materials were written into the AO
 geometry. A pane wrote its depth, then every blended object behind it that
 happened to draw later overwrote single patches, which the estimator saw as pits
-several meters deep behind a flat surface. The AO geometry now holds opaque
-surfaces only; blended and alpha-cutout materials draw color alone.
+several meters deep behind a flat surface. Panes blended without an alpha
+texture now draw color alone. Alpha-textured cutouts are covered in the next
+section.
 
 Whole-pixel instability with both changes, mean temporal standard deviation:
 
@@ -297,6 +298,49 @@ The AO term is less steady than before on the cafe and orbit poses because the
 estimator now resolves the cluttered interiors behind the glazing, where it
 previously saw one flat pane. The final frame stays at or below the old
 estimator everywhere.
+
+### Foliage and other cutouts
+
+Leaving alpha-textured materials out of the AO geometry removed their speckle
+but left two faults. Bushes and tree crowns received no occlusion at all and
+stood out against the shaded scene, and the AO of whatever stood behind them
+was multiplied into their pixels, so posts and window grilles showed through a
+bush as dark outlines.
+
+Cutouts now stay in the pre-pass. The prelude wraps the PBR pre-pass normal
+output so that a blended or alpha-tested material writes a zero normal with
+its own alpha. Blending then shortens the stored normal by exactly the
+cutout's coverage of that pixel, as softly as its color is blended:
+
+- **The combine pass** reads that coverage and mixes the surface AO with one
+  fixed visibility for the covered share, 0.85 by default
+  (`__nativeArPortalCutoutAoVisibility`). A fully covered pixel skips the
+  upsample.
+- **The AO passes** treat a texel whose depth belongs to a cutout as neither
+  receiver nor occluder, and the filter and upsample skip it, so the lacework
+  never enters the estimate.
+- **Panes** blended without an alpha texture still draw color alone.
+
+With multi-bounce the fixed visibility lowers foliage brightness by 6 to 8%
+(shrubs 62.8 to 59.3, a tree crown 85.6 to 78.5) and leaves the lawn unchanged.
+Mean instability of the final frame, before and after:
+
+| Pose / region | Whole-pixel | Sub-pixel popping |
+| --- | --- | --- |
+| Trees, crown | 0.081 to 0.056 | 2.03 to 2.07 |
+| Trees, hedge | 0.193 to 0.169 | 1.77 to 1.77 |
+| Bushes, hedge | 0.158 to 0.159 | 1.19 to 1.21 |
+| Bushes, tree | 0.325 to 0.141 | 1.09 to 0.97 |
+
+A binary mask from the pre-pass alpha threshold was rejected: it raised crown
+popping to 2.35 and hedge popping to 1.88 and 1.30, because the AO then
+switches at a hard edge inside a softly blended leaf.
+
+The cost is one more full-resolution texture load in the combine pass and the
+cutouts' writes to the two geometry attachments. With fast snapshot rendering
+the Apple TV 4K goes from 29.6 to 28.8 fps in SDR and from 22.4 to 21.9 fps in
+HDR; the iPhone XS Max is unchanged within run-to-run variation at about 50
+fps, and interpreter time does not move.
 
 ### Frame rate
 

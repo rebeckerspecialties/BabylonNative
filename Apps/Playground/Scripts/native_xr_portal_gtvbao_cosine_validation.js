@@ -9,6 +9,29 @@
     if (typeof original !== "string" || !original.includes("#ifdef SSAO") || !original.includes("#ifdef BLUR")) {
         throw new Error("Portal AO requires the published SSAO2 shader layout.");
     }
+    // Alpha cutouts and blended alpha textures (foliage, grilles, wires) are
+    // lacework far finer than an AO texel. Estimated like other surfaces they
+    // alias into a speckle that changes with every sub-texel of motion. They
+    // stay in the pre-pass with a zero normal instead, blended by their own
+    // alpha: the normal that remains is shortened by exactly their coverage.
+    // The combine pass gives the covered share of a pixel one fixed visibility,
+    // and the AO passes ignore texels whose depth belongs to a cutout.
+    var includes = BABYLON.ShaderStore.IncludesShadersStoreWGSL;
+    var prePassBlock = includes && includes.pbrBlockPrePass;
+    // The world-space and view-space normal outputs; the store may hold them with or without spaces.
+    var normalWrites = [
+        /fragData\[PREPASS_NORMAL_INDEX\]\s*=\s*vec4f\(normalW,\s*writeGeometryInfo\);/,
+        /fragData\[PREPASS_NORMAL_INDEX\]\s*=\s*vec4f\(normalize\(\(scene\.view\s*\*\s*vec4f\(normalW,\s*0\.0\)\)\.rgb\),\s*writeGeometryInfo\);/
+    ];
+    if (typeof prePassBlock !== "string" || normalWrites.some(function (write) {
+        return (prePassBlock.match(new RegExp(write.source, "g")) || []).length !== 1;
+    })) {
+        throw new Error("Portal AO requires the published PBR pre-pass normal output.");
+    }
+    var cutoutVisibility = Number(globalThis.__nativeArPortalCutoutAoVisibility ?? 0.85);
+    if (!(cutoutVisibility > 0 && cutoutVisibility <= 1)) {
+        throw new Error("Portal AO cutout visibility must be within (0, 1].");
+    }
     var combine = store.ssaoCombinePixelShader;
     var aoRead = /var ssaoColor:\s*vec4f\s*=\s*textureSample\(textureSampler,\s*textureSamplerSampler,\s*uv\);/;
     if (typeof combine !== "string" || (combine.match(new RegExp(aoRead.source, "g")) || []).length !== 1) {
@@ -28,11 +51,26 @@ fn portalViewPosition(uv: vec2f, depth: f32, depthSign: f32) -> vec3f {
     if ((combine.match(new RegExp(fragmentEntry.source, "g")) || []).length !== 1) {
         throw new Error("Portal AO requires a single SSAO combine entry point.");
     }
+    // Opaque surfaces leave a unit normal with alpha one. Cutouts blend a zero
+    // normal over it, and add their alpha where nothing lies behind them.
+    var cutoutTest = `
+var normalSamplerSampler: sampler;
+var normalSampler: texture_2d<f32>;
+fn portalCutoutCoverage(uv: vec2f) -> f32 {
+    let dimensions = vec2i(textureDimensions(normalSampler));
+    let normal = textureLoad(normalSampler, clamp(vec2i(uv * vec2f(dimensions)), vec2i(0), dimensions - 1), 0);
+    return clamp((min(normal.a, 1.0) - length(normal.xyz) - 0.02) / 0.98, 0.0, 1.0);
+}
+`;
+    var cutoutLiteral = cutoutVisibility.toFixed(4);
     // Plain bilinear magnification spreads AO across silhouettes. Each pixel
     // instead blends only the AO texels whose surface contains it. That costs
-    // nine texture loads per screen pixel; "bilinear" keeps the published read.
+    // ten texture loads per screen pixel; "bilinear" keeps the published read.
     var surfaceAwareUpsample = globalThis.__nativeArPortalAoUpsample !== "bilinear";
-    if (surfaceAwareUpsample) store.ssaoCombinePixelShader = combine.replace(fragmentEntry, `
+    if (!surfaceAwareUpsample) {
+        store.ssaoCombinePixelShader = combine.replace(fragmentEntry, cutoutTest + "@fragment")
+            .replace(aoRead, "$&\nssaoColor = vec4f(mix(ssaoColor.r, " + cutoutLiteral + ", portalCutoutCoverage(uv)));");
+    } else store.ssaoCombinePixelShader = combine.replace(fragmentEntry, `
 var geometrySamplerSampler: sampler;
 var geometrySampler: texture_2d<f32>;
 var depthSamplerSampler: sampler;
@@ -42,7 +80,8 @@ uniform projection: mat4x4f;
 uniform xViewport: f32;
 uniform yViewport: f32;
 ${reconstruction}
-fn portalUpsampleAo(uv: vec2f) -> f32 {
+${cutoutTest}
+fn portalSurfaceAo(uv: vec2f) -> f32 {
     let depthDimensions = vec2i(textureDimensions(depthSampler));
     let depthPixel = clamp(vec2i(uv * vec2f(depthDimensions)), vec2i(0), depthDimensions - 1);
     let signedDepth = textureLoad(depthSampler, depthPixel, 0).r;
@@ -63,7 +102,7 @@ fn portalUpsampleAo(uv: vec2f) -> f32 {
         let pixel = clamp(base + corner, vec2i(0), dimensions - 1);
         let geometry = textureLoad(geometrySampler, pixel, 0);
         let tapDepth = abs(geometry.a);
-        if (tapDepth == 0.0) { continue; }
+        if (tapDepth == 0.0 || dot(geometry.xyz, geometry.xyz) < 0.5) { continue; }
         let tapPosition = portalViewPosition((vec2f(pixel) + 0.5) / size, tapDepth, depthSign);
         let bilinear = mix(vec2f(1.0) - fraction, fraction, vec2f(corner));
         if (abs(dot(geometry.xyz, position - tapPosition)) > tolerance) { continue; }
@@ -73,6 +112,11 @@ fn portalUpsampleAo(uv: vec2f) -> f32 {
     }
     // A surface too small to exist at AO resolution receives no occlusion.
     return select(1.0, sum / max(weight, 1e-6), weight > 0.0);
+}
+fn portalUpsampleAo(uv: vec2f) -> f32 {
+    let coverage = portalCutoutCoverage(uv);
+    if (coverage > 0.999) { return ${cutoutLiteral}; }
+    return mix(portalSurfaceAo(uv), ${cutoutLiteral}, coverage);
 }
 @fragment`).replace(aoRead, "var ssaoColor: vec4f = vec4f(portalUpsampleAo(uv));");
 
@@ -127,7 +171,9 @@ fn main(input: FragmentInputs) -> FragmentOutputs {
     }
     let farNormal = normals[farIndex];
     let farLength = length(farNormal);
-    if (farLength < 1e-6) {
+    // Depth is written where a cutout's alpha exceeds the pre-pass threshold of
+    // 0.4, which leaves less than 0.6 of the normal behind it.
+    if (farLength < 0.6) {
         fragmentOutputs.color = vec4f(0.0, 0.0, 0.0, depthSign * farDepth);
         return fragmentOutputs;
     }
@@ -283,8 +329,10 @@ fn main(input: FragmentInputs) -> FragmentOutputs {
                 if (any(uv < vec2f(0.0)) || any(uv >= vec2f(1.0))) { continue; }
                 // Reconstruct at the actual nearest texel center, not the unsnapped ray.
                 let pixel = vec2i(uv * size);
-                let sampleDepth = abs(textureLoad(textureSampler, pixel, 0).a);
-                if (sampleDepth == 0.0) { continue; }
+                let sampleGeometry = textureLoad(textureSampler, pixel, 0);
+                let sampleDepth = abs(sampleGeometry.a);
+                // Cutouts do not occlude: their coverage flips with sub-texel motion.
+                if (sampleDepth == 0.0 || dot(sampleGeometry.xyz, sampleGeometry.xyz) < 0.5) { continue; }
                 let samplePosition = portalViewPosition((vec2f(pixel) + 0.5) / size, sampleDepth, depthSign);
                 let delta = samplePosition - position;
                 let footprint = sampleDepth * texelFootprint;
@@ -345,8 +393,9 @@ fn main(input: FragmentInputs) -> FragmentOutputs {
             let pixel = centerPixel + vec2i(0, i);
 #endif
             if (any(pixel < vec2i(0)) || any(pixel >= dimensions)) { continue; }
-            let tapDepth = abs(textureLoad(depthSampler, pixel, 0).a);
-            if (tapDepth == 0.0) { continue; }
+            let tapGeometry = textureLoad(depthSampler, pixel, 0);
+            let tapDepth = abs(tapGeometry.a);
+            if (tapDepth == 0.0 || dot(tapGeometry.xyz, tapGeometry.xyz) < 0.5) { continue; }
             let tapPosition = portalViewPosition((vec2f(pixel) + 0.5) / size, tapDepth, depthSign);
             if (abs(dot(normal, tapPosition - position)) > tolerance) { continue; }
             let tapWeight = select(2.0, 1.0, abs(i) == 2);
@@ -362,6 +411,10 @@ fn main(input: FragmentInputs) -> FragmentOutputs {
 #endif
 #endif
 `;
+
+    includes.pbrBlockPrePass = normalWrites.reduce(function (block, write) {
+        return block.replace(write, "\n#if defined(ALPHABLEND) || defined(ALPHATEST)\nfragData[PREPASS_NORMAL_INDEX] = vec4f(vec3f(0.0), finalColor.a);\n#else\n$&\n#endif\n");
+    }, prePassBlock);
 
     globalThis.__nativeArPortalBenchmarkLabel = "gtvbao-cosine-v5";
     // The occluders within the radius count as unlit. Past contact range that
@@ -433,11 +486,14 @@ fn main(input: FragmentInputs) -> FragmentOutputs {
             effect.setMatrix3x3("normalToView", normalToView);
         };
         ssao.onApply = function () {};
-        if (surfaceAwareUpsample) combinePass.onApplyObservable.add(function (effect) {
+        combinePass.onApplyObservable.add(function (effect) {
+            var target = prepass.getRenderTarget();
+            effect.setTexture("normalSampler", target.textures[prepass.getIndex(BABYLON.Constants.PREPASS_NORMAL_TEXTURE_TYPE)]);
+            if (!surfaceAwareUpsample) return;
             // The published combine effect declares no such sampler, and the engine
             // only binds post-process inputs to declared channels.
             engine._bindTexture(0, ssao.inputTexture.texture, "geometrySampler");
-            effect.setTexture("depthSampler", prepass.getRenderTarget().textures[prepass.getIndex(BABYLON.Constants.PREPASS_DEPTH_TEXTURE_TYPE)]);
+            effect.setTexture("depthSampler", target.textures[prepass.getIndex(BABYLON.Constants.PREPASS_DEPTH_TEXTURE_TYPE)]);
             effect.setFloat("maxZ", pipeline.maxZ);
             bindReconstruction(effect);
         });
@@ -447,23 +503,23 @@ fn main(input: FragmentInputs) -> FragmentOutputs {
                 bindReconstruction(effect);
             };
         });
-        // AO geometry holds opaque surfaces only. Blended surfaces are drawn back
-        // to front without depth writes, so one that overwrote the geometry would
-        // leave whatever is drawn after it standing in a pit behind a pane. Alpha
-        // cutouts (foliage, grilles, wires) are lacework far finer than an AO
-        // texel: as occluders or receivers they only alias. Both draw color alone.
-        var cutouts = scene.materials.filter(function (material) {
+        // Panes blended without an alpha texture draw color alone. They are drawn
+        // back to front without depth writes, so one that overwrote the geometry
+        // would leave whatever is drawn after it standing in a pit behind it.
+        var cutouts = 0;
+        var panes = scene.materials.filter(function (material) {
             var texture = material.albedoTexture || material.diffuseTexture;
-            return (material.needAlphaBlending() || (texture && texture.hasAlpha && material.needAlphaTesting())) &&
-                prepass.excludedMaterials.indexOf(material) === -1;
+            var alphaTextured = !!(texture && texture.hasAlpha);
+            if (alphaTextured && (material.needAlphaBlending() || material.needAlphaTesting())) cutouts++;
+            return material.needAlphaBlending() && !alphaTextured && prepass.excludedMaterials.indexOf(material) === -1;
         });
-        cutouts.forEach(function (material) { prepass.excludedMaterials.push(material); });
+        panes.forEach(function (material) { prepass.excludedMaterials.push(material); });
         camera.attachPostProcess(geometry, 0);
         if (camera._getFirstPostProcess() !== geometry) {
             throw new Error("Portal AO geometry must be the first post-process.");
         }
         scene.onDisposeObservable.add(function () { geometry.dispose(camera); });
         status("native-xr-portal:gtvbao=cosine-weighted:slices=2:stepsPerSide=2:bits=32:noise=ordered-4x4:filter=box4*box2" +
-            ":geometry=ao-resolution-plane-filtered:upsample=" + (surfaceAwareUpsample ? "surface-aware" : "bilinear") + ":color-only-materials=" + cutouts.length);
+            ":geometry=ao-resolution-plane-filtered:upsample=" + (surfaceAwareUpsample ? "surface-aware" : "bilinear") + ":color-only-panes=" + panes.length + ":cutouts=" + cutouts + ":cutout-visibility=" + cutoutLiteral);
     }
 })();
