@@ -29,8 +29,10 @@ fn portalViewPosition(uv: vec2f, depth: f32, depthSign: f32) -> vec3f {
         throw new Error("Portal AO requires a single SSAO combine entry point.");
     }
     // Plain bilinear magnification spreads AO across silhouettes. Each pixel
-    // instead blends only the AO texels whose surface contains it.
-    store.ssaoCombinePixelShader = combine.replace(fragmentEntry, `
+    // instead blends only the AO texels whose surface contains it. That costs
+    // nine texture loads per screen pixel; "bilinear" keeps the published read.
+    var surfaceAwareUpsample = globalThis.__nativeArPortalAoUpsample !== "bilinear";
+    if (surfaceAwareUpsample) store.ssaoCombinePixelShader = combine.replace(fragmentEntry, `
 var geometrySamplerSampler: sampler;
 var geometrySampler: texture_2d<f32>;
 var depthSamplerSampler: sampler;
@@ -426,7 +428,7 @@ fn main(input: FragmentInputs) -> FragmentOutputs {
             effect.setMatrix3x3("normalToView", normalToView);
         };
         ssao.onApply = function () {};
-        combinePass.onApplyObservable.add(function (effect) {
+        if (surfaceAwareUpsample) combinePass.onApplyObservable.add(function (effect) {
             // The published combine effect declares no such sampler, and the engine
             // only binds post-process inputs to declared channels.
             engine._bindTexture(0, ssao.inputTexture.texture, "geometrySampler");
@@ -455,6 +457,6 @@ fn main(input: FragmentInputs) -> FragmentOutputs {
         }
         scene.onDisposeObservable.add(function () { geometry.dispose(camera); });
         status("native-xr-portal:gtvbao=cosine-weighted:slices=2:stepsPerSide=2:bits=32:noise=ordered-4x4:filter=box4*box2" +
-            ":geometry=ao-resolution-plane-filtered:upsample=surface-aware:cutouts-excluded=" + cutouts.length);
+            ":geometry=ao-resolution-plane-filtered:upsample=" + (surfaceAwareUpsample ? "surface-aware" : "bilinear") + ":cutouts-excluded=" + cutouts.length);
     }
 })();

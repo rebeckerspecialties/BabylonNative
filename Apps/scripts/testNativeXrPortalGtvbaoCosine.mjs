@@ -58,6 +58,17 @@ test("installs the geometry, AO, filter and upsample shaders together", () => {
     assert.doesNotMatch(ao, /depthSampler|normalSampler|randomSampler/);
 });
 
+test("the bilinear switch leaves the published combine shader untouched", () => {
+    const c = context();
+    vm.runInContext(readFileSync(new URL("../Playground/Scripts/native_xr_portal_ao_bilinear_upsample.js", import.meta.url), "utf8"), c);
+    vm.runInContext(source, c);
+    const store = c.BABYLON.ShaderStore.ShadersStoreWGSL;
+    assert.equal(store.ssaoCombinePixelShader, B.ShaderStore.ShadersStoreWGSL.ssaoCombinePixelShader);
+    assert.match(store.ssao2PixelShader, /fn portalSliceCdf/);
+    // The filter is centered on the texel, so the plain read needs no offset.
+    assert.match(store.ssao2PixelShader, /for \(var i = -2; i <= 2; i\+\+\)/);
+});
+
 test("fails closed on a drifted SSAO layout or combine contract", () => {
     for (const drift of [
         (store) => ({ ...store, ssao2PixelShader: store.ssao2PixelShader.replace("#ifdef SSAO", "#ifdef OTHER") }),
