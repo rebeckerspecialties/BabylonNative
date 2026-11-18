@@ -9,7 +9,7 @@
     "getNightly": "node scripts/getNightly.js",
     "test:babylonjs:bundle": "node --test scripts/testBabylonPublishedBundle.mjs",
     "test:babylonjs:uniforms": "node scripts/testBabylonSharedUniforms.mjs",
-    "test:babylonjs:optimizations": "node --test scripts/testBabylonAccessorInlining.mjs scripts/testBabylonBundleContract.mjs scripts/testBabylonConstantFolding.mjs scripts/testBabylonCommandEncoding.mjs scripts/testBabylonUniformLoop.mjs scripts/testLoopInvariantTransformer.mjs scripts/testBabylonPublishedBundle.mjs scripts/testNativeXrPortalMovingBenchmark.mjs",
+    "test:babylonjs:optimizations": "node --test scripts/testBabylonAccessorInlining.mjs scripts/testBabylonBundleContract.mjs scripts/testBabylonConstantFolding.mjs scripts/testBabylonCommandEncoding.mjs scripts/testBabylonUniformLoop.mjs scripts/testLoopInvariantTransformer.mjs scripts/testBabylonPublishedBundle.mjs scripts/testBabylonSnapshotGroupClears.mjs scripts/testNativeXrPortalMovingBenchmark.mjs",
     "build:babylonjs:bundle": "node scripts/buildBabylonBundle.mjs --install",
     "verify:babylonjs:bundle": "node scripts/verifyBabylonBundle.mjs",
     "patch:babylonjs:check": "node scripts/applyBabylonJsPatchStack.js --check",

@@ -9,3 +9,4 @@
 0005-shared-material-uniform-buffers.patch
 0006-uniform-loop-invariant.patch
 0007-accessor-state-expressions.patch
+0008-fast-snapshot-rendering-group-clears.patch

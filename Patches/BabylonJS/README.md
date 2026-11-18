@@ -84,6 +84,28 @@ pixel-identical fixed-pose captures. This is one ordered pair, not a confidence
 interval; a patch-only sustained phone speedup has not been established. See
 the November 14 CPU-attribution section of `Documentation/NativeXrPortalProfiling.md`.
 
+## Fast Snapshot Rendering
+
+`0008-fast-snapshot-rendering-group-clears.patch` makes WebGPU fast snapshot
+rendering usable when meshes are in more than one rendering group. The
+depth/stencil clear before a group ends the current render pass. A snapshot
+replays one recorded list of draws per render pass, in order, and in fast mode
+the rendering groups are empty, so the clear was skipped: the replayed frame
+had one render pass fewer than the recorded one and every later pass replayed
+another pass's draws, which fails pipeline validation behind a pre-pass with
+several attachments. The rendering manager now records the clear it issues
+before each group, per render pass id, and issues it again when the engine
+replays the groups. Ordinary rendering is unchanged.
+
+The source patch carries eleven Vitest cases. The installed bundle is checked
+by execution:
+
+    node --test Apps/scripts/testBabylonSnapshotGroupClears.mjs
+
+`native_xr_portal_fast_snapshot_validation.js` enables the mode for the static
+portal workload. Measurements are in
+`Documentation/NativeXrPortalAoStability.md`.
+
 ## Shared Material Buffers
 
 `0005-shared-material-uniform-buffers.patch` makes the built-in WGSL PBR
@@ -140,6 +162,7 @@ master `d87d0ca6cf50c6608ec96653ff15418dfeaaae47`:
 | 0005 shared PBR buffers | [#14](https://github.com/rebeckerspecialties/Babylon.js/pull/14) | `1413360dbeaa` |
 | 0006 matrix check policy | [#15](https://github.com/rebeckerspecialties/Babylon.js/pull/15) | `63ac80efa4` |
 | 0007 accessor state expressions | [#16](https://github.com/rebeckerspecialties/Babylon.js/pull/16), stacked on #12 | `e0248aeeca` |
+| 0008 fast snapshot group clears | [#17](https://github.com/rebeckerspecialties/Babylon.js/pull/17) | `10c4e01a03` |
 
 These are fork drafts, not upstream submissions or merged changes. The bundle
 specialization retains the compatibility limitations above. The test runs use
