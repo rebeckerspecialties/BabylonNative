@@ -129,6 +129,7 @@ namespace Babylon::Embedding
             config.Width = lw;
             config.Height = lh;
             config.MSAASamples = m_runtime.m_options.msaaSamples;
+            config.Hdr10 = m_runtime.m_options.hdr10;
 
             m_runtime.m_device.emplace(config);
         }

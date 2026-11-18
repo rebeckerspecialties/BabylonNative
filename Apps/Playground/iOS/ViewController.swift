@@ -246,7 +246,8 @@ class ViewController: UIViewController {
             view.colorPixelFormat = .rgba16Float
             if let layer = view.layer as? CAMetalLayer {
                 layer.pixelFormat = view.colorPixelFormat
-                layer.colorspace = CGColorSpace(name: CGColorSpace.extendedLinearITUR_2020)
+                // Canvas output is sRGB encoded, including float HDR canvases.
+                layer.colorspace = CGColorSpace(name: CGColorSpace.extendedSRGB)
                 if #available(tvOS 18.0, iOS 18.0, *) {
                     layer.toneMapMode = .ifSupported
                 }
@@ -263,7 +264,7 @@ class ViewController: UIViewController {
         view.colorPixelFormat = .bgra8Unorm_srgb
         if let layer = view.layer as? CAMetalLayer {
             layer.pixelFormat = view.colorPixelFormat
-            layer.colorspace = CGColorSpace(name: CGColorSpace.extendedLinearDisplayP3)
+            layer.colorspace = CGColorSpace(name: CGColorSpace.sRGB)
         }
         #else
         view.colorPixelFormat = .bgra8Unorm_srgb

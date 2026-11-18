@@ -15,6 +15,10 @@ namespace Babylon::Embedding
         // Anything else disables MSAA.
         uint8_t msaaSamples{4};
 
+        // Request the graphics backend's HDR10/EDR presentation path.
+        // The host must also configure a compatible display and color space.
+        bool hdr10{false};
+
         // Enable the JavaScript debugger. Only implemented for V8 and Chakra.
         bool enableDebugger{false};
 

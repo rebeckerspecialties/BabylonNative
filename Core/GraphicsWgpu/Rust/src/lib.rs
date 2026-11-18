@@ -8632,8 +8632,17 @@ mod upstream_wgpu_native {
             .ok_or_else(|| "Surface returned no default configuration.".to_string())?;
 
         let caps = surface.get_capabilities(adapter);
-        if hdr10 && caps.formats.contains(&wgpu::TextureFormat::Rgba16Float) {
+        let encoded_hdr_supported = caps
+            .color_spaces(wgpu::TextureFormat::Rgba16Float)
+            .contains(wgpu::SurfaceColorSpaces::EXTENDED_SRGB);
+        if hdr10 && !encoded_hdr_supported {
+            return Err("HDR canvas presentation requires Rgba16Float with the extended sRGB transfer; this surface does not support that pair. Disable HDR for SDR presentation.".to_string());
+        }
+        if hdr10 {
             config.format = wgpu::TextureFormat::Rgba16Float;
+            // WebGPU's default canvas color space uses the sRGB transfer even
+            // for float textures. Auto selects linear scRGB on native Metal.
+            config.color_space = wgpu::SurfaceColorSpace::ExtendedSrgb;
             config.view_formats = vec![];
         } else if caps.formats.contains(&wgpu::TextureFormat::Bgra8UnormSrgb) {
             config.format = wgpu::TextureFormat::Bgra8UnormSrgb;
@@ -8654,8 +8663,8 @@ mod upstream_wgpu_native {
 
         surface.configure(device, &config);
         eprintln!(
-            "NativeWebGPU surface configured: size={}x{} format={:?} hdr10={} formats={:?}",
-            config.width, config.height, config.format, hdr10, caps.formats
+            "NativeWebGPU surface configured: size={}x{} format={:?} colorSpace={:?} hdr10={} formats={:?}",
+            config.width, config.height, config.format, config.color_space, hdr10, caps.formats
         );
         Ok(config)
     }

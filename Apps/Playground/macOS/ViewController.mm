@@ -135,17 +135,15 @@ namespace
 
         CAMetalLayer* layer = (CAMetalLayer*)engineView.layer;
         layer.pixelFormat = MTLPixelFormatRGBA16Float;
-        CGColorSpaceRef colorSpace = CGColorSpaceCreateWithName(kCGColorSpaceExtendedLinearITUR_2020);
+        // Canvas output is sRGB encoded, including float HDR canvases. Tagging it
+        // as linear, or attaching HDR10 mastering metadata, lifts the midtones.
+        CGColorSpaceRef colorSpace = CGColorSpaceCreateWithName(kCGColorSpaceExtendedSRGB);
         layer.colorspace = colorSpace;
         if (colorSpace != nullptr)
         {
             CGColorSpaceRelease(colorSpace);
         }
-
-        if (@available(macOS 10.15, *))
-        {
-            layer.EDRMetadata = [CAEDRMetadata HDR10MetadataWithMinLuminance:0.005f maxLuminance:1000.0f opticalOutputScale:100.0f];
-        }
+        layer.wantsExtendedDynamicRangeContent = YES;
         if (@available(macOS 15.0, *))
         {
             layer.toneMapMode = CAToneMapModeIfSupported;
@@ -353,6 +351,7 @@ namespace
     }
 
     BNRuntimeOptions* options = [[BNRuntimeOptions alloc] init];
+    options.hdr10 = playgroundOptions.Hdr10 ? YES : NO;
     options.enableDebugger = YES;
     options.enableDebugTrace = playgroundOptions.DebugTrace.value_or(true) ? YES : NO;
     _runtime = [[BNRuntime alloc] initWithOptions:options];

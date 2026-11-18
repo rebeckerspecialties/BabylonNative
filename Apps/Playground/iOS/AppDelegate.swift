@@ -22,6 +22,7 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
 
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
         let runtimeOptions = BNRuntimeOptions()
+        runtimeOptions.hdr10 = CommandLine.arguments.contains("--hdr10")
         runtimeOptions.enableDebugger = true
         runtimeOptions.enableDebugTrace = true
         guard let runtime = BNRuntime(options: runtimeOptions) else {

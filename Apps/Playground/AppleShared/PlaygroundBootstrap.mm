@@ -80,6 +80,7 @@ namespace
             auto js = Napi::Object::New(env);
             js.Set("listTests", Napi::Boolean::New(env, options.ListTests));
             js.Set("headless", Napi::Boolean::New(env, options.Headless));
+            js.Set("hdr10", Napi::Boolean::New(env, options.Hdr10));
             js.Set("breakOnFail", Napi::Boolean::New(env, options.BreakOnFail));
             js.Set("generateReferences", Napi::Boolean::New(env, options.GenerateReferences));
             js.Set("runOnce", Napi::Boolean::New(env, options.RunOnce));

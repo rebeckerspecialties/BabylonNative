@@ -75,6 +75,7 @@ namespace
                 options.msaaSamples = ToRuntimeMSAASamples(runtimeOptions.msaaSamples);
             }
             options.enableDebugger = runtimeOptions.enableDebugger ? true : false;
+            options.hdr10 = runtimeOptions.hdr10 ? true : false;
             options.enableDebugTrace = runtimeOptions.enableDebugTrace ? true : false;
             options.waitForDebugger = runtimeOptions.waitForDebugger ? true : false;
         }

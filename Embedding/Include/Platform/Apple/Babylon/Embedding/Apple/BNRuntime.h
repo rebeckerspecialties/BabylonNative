@@ -18,6 +18,10 @@ NS_ASSUME_NONNULL_BEGIN
 /// Defaults to the shared C++ RuntimeOptions value when nil.
 @property (nonatomic, strong, nullable) NSNumber* msaaSamples;
 
+/// Request HDR10/EDR presentation. The host must also configure its display/layer.
+/// Defaults to NO, matching the shared C++ RuntimeOptions default.
+@property (nonatomic) BOOL hdr10;
+
 /// Enable the JavaScript debugger when supported by the configured JS engine.
 /// Defaults to NO, matching the shared C++ RuntimeOptions default.
 @property (nonatomic) BOOL enableDebugger;
