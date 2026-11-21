@@ -159,12 +159,12 @@ namespace xr
                 return false;
             }
 
-            auto appContext = android::global::GetAppContext();
-            auto currentActivity = android::global::GetCurrentActivity();
-            if (static_cast<jobject>(appContext) == nullptr || static_cast<jobject>(currentActivity) == nullptr)
+            auto currentActivity = android::global::TryGetCurrentActivity();
+            if (!currentActivity)
             {
                 return false;
             }
+            auto appContext = android::global::GetAppContext();
 
             PFN_xrInitializeLoaderKHR initializeLoader{};
             if (XR_SUCCEEDED(xrGetInstanceProcAddr(
@@ -195,7 +195,7 @@ namespace xr
 
             auto androidCreateInfo = MakeXr<XrInstanceCreateInfoAndroidKHR>(XR_TYPE_INSTANCE_CREATE_INFO_ANDROID_KHR);
             androidCreateInfo.applicationVM = javaVm;
-            androidCreateInfo.applicationActivity = static_cast<jobject>(currentActivity);
+            androidCreateInfo.applicationActivity = static_cast<jobject>(*currentActivity);
 
             const std::array<const char*, 2> enabledExtensions{
                 XR_KHR_ANDROID_CREATE_INSTANCE_EXTENSION_NAME,
