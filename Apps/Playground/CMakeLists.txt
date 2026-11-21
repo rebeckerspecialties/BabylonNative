@@ -55,6 +55,7 @@ set(SCRIPTS
     "Scripts/native_xr_portal_ao_projection_validation.js"
     "Scripts/native_xr_portal_gtvbao_validation.js"
     "Scripts/native_xr_portal_ao_bilinear_upsample.js"
+    "Scripts/native_xr_portal_ao_full_precision.js"
     "Scripts/native_xr_portal_ao_layout_2x2.js"
     "Scripts/native_xr_portal_ao_layout_2x3.js"
     "Scripts/native_xr_portal_ao_layout_2x5.js"

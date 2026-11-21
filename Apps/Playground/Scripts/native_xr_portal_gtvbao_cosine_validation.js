@@ -51,6 +51,63 @@
         ? "for (var side = -1.0; side <= 1.0; side += 2.0) {"
         : "for (var sideIndex = 0u; sideIndex < 1u; sideIndex++) {\n" +
           "                let side = select(-1.0, 1.0, ((stepIndex + slice + cell.x + cell.y) & 1u) == 0u);";
+    // "half" evaluates each sample's slab and slice angles in 16-bit floats, in
+    // units of the AO radius. Reconstruction, depth and the plane tests stay f32.
+    var precision = globalThis.__nativeArPortalAoPrecision ?? "half";
+    if (precision !== "full" && precision !== "half") {
+        throw new Error("Unknown portal AO precision: " + precision);
+    }
+    var halfPrecision = precision === "half";
+    var sampleTail = halfPrecision ? `let offset = vec3h(delta * inverseRadius);
+                let rayH = vec3h(ray);
+                let b = dot(offset, rayH);
+                let discriminant = b * b - dot(offset, offset) + 1.0h;
+                if (discriminant <= 0.0h) { continue; }
+                let extent = sqrt(discriminant);
+                let near = max(0.0h, -b - extent);
+                let far = min(f16(thickness * inverseRadius), extent - b);
+                if (far <= near) { continue; }
+                let start = vec2h(dot(offset, viewH), dot(offset, tangentH));
+                let along = vec2h(dot(rayH, viewH), dot(rayH, tangentH));
+                mask |= portalIntervalMask(
+                    f32(portalSliceCdfHalf(start + along * near, sliceH)),
+                    f32(portalSliceCdfHalf(start + along * far, sliceH)), jitter);` : `let interval = portalClipSlab(delta, ray, thickness, radiusSquared);
+                if (interval.y <= interval.x) { continue; }
+                // The slab's two ends, as components along the view vector and the tangent.
+                let start = vec2f(dot(delta, view), dot(delta, tangent));
+                let along = vec2f(dot(ray, view), dot(ray, tangent));
+                let front = start + along * interval.x;
+                let back = start + along * interval.y;
+                mask |= portalIntervalMask(
+                    portalSliceCdf(front.x, front.y, sinGamma, cosGamma, lower, inverseTotal),
+                    portalSliceCdf(back.x, back.y, sinGamma, cosGamma, lower, inverseTotal), jitter);`;
+    var halfFunctions = halfPrecision ? `
+// portalSliceCdf for a point given by its view and tangent components, in
+// 16-bit floats. slice is (sinGamma, cosGamma, lower, inverseTotal).
+fn portalSliceCdfHalf(point: vec2h, slice: vec4h) -> f16 {
+    // Only the direction matters. Contact samples are a few thousandths of the
+    // radius away, and their squares would fall below the smallest normal half.
+    let p = point * select(1.0h, 64.0h, max(abs(point.x), abs(point.y)) < 0.015625h);
+    if (p.x * slice.y + p.y * slice.x <= 0.0h) {
+        return select(0.0h, 1.0h, p.y >= 0.0h);
+    }
+    let inverseLength = inverseSqrt(max(dot(p, p), 0.0001h));
+    let c = clamp(p.x * inverseLength, -1.0h, 1.0h);
+    let s = abs(p.y) * inverseLength;
+    let a = abs(c);
+    let r = (1.5707963h - 0.156583h * a) * sqrt(1.0h - a);
+    let angle = select(3.14159265h - r, r, c >= 0.0h);
+    let cos2 = 2.0h * c * c - 1.0h;
+    let sin2 = 2.0h * c * s;
+    let towards = slice.z + 0.5h * slice.y - 0.25h * (cos2 * slice.y + sin2 * slice.x) + 0.5h * angle * slice.x;
+    let away = slice.z + 0.25h * (cos2 * slice.y - sin2 * slice.x) + 0.5h * angle * slice.x;
+    return clamp(select(away, towards, p.y >= 0.0h) * slice.w, 0.0h, 1.0h);
+}
+` : "";
+    var halfSlice = halfPrecision ? `
+        let viewH = vec3h(view);
+        let tangentH = vec3h(tangent);
+        let sliceH = vec4h(vec4f(sinGamma, cosGamma, lower, inverseTotal));` : "";
     // Slices are a fixed angle apart, so each is the previous one rotated by constants.
     var sliceAngle = Math.PI / sampleLayout.slices;
     var sliceCos = Math.cos(sliceAngle).toFixed(9);
@@ -228,6 +285,28 @@ fn main(input: FragmentInputs) -> FragmentOutputs {
 }
 `;
 
+    if (halfPrecision) {
+        // Babylon's finalizer prepends structs, so an enable directive inside the
+        // shader would come too late; it is added to the finished AO shader.
+        var configureEngine = globalThis.__nativePlaygroundConfigureEngine;
+        globalThis.__nativePlaygroundConfigureEngine = function (engine) {
+            if (configureEngine) configureEngine(engine);
+            if (!engine.enabledExtensions.includes("shader-f16")) {
+                throw new Error("Half-precision portal AO requires shader-f16 on the device.");
+            }
+            var processor = engine._getShaderProcessor(BABYLON.ShaderLanguage.WGSL);
+            var finalize = processor && processor.finalizeShaders;
+            if (typeof finalize !== "function") throw new Error("Half-precision portal AO requires the WebGPU WGSL finalizer.");
+            processor.finalizeShaders = function (vertex, fragment) {
+                var result = finalize.call(this, vertex, fragment);
+                if (result.fragmentCode.includes("portalSliceCdfHalf(") && !result.fragmentCode.startsWith("enable f16;")) {
+                    result.fragmentCode = "enable f16;\n" + result.fragmentCode;
+                }
+                return result;
+            };
+        };
+        globalThis.__nativePlaygroundRequiredFeatures = Array.from(new Set((globalThis.__nativePlaygroundRequiredFeatures || []).concat(["shader-f16"])));
+    }
     store.ssao2PixelShader = `
 varying vUV: vec2f;
 var textureSamplerSampler: sampler;
@@ -289,6 +368,7 @@ fn portalClipSlab(delta: vec3f, ray: vec3f, thickness: f32, radiusSquared: f32) 
     return vec2f(max(0.0, -b - extent), min(thickness, -b + extent));
 }
 
+${halfFunctions}
 // Position of a cell in the 4x4 ordered-dither sequence. Every 4x4 block of
 // AO texels holds each of the 16 phases once. A static random field would
 // instead show through moving shadows as a pattern fixed to the screen.
@@ -326,6 +406,7 @@ fn main(input: FragmentInputs) -> FragmentOutputs {
     let centerClip = uniforms.projection * vec4f(position, 1.0);
     let safeRadius = max(uniforms.radius, 1e-4);
     let radiusSquared = safeRadius * safeRadius;
+    let inverseRadius = 1.0 / safeRadius;
     // Every sample is reconstructed as depth times this ray through its texel.
     let rayScale = 2.0 * inverseSize * vec2f(uniforms.xViewport, uniforms.yViewport);
     let rayOffset = (inverseSize - 1.0 - uniforms.projection[2].xy * depthSign) * vec2f(uniforms.xViewport, uniforms.yViewport);
@@ -345,7 +426,7 @@ fn main(input: FragmentInputs) -> FragmentOutputs {
         let lower = 0.25 * cosGamma + 0.5 * (gamma - 1.5707963) * sinGamma;
         let inverseTotal = 1.0 / total;
         let clipDirection = uniforms.projection * vec4f(tangent * safeRadius, 0.0);
-        let jitter = fract(noise.y + f32(slice) * 0.61803398875);
+        let jitter = fract(noise.y + f32(slice) * 0.61803398875);${halfSlice}
         var mask = 0u;
         for (var stepIndex = 0u; stepIndex < PORTAL_STEPS_PER_SIDE; stepIndex++) {
             let sampleNoise = fract(noise.y + f32(slice + stepIndex * PORTAL_STEPS_PER_SIDE) * 0.61803398875);
@@ -369,16 +450,7 @@ fn main(input: FragmentInputs) -> FragmentOutputs {
                 // Thickness follows this sample's camera ray, not the center pixel's ray.
                 let ray = normalize(sampleRay);
                 let thickness = portalThickness(height, dot(ray, normal), footprint, safeRadius);
-                let interval = portalClipSlab(delta, ray, thickness, radiusSquared);
-                if (interval.y <= interval.x) { continue; }
-                // The slab's two ends, as components along the view vector and the tangent.
-                let start = vec2f(dot(delta, view), dot(delta, tangent));
-                let along = vec2f(dot(ray, view), dot(ray, tangent));
-                let front = start + along * interval.x;
-                let back = start + along * interval.y;
-                mask |= portalIntervalMask(
-                    portalSliceCdf(front.x, front.y, sinGamma, cosGamma, lower, inverseTotal),
-                    portalSliceCdf(back.x, back.y, sinGamma, cosGamma, lower, inverseTotal), jitter);
+${sampleTail}
             }
         }
         // Each slice carries the projected normal's length times its unoccluded integral.
@@ -554,7 +626,7 @@ fn main(input: FragmentInputs) -> FragmentOutputs {
         }
         scene.onDisposeObservable.add(function () { geometry.dispose(camera); });
         status("native-xr-portal:gtvbao=cosine-weighted:slices=" + sampleLayout.slices + ":stepsPerSide=" + sampleLayout.steps +
-            ":samples=" + sampleLayout.slices * sampleLayout.steps * (sampleLayout.paired ? 2 : 1) + ":bits=32:noise=ordered-4x4:filter=box4*box2" +
+            ":samples=" + sampleLayout.slices * sampleLayout.steps * (sampleLayout.paired ? 2 : 1) + ":bits=32:precision=" + precision + ":noise=ordered-4x4:filter=box4*box2" +
             ":geometry=ao-resolution-plane-filtered:upsample=" + (surfaceAwareUpsample ? "surface-aware" : "bilinear") + ":color-only-panes=" + panes.length + ":cutouts=" + cutouts + ":cutout-visibility=" + cutoutLiteral);
     }
 })();

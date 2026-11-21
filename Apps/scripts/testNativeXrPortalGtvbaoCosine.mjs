@@ -12,7 +12,8 @@ function context(transform = (store) => store, transformIncludes = (includes) =>
     const published = B.ShaderStore.ShadersStoreWGSL;
     const store = transform({ ssao2PixelShader: published.ssao2PixelShader, ssaoCombinePixelShader: published.ssaoCombinePixelShader });
     const includes = transformIncludes({ pbrBlockPrePass: B.ShaderStore.IncludesShadersStoreWGSL.pbrBlockPrePass });
-    return vm.createContext({ BABYLON: { ShaderStore: { ShadersStoreWGSL: store, IncludesShadersStoreWGSL: includes }, Camera: B.Camera, Constants: B.Constants, ShaderLanguage: B.ShaderLanguage } });
+    // The arithmetic tests evaluate the 32-bit shader; half precision, the default, has its own test.
+    return vm.createContext({ __nativeArPortalAoPrecision: "full", BABYLON: { ShaderStore: { ShadersStoreWGSL: store, IncludesShadersStoreWGSL: includes }, Camera: B.Camera, Constants: B.Constants, ShaderLanguage: B.ShaderLanguage } });
 }
 
 // The body of a WGSL function in a shader string.
@@ -137,6 +138,57 @@ test("slices are rotated by constants and samples are reconstructed without divi
             assert.ok(Math.abs(ray * depth - shared) < 1e-12);
         }
     }
+});
+
+test("half precision, the default, evaluates the same slab and slice distribution on 16-bit floats", () => {
+    const c = context();
+    delete c.__nativeArPortalAoPrecision;
+    vm.runInContext(source, c);
+    const shader = c.BABYLON.ShaderStore.ShadersStoreWGSL.ssao2PixelShader;
+    // Reconstruction, the plane test and the thickness stay f32; only the slab and the slice angles narrow.
+    assert.match(shader, /let delta = sampleRay \* sampleDepth - position;/);
+    assert.match(shader, /let offset = vec3h\(delta \* inverseRadius\);/);
+    assert.match(shader, /let far = min\(f16\(thickness \* inverseRadius\), extent - b\);/);
+    assert.doesNotMatch(shader, /portalClipSlab\(delta, ray|enable f16/);
+    const full = sliceCdf(install().BABYLON.ShaderStore.ShadersStoreWGSL.ssao2PixelShader).cdf;
+    const body = functionBody(shader, "portalSliceCdfHalf").replace(/(\d)h\b/g, "$1").replace(/\blet\b/g, "const")
+        .replace("point * select(", "scale(point, select(").replace("0.015625);", "0.015625));");
+    const half = new Function("point", "slice", "const abs = Math.abs, sqrt = Math.sqrt, max = Math.max; const inverseSqrt = (x) => 1 / Math.sqrt(x);" +
+        "const clamp = (x, a, b) => Math.min(Math.max(x, a), b); const select = (f, t, c) => (c ? t : f);" +
+        "const dot = (a, b) => a.x * b.x + a.y * b.y; const scale = (a, k) => ({ x: a.x * k, y: a.y * k });" + body);
+    for (const gamma of [-1.2, 0, 0.4, 1.1]) {
+        const sinGamma = Math.sin(gamma);
+        const cosGamma = Math.cos(gamma);
+        const total = cosGamma + gamma * sinGamma;
+        const lower = 0.25 * cosGamma + 0.5 * (gamma - Math.PI / 2) * sinGamma;
+        // From contact distance to the full radius, in units of the radius.
+        for (const length of [0.0004, 0.01, 0.3, 1]) {
+            for (let theta = -3; theta <= 3; theta += 0.05) {
+                const x = length * Math.cos(theta);
+                const y = length * Math.sin(theta);
+                const expected = full([y, 0, x], [0, 0, 1], [1, 0, 0], sinGamma, cosGamma, lower, 1 / total);
+                assert.ok(Math.abs(half({ x, y }, { x: sinGamma, y: cosGamma, z: lower, w: 1 / total }) - expected) < 1e-9, `${gamma} ${length} ${theta}`);
+            }
+        }
+    }
+    // The enable directive goes on the finished AO shader only, once.
+    const processor = { finalizeShaders: (vertexCode, fragmentCode) => ({ vertexCode, fragmentCode }) };
+    c.__nativePlaygroundConfigureEngine({ enabledExtensions: ["shader-f16"], _getShaderProcessor: () => processor });
+    assert.deepEqual(Array.from(c.__nativePlaygroundRequiredFeatures), ["shader-f16"]);
+    assert.equal(processor.finalizeShaders("v", shader).fragmentCode, "enable f16;\n" + shader);
+    assert.equal(processor.finalizeShaders("v", "enable f16;\n" + shader).fragmentCode, "enable f16;\n" + shader);
+    assert.deepEqual(processor.finalizeShaders("v", "fn main() {}"), { vertexCode: "v", fragmentCode: "fn main() {}" });
+    assert.throws(() => c.__nativePlaygroundConfigureEngine({ enabledExtensions: [], _getShaderProcessor: () => processor }), /requires shader-f16/);
+    const unknown = context();
+    unknown.__nativeArPortalAoPrecision = "quarter";
+    assert.throws(() => vm.runInContext(source, unknown), /Unknown portal AO precision: quarter/);
+    // Full precision needs no feature.
+    const plain = context();
+    delete plain.__nativeArPortalAoPrecision;
+    vm.runInContext(readFileSync(new URL("../Playground/Scripts/native_xr_portal_ao_full_precision.js", import.meta.url), "utf8"), plain);
+    vm.runInContext(source, plain);
+    assert.doesNotMatch(plain.BABYLON.ShaderStore.ShadersStoreWGSL.ssao2PixelShader, /vec3h|f16|portalSliceCdfHalf/);
+    assert.equal(plain.__nativePlaygroundRequiredFeatures, undefined);
 });
 
 test("the bilinear switch keeps the published AO read and adds only the cutout visibility", () => {

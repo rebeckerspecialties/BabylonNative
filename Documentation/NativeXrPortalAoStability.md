@@ -161,10 +161,31 @@ prelude `native_xr_portal_stability_capture.js` and
 Hill Valley workload:
 
 ```sh
+npm install --prefix Apps
+cmake -S . -B build_portal_macos_release -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build build_portal_macos_release --target Playground
 node Apps/scripts/measurePortalStability.mjs \
-  --playground <build>/Apps/Playground/Playground.app/Contents/MacOS/Playground \
-  --out <directory> --label candidate [--modes whole-pixel,sub-pixel] [--ao-script <prelude>]
+  --playground build_portal_macos_release/Apps/Playground/Playground.app/Contents/MacOS/Playground \
+  --out build_portal_macos_release/stability --label candidate
 ```
+
+Run these from the repository root on a Mac. The first three lines build the
+Playground once; the scripts are read from the checkout at every run, so shader
+and prelude edits need no rebuild. `--playground`, `--out` and `--label` are
+required; the label is lowercase letters, digits and hyphens. The measurement
+takes about 40 seconds and prints one table for the final image and one
+for the AO buffer, both with whole-pixel shifts. Captures, logs and JSON
+results are written to the `--out` directory. Options:
+
+| Option | Effect |
+| --- | --- |
+| `--views final,ao` | Which images to capture. Default: both. |
+| `--modes whole-pixel,sub-pixel` | Which motions to measure. Default: `whole-pixel`. |
+| `--size 2560x1440` | Render size. |
+| `--sdr` | Use the SDR surface instead of HDR. |
+| `--prelude <script>` | Load a script before the workload, for example one of the `native_xr_portal_ao_layout_*.js` files. Repeatable. |
+| `--ao-script <script>` | Replace the AO prelude, for example with `Apps/Playground/Scripts/native_xr_portal_gtvbao_validation.js` for the old estimator. |
+| `--timeout 600` | Seconds allowed for each capture run. |
 
 Five fixed poses (orbit, cafe wall, car, tree crown, hedges) are rendered while
 the whole image is shifted through the projection matrix. No reprojection or
@@ -236,9 +257,8 @@ Findings:
    and smooth-shadow instability barely moves. More samples per texel will not
    buy stability; resolution or temporal accumulation will.
 6. **Eight samples under-estimate occlusion.** The new estimator is 22 to 32
-   code values lighter than the converged run in shadowed regions. Three steps
-   per side (12 samples) recover 18 to 24; one slice of four steps has less
-   bias and much more instability. The slice and step counts are unchanged.
+   code values lighter than the converged run in shadowed regions. See
+   [Sample layouts](#sample-layouts) for what more samples buy.
 
 Rejected along the way, with the same measure: a Hammersley sequence with
 full-stratum radial jitter (lighter and less stable), soft or bilinear
@@ -249,6 +269,57 @@ The new prelude costs one AO-resolution RGBA32F target: Metal allocations on
 the M4 rise from 126.71 to 130.98 MiB. Its AO, filter and geometry passes all
 run at AO resolution; the old blur ran at 0.45 scale against full-resolution
 depth.
+
+### Sample layouts
+
+`__nativeArPortalAoSampleLayout` selects the slices, the distance steps per
+side, and whether each step reads both sides of the receiver ("paired") or one
+side, alternating between steps, slices and neighbouring texels. The
+`native_xr_portal_ao_layout_*.js` preludes set it; pass one with `--prelude`.
+
+M4, AO buffer, 2560x1440 HDR. Bias is how much lighter the AO under the car is
+than a 64-sample reference (`8x4-paired`), in code values. Instability is the
+whole-pixel mean.
+
+| Layout | Samples | Bias | Cafe wall | Car ground |
+| --- | ---: | ---: | ---: | ---: |
+| 2 slices x 2 steps, paired | 8 | +18.7 | 2.634 | 1.912 |
+| 2 x 4, alternating | 8 | +22.6 | 2.800 | 1.829 |
+| 3 x 3, alternating | 9 | +31.2 | 2.317 | 1.487 |
+| 2 x 5, alternating | 10 | +13.6 | 2.478 | 1.825 |
+| 2 x 3, paired | 12 | +10.4 | 3.216 | 1.855 |
+| **3 x 2, paired (default)** | 12 | +17.1 | 2.313 | 1.642 |
+
+Slices buy stability and distance steps buy occlusion. The nine-sample layout
+is steadier only because it finds less occlusion. Three slices of two paired
+steps is the default: 12% steadier on the wall and 14% steadier on the ground
+than eight samples, with slightly less bias. Final-image sub-pixel popping does
+not change with the layout. The rejected 2x4 and 3x3 layouts are not kept in
+the prelude.
+
+On the iPhone XS Max (fast snapshot, bilinear upsample), the AO evaluation
+takes 2.1 ms of GPU fragment time per frame with 8 samples, 1.8 ms with 2x5
+alternating and 3.0 to 3.3 ms with 12. No layout produced a partial render
+(158,000 to 173,000 counter samples each), and the pass's limiters barely move
+between 8 and 12 samples (ALU 58 to 60%, texture cache 12%, last-level cache
+10%): the extra samples cost time in proportion, without overflowing tile
+memory or the texture cache.
+
+#### Sample precision
+
+Each sample's slab clip and slice angles are evaluated in 16-bit floats, in
+units of the AO radius, so every value stays near one. Reconstruction, the
+plane test and the thickness stay 32-bit. This needs `shader-f16`, which the
+prelude adds to the required device features;
+`native_xr_portal_ao_full_precision.js` restores 32-bit arithmetic.
+
+On the M4 the AO buffer and the final image stay within 2 of 255 code values of
+the 32-bit result. On the iPhone XS Max the AO evaluation takes 3.2 ms per
+frame either way, and five-minute runs from a cooled phone do not separate the
+two: 39.1 fps over the last two minutes at 32 bits (thermal state "fair" after
+80 s), 39.3 and 39.6 fps at 16 bits ("fair" after 72 and 62 s). Half precision
+is the default because it costs nothing visible at these viewing distances;
+the measurements do not show it saving time or heat on this GPU.
 
 ### Lit walls and glazing
 
@@ -341,6 +412,31 @@ cutouts' writes to the two geometry attachments. With fast snapshot rendering
 the Apple TV 4K goes from 29.6 to 28.8 fps in SDR and from 22.4 to 21.9 fps in
 HDR; the iPhone XS Max is unchanged within run-to-run variation at about 50
 fps, and interpreter time does not move.
+
+#### Occlusion inside foliage
+
+A fixed visibility shades a bush or a crown evenly, so it reads as flat. The
+older estimators darkened the leaves seen between nearer leaves, which gave
+foliage depth, but as speckle (crown instability 2.5 against 0.056).
+
+`native_xr_portal_foliage_occlusion.js` computes that depth once from the
+foliage's own geometry. After load it voxelizes each double-sided,
+alpha-textured mesh at 0.25 m and marches thirteen directions over the upper
+hemisphere for 2 m from every occupied cell; each occupied cell on the way
+passes 70% of the light. The result is stored per vertex, scaled so the most
+open vertex of the mesh is 1 and floored at 0.35. A material plugin multiplies
+the shaded color by it, as the AO combine does for other surfaces, and the
+fixed cutout visibility becomes 1. Multiplying the albedo instead was too weak:
+most of a leaf's brightness in this scene is not diffuse albedo.
+
+Seven meshes and 89,319 vertices are baked in about 0.5 s on the M4. Crown
+interiors and undersides darken and outer leaves keep their color (crown mean
+luma 102.6 to 95.7; the tree in the bush pose 75.2 to 61.8). Whole-pixel
+instability is unchanged (crown 0.056 to 0.055, hedge 0.169 to 0.167). The
+clipped hedges are hollow shells, so they barely change. The term is fixed to
+the mesh: it does not follow wind animation or other meshes, and it should
+move into the asset as a baked vertex attribute rather than be recomputed at
+load.
 
 ### Frame rate
 
