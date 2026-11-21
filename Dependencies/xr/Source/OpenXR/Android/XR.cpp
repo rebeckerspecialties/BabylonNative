@@ -469,7 +469,14 @@ namespace xr
             createInfo.applicationInfo.engineVersion = 1;
             createInfo.applicationInfo.apiVersion = XR_CURRENT_API_VERSION;
 
-            XrCheck(xrCreateInstance(&createInfo, &XrContext->InstanceHandle), "xrCreateInstance");
+            XrResult instanceResult = xrCreateInstance(&createInfo, &XrContext->InstanceHandle);
+            if (instanceResult == XR_ERROR_API_VERSION_UNSUPPORTED)
+            {
+                // This backend only requires 1.0 core and the enabled GLES/Android extensions.
+                createInfo.applicationInfo.apiVersion = XR_API_VERSION_1_0;
+                instanceResult = xrCreateInstance(&createInfo, &XrContext->InstanceHandle);
+            }
+            XrCheck(instanceResult, "xrCreateInstance");
 
             XrSystemGetInfo systemInfo = MakeXrStruct<XrSystemGetInfo>(XR_TYPE_SYSTEM_GET_INFO);
             systemInfo.formFactor = XR_FORM_FACTOR_HEAD_MOUNTED_DISPLAY;
