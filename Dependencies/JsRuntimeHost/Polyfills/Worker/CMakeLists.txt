@@ -24,5 +24,9 @@ target_link_libraries(Worker
     PRIVATE WebSocket
     PRIVATE XMLHttpRequest)
 
+if(ANDROID)
+    target_link_libraries(Worker PRIVATE UrlLib)
+endif()
+
 set_property(TARGET Worker PROPERTY FOLDER Polyfills)
 source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${SOURCES})

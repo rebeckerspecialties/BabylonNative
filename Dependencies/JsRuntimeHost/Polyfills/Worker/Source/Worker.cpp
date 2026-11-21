@@ -20,6 +20,11 @@
 
 #include <napi/js_native_api.h>
 
+#if defined(__ANDROID__)
+#include <UrlLib/UrlLib.h>
+#include <future>
+#endif
+
 #include <atomic>
 #include <cctype>
 #include <cstdlib>
@@ -102,9 +107,9 @@ namespace Babylon::Polyfills::Internal
                 return requested;
             }
 
-            if (base.rfind("app://", 0) == 0)
+            if (base.rfind("app:", 0) == 0)
             {
-                const auto slash = base.find('/', 6);
+                const auto slash = base.find('/', base.rfind("app://", 0) == 0 ? 6 : 4);
                 const std::string prefix = slash == std::string::npos ? base + "/" : base.substr(0, slash + 1);
                 const std::filesystem::path path = slash == std::string::npos ? std::filesystem::path{} :
                     std::filesystem::path{base.substr(slash + 1)}.parent_path();
@@ -169,6 +174,48 @@ namespace Babylon::Polyfills::Internal
             {
                 return options.ScriptResolver(url);
             }
+
+#if defined(__ANDROID__)
+            // APK assets are not files. Use the same transport as ScriptLoader;
+            // only the calling worker waits for synchronous importScripts.
+            if (options.ScriptRoot.empty() && url.rfind("app:", 0) == 0)
+            {
+                UrlLib::UrlRequest request{};
+                request.Open(UrlLib::UrlMethod::Get, url);
+                request.ResponseType(UrlLib::UrlResponseType::String);
+                std::promise<void> completion;
+                auto done = completion.get_future();
+                request.SendAsync().then(arcana::inline_scheduler, arcana::cancellation::none(),
+                    [completion = std::move(completion)](const arcana::expected<void, std::exception_ptr>& result) mutable {
+                        if (result.has_error())
+                        {
+                            completion.set_exception(result.error());
+                        }
+                        else
+                        {
+                            completion.set_value();
+                        }
+                    });
+                try
+                {
+                    done.get();
+                }
+                catch (const std::exception& error)
+                {
+                    throw std::runtime_error{"Unable to load packaged Worker script " + url + ": " + error.what()};
+                }
+                if (request.StatusCode() != UrlLib::UrlStatusCode::Ok)
+                {
+                    throw std::runtime_error{"Unable to load packaged Worker script: " + url};
+                }
+                const auto source = request.ResponseString();
+                if (source.find('\0') != std::string_view::npos)
+                {
+                    throw std::runtime_error{"Worker script contains a NUL character: " + url};
+                }
+                return std::string{source};
+            }
+#endif
 
             if (url.rfind("data:", 0) == 0)
             {
