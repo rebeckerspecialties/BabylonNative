@@ -1,5 +1,7 @@
 #pragma once
 
+#include <atomic>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -87,6 +89,7 @@ namespace xr
         uint32_t ApiVersion{};
         uint32_t QueueFamilyIndex{};
         uint32_t QueueIndex{};
+        uint32_t MaxTextureDimension2D{};
     };
 
     struct Vector3f
@@ -258,6 +261,11 @@ namespace xr
                     TextureFormat ColorTextureFormat{};
                     void* ColorTexturePointer{};
                     Size ColorTextureSize;
+#if defined(BABYLON_NATIVE_XR_OPENXR) && defined(__ANDROID__)
+                    uint32_t SwapchainWidth{};
+                    uint32_t SwapchainHeight{};
+                    int64_t SwapchainFormat{};
+#endif
 
                     TextureFormat DepthTextureFormat{};
                     void* DepthTexturePointer{};
@@ -384,6 +392,13 @@ namespace xr
             };
 
             static arcana::task<std::shared_ptr<Session>, std::exception_ptr> CreateAsync(System& system, void* graphicsDevice, void* commandQueue, std::function<void*()> windowProvider);
+            struct DisplayRateControl
+            {
+                std::vector<float> Supported;
+                std::atomic<float> Nominal{};
+                std::function<bool(float)> Request;
+            };
+            const DisplayRateControl* GetDisplayRateControl() const { return m_displayRateControl.get(); }
             ~Session();
 
             // Do not use, call CreateAsync instead. Kept public to keep compatibility with make_shared.
@@ -392,6 +407,10 @@ namespace xr
 
             std::unique_ptr<Frame> GetNextFrame(bool& shouldEndSession, bool& shouldRestartSession, std::function<arcana::task<void, std::exception_ptr>(void*)> deletedTextureAsyncCallback = [](void*){ return arcana::task_from_result<std::exception_ptr>(); });
             void RequestEndSession();
+            TextureFormat GetColorTextureFormat() const;
+#if defined(BABYLON_NATIVE_XR_OPENXR) && defined(__ANDROID__)
+            void SetProjectionScale(double scale);
+#endif
             void SetDepthsNearFar(float depthNear, float depthFar);
             void SetPlaneDetectionEnabled(bool enabled) const;
             bool TrySetFeaturePointCloudEnabled(bool enabled) const;
@@ -403,6 +422,7 @@ namespace xr
             std::vector<ImageTrackingScore>* GetImageTrackingScores() const;
             void CreateAugmentedImageDatabase(const std::vector<ImageTrackingRequest>&) const;
         private:
+            std::shared_ptr<DisplayRateControl> m_displayRateControl{};
             std::unique_ptr<Impl> m_impl{};
         };
 

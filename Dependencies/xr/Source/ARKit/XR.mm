@@ -850,6 +850,7 @@ namespace {
 @end
 namespace xr {
     namespace {
+        constexpr auto SessionColorFormat = TextureFormat::BGRA8_SRGB;
         // This shader is used to render *either* the camera texture or the final composited texture.
         // It could be split into two shaders, but this is a bit simpler since they use the same structs
         // and have some common logic.
@@ -1228,7 +1229,7 @@ namespace xr {
                     id<MTLTexture> texture = [metalDevice newTextureWithDescriptor:textureDescriptor];
 
                     ActiveFrameViews[0].ColorTexturePointer = (__bridge_retained void*)texture;
-                    ActiveFrameViews[0].ColorTextureFormat = TextureFormat::BGRA8_SRGB;
+                    ActiveFrameViews[0].ColorTextureFormat = SessionColorFormat;
                     ActiveFrameViews[0].ColorTextureSize = {width, height};
                 }
 
@@ -2344,6 +2345,10 @@ namespace xr {
 
     void System::Session::RequestEndSession() {
         m_impl->RequestEndSession();
+    }
+
+    TextureFormat System::Session::GetColorTextureFormat() const {
+        return SessionColorFormat;
     }
 
     void System::Session::SetDepthsNearFar(float depthNear, float depthFar) {

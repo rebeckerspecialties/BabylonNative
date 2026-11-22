@@ -42,6 +42,8 @@ struct BabylonWgpuFeatureInfo final
     uint32_t multi_draw_indirect_count{};
     uint32_t min_subgroup_size{};
     uint32_t max_subgroup_size{};
+    uint32_t timestamp_query{};
+    uint32_t xr_stereo_multiview{};
 };
 
 struct BabylonWgpuMappedRangeWrite final
@@ -49,6 +51,15 @@ struct BabylonWgpuMappedRangeWrite final
     uint64_t offset{};
     const uint8_t* data{};
     size_t data_len{};
+};
+
+struct BabylonWgpuBindGroupEntry final
+{
+    uint32_t binding{};
+    uint32_t kind{};
+    uint64_t resource{};
+    uint64_t offset{};
+    uint64_t size{};
 };
 
 struct BabylonWgpuVulkanBinding final
@@ -60,6 +71,7 @@ struct BabylonWgpuVulkanBinding final
     uint32_t api_version{};
     uint32_t queue_family_index{};
     uint32_t queue_index{};
+    uint32_t max_texture_dimension_2d{};
 };
 
 extern "C"
@@ -77,7 +89,10 @@ extern "C"
     bool babylon_wgpu_get_screenshot_info(const void* context, uint32_t* width, uint32_t* height, size_t* byte_len);
     bool babylon_wgpu_copy_screenshot(const void* context, uint8_t* output, size_t output_len);
     bool babylon_wgpu_get_info(const void* context, BabylonWgpuInfo* output_info);
+    bool babylon_wgpu_has_active_context();
     bool babylon_wgpu_get_feature_info(BabylonWgpuFeatureInfo* output_info);
+    uint64_t babylon_wgpu_native_create_query_set(bool timestamp, uint32_t count, const char* label);
+    void babylon_wgpu_native_resolve_query_set(uint64_t encoder, uint64_t queries, uint32_t first, uint32_t count, uint64_t destination, uint64_t offset);
     bool babylon_wgpu_get_last_error(char* output, size_t output_len);
 
     bool babylon_wgpu_dispatch_compute_global(
@@ -117,22 +132,32 @@ extern "C"
         const BabylonWgpuMappedRangeWrite* ranges,
         size_t range_count);
     bool babylon_wgpu_native_read_buffer(uint64_t buffer_id, uint64_t offset, uint8_t* data, size_t data_len);
-    bool babylon_wgpu_native_map_buffer(uint64_t buffer_id, uint32_t mode, uint64_t offset, uint64_t size);
+    bool babylon_wgpu_native_begin_map(uint64_t buffer_id, uint32_t mode, uint64_t offset, uint64_t size, void (*completed)(uintptr_t, bool), uintptr_t context);
+    bool babylon_wgpu_native_finish_map(uint64_t buffer_id);
+    bool babylon_wgpu_native_work_done(void (*completed)(uintptr_t, bool), uintptr_t context);
     void babylon_wgpu_native_unmap_buffer(uint64_t buffer_id);
     uint64_t babylon_wgpu_native_create_texture(const char* descriptor_json);
     uint64_t babylon_wgpu_native_import_metal_texture(const void* native_texture, const char* descriptor_json);
     void* babylon_wgpu_native_get_metal_device();
     // Borrowed queue owned by the active backend; native consumers must retain it.
     void* babylon_wgpu_native_get_metal_queue();
-    uint64_t babylon_wgpu_native_import_vulkan_texture(uint64_t native_image, const char* descriptor_json);
+    uint64_t babylon_wgpu_native_import_vulkan_texture(uint64_t native_image, uint32_t width, uint32_t height, int64_t vk_format, const char* descriptor_json);
     bool babylon_wgpu_native_get_vulkan_binding(BabylonWgpuVulkanBinding* output_binding);
+#ifdef __ANDROID__
+    void babylon_wgpu_suspend_window_presentation();
+    void babylon_wgpu_resume_window_presentation();
+#endif
     uint64_t babylon_wgpu_native_create_texture_view(uint64_t texture_id, const char* descriptor_json);
     uint64_t babylon_wgpu_native_create_sampler(const char* descriptor_json);
     uint64_t babylon_wgpu_native_create_shader_module(const char* code);
     uint64_t babylon_wgpu_native_create_bind_group_layout(const char* descriptor_json);
     uint64_t babylon_wgpu_native_create_pipeline_layout(const char* descriptor_json);
-    uint64_t babylon_wgpu_native_create_bind_group(const char* descriptor_json);
+    uint64_t babylon_wgpu_native_create_bind_group(uint64_t layout, const char* label, const BabylonWgpuBindGroupEntry* entries, size_t count);
     uint64_t babylon_wgpu_native_create_render_pipeline(const char* descriptor_json);
+    const void* babylon_wgpu_native_start_pipeline(const char* descriptor, bool compute, void (*completed)(uintptr_t, bool), uintptr_t context);
+    const char* babylon_wgpu_native_pipeline_failure(const void* job, bool* internal);
+    uint64_t babylon_wgpu_native_adopt_pipeline(const void* job);
+    void babylon_wgpu_native_drop_pipeline_job(const void* job);
     uint64_t babylon_wgpu_native_render_pipeline_get_bind_group_layout(uint64_t pipeline_id, uint32_t index);
     uint64_t babylon_wgpu_native_create_compute_pipeline(const char* descriptor_json);
     uint64_t babylon_wgpu_native_compute_pipeline_get_bind_group_layout(uint64_t pipeline_id, uint32_t index);
@@ -262,7 +287,7 @@ extern "C"
     bool babylon_wgpu_native_compute_pass_end(uint64_t pass_id);
     bool babylon_wgpu_native_queue_submit(const uint64_t* command_buffer_ids, size_t command_buffer_count);
     bool babylon_wgpu_native_queue_wait_submitted_work();
-    bool babylon_wgpu_native_prepare_openxr_texture_for_release(uint64_t texture_id);
+    bool babylon_wgpu_native_prepare_openxr_textures_for_release(const uint64_t* texture_ids, size_t count);
     bool babylon_wgpu_native_queue_write_texture(
         const char* destination_json,
         const uint8_t* data,
@@ -273,6 +298,9 @@ extern "C"
         const void* native_texture,
         uint32_t source_width,
         uint32_t source_height,
+        uint32_t source_origin_x,
+        uint32_t source_origin_y,
+        uint32_t flip_y,
         const char* destination_json,
         const char* size_json);
     bool babylon_wgpu_native_queue_copy_external_image_rgba_to_texture(
@@ -301,6 +329,7 @@ extern "C"
     uint64_t babylon_wgpu_native_get_external_image_upload_borrowed_count();
     uint64_t babylon_wgpu_native_get_external_image_upload_borrowed_bytes();
     uint64_t babylon_wgpu_native_get_external_image_upload_owned_count();
+    uint64_t babylon_wgpu_native_get_canvas_snapshot_count(bool cpu);
     uint64_t babylon_wgpu_native_get_external_image_upload_owned_bytes();
     void babylon_wgpu_native_reset_external_image_upload_stats();
     bool babylon_wgpu_native_destroy_resource(uint32_t kind, uint64_t resource_id);

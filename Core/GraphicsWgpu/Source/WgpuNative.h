@@ -1,8 +1,9 @@
 #pragma once
 
+#include <Babylon/Graphics/ScreenShotData.h>
+
 #include <cstdint>
 #include <string>
-#include <vector>
 
 namespace Babylon::Graphics
 {
@@ -40,7 +41,7 @@ namespace Babylon::Graphics
         bool Resize(uint32_t width, uint32_t height);
         bool Render();
         bool RequestScreenShot();
-        std::vector<uint8_t> CopyScreenShot() const;
+        ScreenShotData CopyScreenShot() const;
         WgpuBootstrapInfo GetInfo() const;
         const std::string& GetLastError() const;
 

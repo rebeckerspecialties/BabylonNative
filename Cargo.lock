@@ -297,7 +297,6 @@ dependencies = [
 [[package]]
 name = "femtovg"
 version = "0.26.0"
-source = "git+https://github.com/rebeckerspecialties/femtovg.git?branch=show-multiple-guis-stack-0.26#d10169ee08d1fc79f9556df283e16dd6d985c1f9"
 dependencies = [
  "bitflags",
  "bytemuck",
@@ -1429,7 +1428,6 @@ dependencies = [
 [[package]]
 name = "wgpu-core"
 version = "30.0.1"
-source = "git+https://github.com/gfx-rs/wgpu.git?rev=40f4a34ebaf56f9a046231f54125ad046239d3f3#40f4a34ebaf56f9a046231f54125ad046239d3f3"
 dependencies = [
  "arrayvec",
  "bit-set",
@@ -1477,7 +1475,6 @@ dependencies = [
 [[package]]
 name = "wgpu-hal"
 version = "30.0.1"
-source = "git+https://github.com/gfx-rs/wgpu.git?rev=40f4a34ebaf56f9a046231f54125ad046239d3f3#40f4a34ebaf56f9a046231f54125ad046239d3f3"
 dependencies = [
  "android_system_properties",
  "arrayvec",

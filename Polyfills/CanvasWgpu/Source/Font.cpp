@@ -1,3 +1,4 @@
+#include <cctype>
 #include <regex>
 #include <sstream>
 
@@ -43,7 +44,7 @@ namespace Babylon::Polyfills::Internal
                 {
                     font.m_weight = BOLD_WEIGHT;
                 }
-                else
+                else if (match[1] != "normal")
                 {
                     font.m_weight = std::stoi(match[1]);
                 }
@@ -64,6 +65,13 @@ namespace Babylon::Polyfills::Internal
         if (std::regex_search(begin, end, match, FAMILY_IDENT_REGEX))
         {
             font.m_family = match[1];
+            begin = match[0].second;
+            while (begin != end && std::isspace(static_cast<unsigned char>(*begin)) &&
+                   std::regex_search(begin, end, match, FAMILY_IDENT_REGEX))
+            {
+                font.m_family += " " + match[1].str();
+                begin = match[0].second;
+            }
         }
         else if (std::regex_search(begin, end, match, FAMILY_STRING_REGEX))
         {

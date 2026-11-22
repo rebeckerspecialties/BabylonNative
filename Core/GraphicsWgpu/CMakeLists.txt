@@ -8,6 +8,7 @@ set(SOURCES
     "Source/WgpuNative.h"
     "InternalInclude/Babylon/Graphics/continuation_scheduler.h"
     "InternalInclude/Babylon/Graphics/DeviceContext.h"
+    "InternalInclude/Babylon/Graphics/ScreenShotData.h"
     "InternalInclude/Babylon/Graphics/WgpuInterop.h"
     "InternalInclude/Babylon/Graphics/SafeTimespanGuarantor.h")
 
@@ -43,6 +44,17 @@ babylon_add_rust_static_crate(babylon_graphics_backend
         "${RUST_CRATE_DIR}/build.rs"
         "${RUST_CRATE_DIR}/src/lib.rs"
         "${RUST_CRATE_DIR}/src/error_bridge.rs"
+        "${RUST_CRATE_DIR}/src/canvas_snapshot.rs"
+        "${RUST_CRATE_DIR}/src/canvas_snapshot.wgsl"
+        "${RUST_CRATE_DIR}/src/pipeline_compiler.rs"
+        "${RUST_CRATE_DIR}/src/presentation_damage.rs"
+        "${RUST_CRATE_DIR}/src/vulkan_instance_retry.rs"
+        "${RUST_CRATE_DIR}/src/xr_depth_clear.rs"
+        "${RUST_CRATE_DIR}/src/xr_eye_resolve.rs"
+        "${RUST_CRATE_DIR}/src/xr_eye_resolve.wgsl"
+        "${RUST_CRATE_DIR}/src/xr_eye_sample.rs"
+        "${RUST_CRATE_DIR}/src/xr_eye_timing.rs"
+        "${RUST_CRATE_DIR}/src/presentation_retirement.rs"
         "${RUST_CRATE_DIR}/src/upstream_wgpu_native/compute.rs"
         "${BABYLON_RUST_WORKSPACE_DIR}/Polyfills/CanvasWgpu/Rust/src/lib.rs"
         ${WGPU_NATIVE_RUNTIME_INPUTS}
@@ -55,6 +67,7 @@ warnings_as_errors(Graphics)
 
 # Reuse existing public graphics contracts and platform type headers.
 target_include_directories(Graphics
+    PRIVATE "${CMAKE_CURRENT_LIST_DIR}/InternalInclude"
     PRIVATE "${CMAKE_CURRENT_LIST_DIR}/../Graphics/Include/Shared"
     PRIVATE "${CMAKE_CURRENT_LIST_DIR}/../Graphics/Include/Platform/${BABYLON_NATIVE_PLATFORM}"
     PRIVATE "${CMAKE_CURRENT_LIST_DIR}/../Graphics/Include/RendererType/${GRAPHICS_API}"

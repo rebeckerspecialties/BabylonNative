@@ -203,6 +203,40 @@ namespace Babylon::Polyfills::Internal
 #endif
     }
 
+#ifdef __ANDROID__
+    std::vector<uint8_t> ReadSystemFace(const char* roboto, const char* droid)
+    {
+        for (const char* path : {roboto, droid})
+        {
+            std::ifstream file{path, std::ios::binary | std::ios::ate};
+            const std::streamoff size = file.tellg();
+            if (size > 0 && size <= std::numeric_limits<int>::max())
+            {
+                std::vector<uint8_t> bytes(static_cast<size_t>(size));
+                if (file.seekg(0).read(reinterpret_cast<char*>(bytes.data()), size))
+                {
+                    return bytes;
+                }
+            }
+        }
+        return {};
+    }
+
+    int LoadSystemFace(NVGcontext* context, bool bold)
+    {
+        if (bold)
+        {
+            static auto bytes = ReadSystemFace("/system/fonts/Roboto-Bold.ttf", "/system/fonts/DroidSans-Bold.ttf");
+            if (!bytes.empty())
+            {
+                return nvgCreateFontMem(context, "sans-serif-bold", bytes.data(), static_cast<int>(bytes.size()), 0);
+            }
+        }
+        static auto bytes = ReadSystemFace("/system/fonts/Roboto-Regular.ttf", "/system/fonts/DroidSans.ttf");
+        return bytes.empty() ? -1 : nvgCreateFontMem(context, "sans-serif", bytes.data(), static_cast<int>(bytes.size()), 0);
+    }
+#endif
+
     struct NormalizedRectangle
     {
         float left;
@@ -408,6 +442,10 @@ namespace Babylon::Polyfills::Internal
         m_canvasTextureImageIndices.clear();
         m_transientImageIndices.clear();
         m_fonts.clear();
+#ifdef __ANDROID__
+        m_systemFaces[0].reset();
+        m_systemFaces[1].reset();
+#endif
         m_currentFontId = -1;
         m_frameActive = false;
         m_isClipped = false;
@@ -1104,13 +1142,7 @@ namespace Babylon::Polyfills::Internal
     {
         std::string text{info[0].As<Napi::String>()};
 
-        // If the JS-requested font family hasn't been loaded, return Arial-equivalent metrics
-        // instead of measuring with the first native fallback font. This matches browser fallback
-        // closely enough for GUI wrapping and centering while FillText still renders with the
-        // native substitute font.
-        const bool familyAvailable = !m_font.Family().empty()
-            && m_fonts.find(m_font.Family()) != m_fonts.end();
-        if (!familyAvailable && m_font.Size() > 0.f)
+        if (!SetFontFaceId() && m_font.Size() > 0.f)
         {
             const float fontSize = m_font.Size();
             const float width = fontSize * 0.55f * static_cast<float>(text.length());
@@ -1129,9 +1161,6 @@ namespace Babylon::Polyfills::Internal
             return obj.As<Napi::Value>();
         }
 
-        EnsureFrame();
-        EnsureLoadedFonts();
-        SetFontFaceId();
         return MeasureText::CreateInstance(info.Env(), this, text);
     }
 
@@ -1164,6 +1193,23 @@ namespace Babylon::Polyfills::Internal
         EnsureFrame();
         EnsureLoadedFonts();
 
+#ifdef __ANDROID__
+        if (auto requested = m_fonts.find(m_font.Family()); requested != m_fonts.end())
+        {
+            nvgFontFaceId(*m_nvg, requested->second);
+            return true;
+        }
+        auto& face = m_systemFaces[m_font.IsBold() ? 1 : 0];
+        if (!face.has_value())
+        {
+            face = LoadSystemFace(*m_nvg, m_font.IsBold());
+        }
+        if (*face >= 0)
+        {
+            nvgFontFaceId(*m_nvg, *face);
+            return true;
+        }
+#endif
         if (m_fonts.empty())
         {
             return false;

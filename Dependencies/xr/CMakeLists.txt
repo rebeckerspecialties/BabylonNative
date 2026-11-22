@@ -58,8 +58,10 @@ if (APPLE)
 endif()
 
 if (ANDROID AND BABYLON_NATIVE_XR_OPENXR)
+    option(BABYLON_NATIVE_OPENXR_PREFER_LINEAR_SWAPCHAIN "Prefer a supported RGBA16F compositor image with a linear-light eye resolve" OFF)
     target_compile_definitions(xr
         PUBLIC BABYLON_NATIVE_XR_OPENXR
+        PRIVATE $<$<BOOL:${BABYLON_NATIVE_OPENXR_PREFER_LINEAR_SWAPCHAIN}>:BABYLON_NATIVE_OPENXR_PREFER_LINEAR_SWAPCHAIN>
         PRIVATE XR_USE_GRAPHICS_API_VULKAN XR_USE_PLATFORM_ANDROID)
     target_link_libraries(xr PRIVATE OpenXR::openxr_loader AndroidExtensions log)
 elseif(ANDROID)

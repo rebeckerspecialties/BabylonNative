@@ -24,13 +24,14 @@ namespace Babylon
         const std::string& ColorFormat() const;
         const std::string& DepthStencilFormat() const;
         uint32_t TextureUsage() const;
+        double ScaleFactor() const { return m_scaleFactor; }
 
     private:
         Napi::ObjectReference m_sessionReference{};
         std::string m_colorFormat{};
         std::string m_depthStencilFormat{};
         uint32_t m_textureUsage{};
-        float m_scaleFactor{1.0f};
+        double m_scaleFactor{1.0};
         bool m_ignoreDepthValues{};
 
         Plugins::XRSession& GetSession() const;

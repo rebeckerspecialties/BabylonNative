@@ -90,7 +90,7 @@ namespace Babylon
         }
         if (init.Has("scaleFactor") && init.Get("scaleFactor").IsNumber())
         {
-            m_scaleFactor = init.Get("scaleFactor").As<Napi::Number>().FloatValue();
+            m_scaleFactor = init.Get("scaleFactor").As<Napi::Number>().DoubleValue();
         }
         if (init.Has("ignoreDepthValues") && init.Get("ignoreDepthValues").IsBoolean())
         {

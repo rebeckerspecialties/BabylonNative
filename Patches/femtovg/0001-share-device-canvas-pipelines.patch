@@ -1,0 +1,267 @@
+diff --git a/src/renderer/wgpu.rs b/src/renderer/wgpu.rs
+index 1f8d9c6c..aa942b68 100644
+--- a/src/renderer/wgpu.rs
++++ b/src/renderer/wgpu.rs
+@@ -257,13 +257,28 @@ struct CachedPipeline {
+     accessed: bool,
+ }
+ 
++#[derive(Debug)]
++struct DevicePipelines {
++    device: wgpu::Device,
++    shader_module: Rc<wgpu::ShaderModule>,
++    viewport_layout: wgpu::BindGroupLayout,
++    bind_layout: wgpu::BindGroupLayout,
++    layout: wgpu::PipelineLayout,
++    cache: Rc<RefCell<HashMap<PipelineState, CachedPipeline>>>,
++}
++
++thread_local! {
++    // Weak entries don't keep a canvas or device alive after the last renderer is dropped.
++    static DEVICE_PIPELINES: RefCell<Vec<std::rc::Weak<DevicePipelines>>> = const { RefCell::new(Vec::new()) };
++}
++
+ /// WGPU renderer.
+ #[derive(Debug)]
+ pub struct WGPURenderer {
+     device: wgpu::Device,
+     queue: wgpu::Queue,
+ 
+-    shader_module: Rc<wgpu::ShaderModule>,
++    pipelines: Rc<DevicePipelines>,
+ 
+     screen_view: [f32; 2],
+ 
+@@ -274,11 +289,6 @@ pub struct WGPURenderer {
+     vertex_buffer: wgpu::Buffer,
+     stencil_buffer: Option<wgpu::Texture>,
+     stencil_buffer_for_textures: HashMap<wgpu::Texture, wgpu::Texture>,
+-
+-    bind_group_layout: wgpu::BindGroupLayout,
+-    viewport_bind_group_layout: wgpu::BindGroupLayout,
+-    pipeline_layout: wgpu::PipelineLayout,
+-    pipeline_cache: Rc<RefCell<HashMap<PipelineState, CachedPipeline>>>,
+ }
+ 
+ /// Rasterizes an image element into an offscreen canvas at the given size.
+@@ -353,9 +363,6 @@ impl WGPURenderer {
+ 
+     /// Creates a new renderer for the device.
+     pub fn new(device: wgpu::Device, queue: wgpu::Queue) -> Self {
+-        let module = wgpu::include_wgsl!("wgpu/shader.wgsl");
+-        let shader_module = Rc::new(device.create_shader_module(module));
+-
+         let texture_descriptor = wgpu::TextureDescriptor {
+             size: wgpu::Extent3d::default(),
+             mip_level_count: 1,
+@@ -400,79 +407,100 @@ impl WGPURenderer {
+             wgpu::Extent3d::default(),
+         );
+ 
+-        let viewport_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+-            label: Some("Bind Group Layout for Viewport uniform"),
+-            entries: &[wgpu::BindGroupLayoutEntry {
+-                binding: 0,
+-                visibility: wgpu::ShaderStages::VERTEX,
+-                ty: wgpu::BindingType::Buffer {
+-                    ty: wgpu::BufferBindingType::Uniform,
+-                    has_dynamic_offset: false,
+-                    min_binding_size: None,
+-                },
+-                count: None,
+-            }],
+-        });
+-
+-        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+-            label: None,
+-            entries: &[
+-                wgpu::BindGroupLayoutEntry {
++        let pipelines = DEVICE_PIPELINES.with_borrow_mut(|entries| {
++            entries.retain(|entry| entry.strong_count() > 0);
++            if let Some(existing) = entries
++                .iter()
++                .filter_map(|entry| entry.upgrade())
++                .find(|p| p.device == device)
++            {
++                return existing;
++            }
++            let shader_module = Rc::new(device.create_shader_module(wgpu::include_wgsl!("wgpu/shader.wgsl")));
++            let viewport_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
++                label: Some("Bind Group Layout for Viewport uniform"),
++                entries: &[wgpu::BindGroupLayoutEntry {
+                     binding: 0,
+-                    visibility: wgpu::ShaderStages::FRAGMENT,
++                    visibility: wgpu::ShaderStages::VERTEX,
+                     ty: wgpu::BindingType::Buffer {
+                         ty: wgpu::BufferBindingType::Uniform,
+-                        has_dynamic_offset: true,
+-                        min_binding_size: wgpu::BufferSize::new(UNIFORM_BYTES),
++                        has_dynamic_offset: false,
++                        min_binding_size: None,
+                     },
+                     count: None,
+-                },
+-                wgpu::BindGroupLayoutEntry {
+-                    binding: 1,
+-                    visibility: wgpu::ShaderStages::FRAGMENT,
+-                    ty: wgpu::BindingType::Texture {
+-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+-                        view_dimension: wgpu::TextureViewDimension::D2,
+-                        multisampled: false,
++                }],
++            });
++
++            let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
++                label: None,
++                entries: &[
++                    wgpu::BindGroupLayoutEntry {
++                        binding: 0,
++                        visibility: wgpu::ShaderStages::FRAGMENT,
++                        ty: wgpu::BindingType::Buffer {
++                            ty: wgpu::BufferBindingType::Uniform,
++                            has_dynamic_offset: true,
++                            min_binding_size: wgpu::BufferSize::new(UNIFORM_BYTES),
++                        },
++                        count: None,
+                     },
+-                    count: None,
+-                },
+-                wgpu::BindGroupLayoutEntry {
+-                    binding: 2,
+-                    visibility: wgpu::ShaderStages::FRAGMENT,
+-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+-                    count: None,
+-                },
+-                wgpu::BindGroupLayoutEntry {
+-                    binding: 3,
+-                    visibility: wgpu::ShaderStages::FRAGMENT,
+-                    ty: wgpu::BindingType::Texture {
+-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+-                        view_dimension: wgpu::TextureViewDimension::D2,
+-                        multisampled: false,
++                    wgpu::BindGroupLayoutEntry {
++                        binding: 1,
++                        visibility: wgpu::ShaderStages::FRAGMENT,
++                        ty: wgpu::BindingType::Texture {
++                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
++                            view_dimension: wgpu::TextureViewDimension::D2,
++                            multisampled: false,
++                        },
++                        count: None,
+                     },
+-                    count: None,
+-                },
+-                wgpu::BindGroupLayoutEntry {
+-                    binding: 4,
+-                    visibility: wgpu::ShaderStages::FRAGMENT,
+-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+-                    count: None,
+-                },
+-            ],
+-        });
++                    wgpu::BindGroupLayoutEntry {
++                        binding: 2,
++                        visibility: wgpu::ShaderStages::FRAGMENT,
++                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
++                        count: None,
++                    },
++                    wgpu::BindGroupLayoutEntry {
++                        binding: 3,
++                        visibility: wgpu::ShaderStages::FRAGMENT,
++                        ty: wgpu::BindingType::Texture {
++                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
++                            view_dimension: wgpu::TextureViewDimension::D2,
++                            multisampled: false,
++                        },
++                        count: None,
++                    },
++                    wgpu::BindGroupLayoutEntry {
++                        binding: 4,
++                        visibility: wgpu::ShaderStages::FRAGMENT,
++                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
++                        count: None,
++                    },
++                ],
++            });
+ 
+-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+-            label: None,
+-            bind_group_layouts: &[Some(&viewport_bind_group_layout), Some(&bind_group_layout)],
+-            immediate_size: 0,
+-        });
++            let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
++                label: None,
++                bind_group_layouts: &[Some(&viewport_bind_group_layout), Some(&bind_group_layout)],
++                immediate_size: 0,
++            });
+ 
++            let shared = Rc::new(DevicePipelines {
++                device: device.clone(),
++                shader_module,
++                viewport_layout: viewport_bind_group_layout,
++                bind_layout: bind_group_layout,
++                layout: pipeline_layout,
++                cache: Default::default(),
++            });
++            entries.push(Rc::downgrade(&shared));
++            shared
++        });
+         Self {
+             device,
+             queue,
+ 
+-            shader_module,
++            pipelines,
+ 
+             screen_view: [0.0, 0.0],
+ 
+@@ -483,10 +511,6 @@ impl WGPURenderer {
+             vertex_buffer,
+             stencil_buffer: None,
+             stencil_buffer_for_textures: HashMap::new(),
+-            bind_group_layout,
+-            viewport_bind_group_layout,
+-            pipeline_layout,
+-            pipeline_cache: Default::default(),
+         }
+     }
+ }
+@@ -578,7 +602,7 @@ impl Renderer for WGPURenderer {
+             &mut encoder,
+             output.format,
+             self.screen_view,
+-            self.viewport_bind_group_layout.clone(),
++            self.pipelines.viewport_layout.clone(),
+             &mut self.stencil_buffer_for_textures,
+             texture_view,
+             stencil_buffer.clone(),
+@@ -593,10 +617,10 @@ impl Renderer for WGPURenderer {
+             self.sampler_cache.clone(),
+             self.uniform_buffer.clone(),
+             self.uniform_stride,
+-            self.shader_module.clone(),
+-            self.bind_group_layout.clone(),
+-            self.pipeline_layout.clone(),
+-            self.pipeline_cache.clone(),
++            self.pipelines.shader_module.clone(),
++            self.pipelines.bind_layout.clone(),
++            self.pipelines.layout.clone(),
++            self.pipelines.cache.clone(),
+         );
+ 
+         let mut current_render_target = RenderTarget::Screen;
+@@ -715,9 +739,11 @@ impl Renderer for WGPURenderer {
+ 
+         let command_buffer = encoder.finish();
+ 
+-        self.pipeline_cache
+-            .borrow_mut()
+-            .retain(|_, cached_pipeline| std::mem::replace(&mut cached_pipeline.accessed, false));
++        let mut cache = self.pipelines.cache.borrow_mut();
++        // A flush on one canvas says nothing about the working set of its siblings.
++        if Rc::strong_count(&self.pipelines) == 1 || cache.len() > 64 {
++            cache.retain(|_, p| std::mem::replace(&mut p.accessed, false));
++        }
+ 
+         Some(command_buffer)
+     }

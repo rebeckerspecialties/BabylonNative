@@ -151,6 +151,7 @@ namespace Babylon
                     InstanceAccessor("position", &XRRigidTransform::Position, nullptr),
                     InstanceAccessor("orientation", &XRRigidTransform::Orientation, nullptr),
                     InstanceAccessor("matrix", &XRRigidTransform::Matrix, nullptr),
+                    InstanceAccessor("inverse", &XRRigidTransform::Inverse, nullptr),
                 });
 
             env.Global().Set(JS_CLASS_NAME, func);
@@ -186,6 +187,11 @@ namespace Babylon
                 orientation.Set("w", 1.f);
                 m_orientation = Napi::Persistent(orientation);
             }
+            const auto matrix = CreateTransformMatrix(xr::Space{GetNativePose()});
+            std::memcpy(m_matrix.Value().Data(), matrix.data(), sizeof(matrix));
+            auto slot = Napi::Object::New(info.Env());
+            Value().DefineProperty(Napi::PropertyDescriptor::Value(Napi::Symbol::New(info.Env(), "XRRigidTransform inverse slot"), slot));
+            m_inverseSlot = Napi::Weak(slot);
         }
 
         void Update(XRRigidTransform* transform)
@@ -194,6 +200,17 @@ namespace Babylon
         }
 
         void Update(const xr::Space& space, bool inverse)
+        {
+            UpdateValues(space, inverse);
+            if (m_hasInverse)
+            {
+                const auto cached = m_inverseSlot.Value().Get("value").As<Napi::Object>();
+                Unwrap(cached)->UpdateValues(xr::Space{InvertPose(space.Pose)}, inverse);
+            }
+        }
+
+    private:
+        void UpdateValues(const xr::Space& space, bool inverse)
         {
             auto position = m_position.Value();
             position.Set("x", space.Pose.Position.X);
@@ -210,6 +227,7 @@ namespace Babylon
             std::memcpy(m_matrix.Value().Data(), CreateTransformMatrix(space, inverse).data(), m_matrix.Value().ByteLength());
         }
 
+    public:
         void Update(const xr::Space& space, Napi::ArrayBuffer& outVectorData, Napi::ArrayBuffer& outMatrixData, bool inverse)
         {
             float posAndOrientationData[8];
@@ -245,6 +263,25 @@ namespace Babylon
         Napi::ObjectReference m_position{};
         Napi::ObjectReference m_orientation{};
         Napi::Reference<Napi::Float32Array> m_matrix{};
+        Napi::ObjectReference m_inverseSlot{};
+        bool m_hasInverse{};
+
+        Napi::Value Inverse(const Napi::CallbackInfo& info)
+        {
+            if (m_hasInverse)
+            {
+                return m_inverseSlot.Value().Get("value");
+            }
+            auto result = New(info.Env());
+            auto* inverse = Unwrap(result);
+            inverse->Update(InvertPose(GetNativePose()));
+            // JS owns both sides of this cycle. Persistent N-API references here
+            // would keep every queried transform alive for the runtime's lifetime.
+            m_inverseSlot.Value().Set("value", result);
+            inverse->m_inverseSlot.Value().Set("value", Value());
+            m_hasInverse = inverse->m_hasInverse = true;
+            return result;
+        }
 
         Napi::Value Position(const Napi::CallbackInfo&)
         {

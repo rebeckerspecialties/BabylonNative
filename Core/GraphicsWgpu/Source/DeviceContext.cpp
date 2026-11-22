@@ -80,7 +80,16 @@ namespace Babylon::Graphics
         return FrameCompletionScope{m_graphicsImpl};
     }
 
-    void DeviceContext::RequestScreenShot(std::function<void(std::vector<uint8_t>)> callback)
+    std::optional<FrameCompletionScope> DeviceContext::TryAcquireFrameCompletionScope()
+    {
+        if (!m_graphicsImpl.TryIncrementPendingFrameScopes())
+        {
+            return std::nullopt;
+        }
+        return FrameCompletionScope{m_graphicsImpl, FrameCompletionScope::Adopt{}};
+    }
+
+    void DeviceContext::RequestScreenShot(std::function<void(ScreenShotData)> callback)
     {
         m_graphicsImpl.RequestScreenShot(std::move(callback));
     }

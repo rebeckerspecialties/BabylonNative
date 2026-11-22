@@ -25,6 +25,10 @@
 #include <memory>
 #include <sstream>
 
+#if defined(__APPLE__)
+#include <mach/mach.h>
+#endif
+
 #define STRINGIZEX(x) #x
 #define STRINGIZE(x) STRINGIZEX(x)
 
@@ -178,6 +182,27 @@ namespace Babylon::Plugins::Internal
         return Napi::Value::From(info.Env(), STRINGIZE(NAPI_JAVASCRIPT_ENGINE));
     }
 
+    Napi::Value TestUtils::GetCurrentThreadCpuTime(const Napi::CallbackInfo& info)
+    {
+#if defined(__APPLE__)
+        // Validation only: cumulative execution time, excluding blocked GPU/presentation waits.
+        const auto thread = mach_thread_self();
+        thread_basic_info_data_t data{};
+        mach_msg_type_number_t count = THREAD_BASIC_INFO_COUNT;
+        const auto status = thread_info(thread, THREAD_BASIC_INFO, reinterpret_cast<thread_info_t>(&data), &count);
+        mach_port_deallocate(mach_task_self(), thread);
+        if (status != KERN_SUCCESS)
+        {
+            throw Napi::Error::New(info.Env(), "Could not read current thread CPU time.");
+        }
+        const double milliseconds = (static_cast<double>(data.user_time.seconds) + data.system_time.seconds) * 1000.0 +
+            (static_cast<double>(data.user_time.microseconds) + data.system_time.microseconds) / 1000.0;
+        return Napi::Number::New(info.Env(), milliseconds);
+#else
+        return info.Env().Undefined();
+#endif
+    }
+
     Napi::Value TestUtils::GetPlatformName(const Napi::CallbackInfo& info)
     {
         return Napi::Value::From(info.Env(), STRINGIZE(BABYLON_NATIVE_PLATFORM));
@@ -305,20 +330,18 @@ namespace Babylon::Plugins::Internal
         auto errorCallbackPtr = info[1].IsUndefined() ? nullptr :
             std::make_shared<Napi::FunctionReference>(Napi::Persistent(info[1].As<Napi::Function>()));
 #if defined(BABYLON_NATIVE_TESTUTILS_WGPU)
-        // The WebGPU device context hands back the bytes only; its failures surface through the
+        // WebGPU readback failures surface through the
         // backend diagnostics, so the error callback is accepted for API parity and never fires.
         (void)errorCallbackPtr;
-        m_deviceContext.RequestScreenShot([this, callbackPtr{ std::move(callbackPtr) }](std::vector<uint8_t> array) {
-            const auto width = m_deviceContext.GetWidth();
-            const auto height = m_deviceContext.GetHeight();
-            m_runtime.Dispatch([callbackPtr{ std::move(callbackPtr) }, array{ std::move(array) }, width, height](Napi::Env env) mutable {
-                auto span = gsl::span<uint8_t>{array};
-                auto arrayBuffer{ Napi::ArrayBuffer::New(env, span.data(), span.size(), [array = std::move(array)](Napi::Env, void*) {}) };
+        m_deviceContext.RequestScreenShot([this, callbackPtr{ std::move(callbackPtr) }](Graphics::ScreenShotData frame) {
+            m_runtime.Dispatch([callbackPtr{ std::move(callbackPtr) }, frame{ std::move(frame) }](Napi::Env env) mutable {
+                auto span = gsl::span<uint8_t>{frame.Pixels};
+                auto arrayBuffer{ Napi::ArrayBuffer::New(env, span.data(), span.size(), [pixels = std::move(frame.Pixels)](Napi::Env, void*) {}) };
                 auto typedArray{ Napi::Uint8Array::New(env, span.size(), arrayBuffer, 0) };
                 callbackPtr->Value().Call({
                     typedArray,
-                    Napi::Number::New(env, static_cast<double>(width)),
-                    Napi::Number::New(env, static_cast<double>(height)) });
+                    Napi::Number::New(env, static_cast<double>(frame.Width)),
+                    Napi::Number::New(env, static_cast<double>(frame.Height)) });
             });
 #else
         m_deviceContext.RequestScreenShot([this, callbackPtr{std::move(callbackPtr)}, errorCallbackPtr{std::move(errorCallbackPtr)}](Graphics::BgfxCallback::ScreenShotResult result) {

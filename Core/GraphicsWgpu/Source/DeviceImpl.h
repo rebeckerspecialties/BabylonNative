@@ -48,6 +48,7 @@ namespace Babylon::Graphics
 
         void AddToJavaScript(Napi::Env);
         static DeviceImpl& GetFromJavaScript(Napi::Env);
+        std::optional<arcana::task<bool, std::exception_ptr>> GetInitializationTask();
 
         Napi::Value CreateContext(Napi::Env);
 
@@ -88,9 +89,10 @@ namespace Babylon::Graphics
         continuation_scheduler<>& FrameStartScheduler();
 
         void IncrementPendingFrameScopes();
+        bool TryIncrementPendingFrameScopes();
         void DecrementPendingFrameScopes();
 
-        void RequestScreenShot(std::function<void(std::vector<uint8_t>)> callback);
+        void RequestScreenShot(std::function<void(ScreenShotData)> callback);
 
         /* ********** END DEVICE CONTEXT CONTRACT ********** */
 
@@ -140,7 +142,7 @@ namespace Babylon::Graphics
         bool m_frameBlocked{true};
         size_t m_pendingFrameScopes{};
 
-        std::queue<std::function<void(std::vector<uint8_t>)>> m_screenShotCallbacks{};
+        std::queue<std::function<void(ScreenShotData)>> m_screenShotCallbacks{};
         std::mutex m_screenShotCallbacksMutex{};
 
         std::map<std::string, SafeTimespanGuarantor> m_updateSafeTimespans{};
@@ -153,6 +155,7 @@ namespace Babylon::Graphics
 
         std::shared_ptr<WgpuNative> m_wgpu{};
         std::shared_future<std::shared_ptr<WgpuNative>> m_pendingWgpu{};
+        std::optional<arcana::task<bool, std::exception_ptr>> m_initializationTask{};
         uint32_t m_pendingWgpuWidth{};
         uint32_t m_pendingWgpuHeight{};
         bool m_startFrameBeforeRenderPending{};

@@ -2,6 +2,7 @@
 
 #include "XRGPUSubImage.h"
 
+#include <gsl/util>
 #include <optional>
 
 namespace Babylon
@@ -19,6 +20,11 @@ namespace Babylon
             arcana::task<void, std::exception_ptr> BeginSessionAsync();
             arcana::task<void, std::exception_ptr> EndSessionAsync();
 
+            std::weak_ptr<xr::System::Session> GetPlatformSession() const
+            {
+                return m_sessionState ? m_sessionState->Session : nullptr;
+            }
+
             void ScheduleFrame(std::function<void(const std::shared_ptr<const xr::System::Session::Frame>&)>&& callback);
 
             void SetRenderTextureFunctions(const Napi::Function& createFunction, const Napi::Function& destroyFunction);
@@ -26,8 +32,13 @@ namespace Babylon
             Napi::Value GetRenderTargetForViewIndex(uint32_t viewIndex) const;
             std::optional<XRGPUSubImageData> GetWebGPUSubImage(uint32_t viewIndex) const;
             uint32_t GetWebGPUTextureWidth() const;
+            const char* GetWebGPUColorFormat() const;
             uint32_t GetWebGPUTextureHeight() const;
             uint32_t GetWebGPUTextureArrayLength() const;
+            void SetProjectionDepthFormat(std::string format)
+            {
+                m_sessionState->ProjectionDepthFormat = std::move(format);
+            }
 
             void SetDepthsNarFar(float depthNear, float depthFar)
             {
@@ -103,6 +114,7 @@ namespace Babylon
                 void* ColorTexturePointer{nullptr};
                 void* DepthTexturePointer{nullptr};
                 xr::Size ViewTextureSize{};
+                std::string DepthFormat{};
                 std::vector<RenderTarget> RenderTargets{};
                 bool Initialized{false};
             };
@@ -126,6 +138,11 @@ namespace Babylon
                 uint32_t LastTextureWidth{};
                 uint32_t LastTextureHeight{};
                 uint32_t LastTextureArrayLength{};
+                std::string ProjectionDepthFormat{};
+#if defined(__ANDROID__) && defined(BABYLON_NATIVE_XR_OPENXR)
+                // Destroy the OpenXR session before returning the window to Vulkan WSI.
+                std::optional<gsl::final_action<void (*)()>> ResumeWindowPresentation;
+#endif
                 std::shared_ptr<xr::System::Session> Session{};
                 std::shared_ptr<xr::System::Session::Frame> Frame{};
                 arcana::cancellation_source CancellationSource{};

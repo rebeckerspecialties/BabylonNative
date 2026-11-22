@@ -247,9 +247,14 @@ namespace Babylon
             jsInputSource.Set("handedness", Napi::String::New(env, HANDEDNESS_STRINGS[static_cast<size_t>(inputSource.Handedness)]));
             jsInputSource.Set("targetRayMode", TARGET_RAY_MODE);
 
-            auto profiles = Napi::Array::New(env, 1);
+            auto profiles = Napi::Array::New(env);
             Napi::Value string = Napi::String::New(env, "generic-trigger-squeeze-touchpad-thumbstick");
-            profiles.Set(uint32_t{ 0 }, string);
+            uint32_t profileIndex{};
+            if (!inputSource.InteractionProfileName.empty())
+            {
+                profiles.Set(profileIndex++, Napi::String::New(env, inputSource.InteractionProfileName));
+            }
+            profiles.Set(profileIndex, string);
             jsInputSource.Set("profiles", profiles);
 
             SetXRInputSourceData(jsInputSource, inputSource);
@@ -268,6 +273,9 @@ namespace Babylon
                 JS_CLASS_NAME,
                 {
                     InstanceAccessor("inputSources", &XRSession::GetInputSources, nullptr),
+                    InstanceAccessor("frameRate", &XRSession::GetFrameRate, nullptr),
+                    InstanceAccessor("supportedFrameRates", &XRSession::GetSupportedFrameRates, nullptr),
+                    InstanceMethod("updateTargetFrameRate", &XRSession::UpdateTargetFrameRate),
                     InstanceMethod("addEventListener", &XRSession::AddEventListener),
                     InstanceMethod("removeEventListener", &XRSession::RemoveEventListener),
                     InstanceMethod("requestReferenceSpace", &XRSession::RequestReferenceSpace),
@@ -313,7 +321,7 @@ namespace Babylon
             LogSessionStage("starting platform session");
             session.m_xr->BeginSessionAsync()
                 .then(session.m_runtimeScheduler, arcana::cancellation::none(),
-                    [deferred, jsSession{ std::move(jsSession) }, env{ info.Env() }](const arcana::expected<void, std::exception_ptr>& result) {
+                    [deferred, jsSession{ std::move(jsSession) }, immersive = info[0].ToString().Utf8Value() != "inline", env{ info.Env() }](const arcana::expected<void, std::exception_ptr>& result) {
                 if (result.has_error())
                 {
                     LogSessionFailure(result.error());
@@ -322,6 +330,17 @@ namespace Babylon
                 else
                 {
                     LogSessionStage("platform session started");
+                    auto& session = *XRSession::Unwrap(jsSession.Value());
+                    if (immersive)
+                    {
+                        session.m_rateSession = session.m_xr->GetPlatformSession();
+                        session.m_xr->SetDepthsNarFar(session.m_depthNear, session.m_depthFar);
+                        if (const auto platform = session.m_rateSession.lock(); platform && platform->GetDisplayRateControl())
+                        {
+                            session.m_reportedFrameRate = platform->GetDisplayRateControl()->Nominal.load();
+                        }
+                    }
+                    jsSession.Value().Set("onframeratechange", env.Null());
                     deferred.Resolve(jsSession.Value());
                 }
             });
@@ -331,8 +350,8 @@ namespace Babylon
         XRSession::XRSession(const Napi::CallbackInfo& info)
             : Napi::ObjectWrap<XRSession>{ info }
             , m_runtimeScheduler{ JsRuntime::GetFromJavaScript(info.Env()) }
-            , m_jsXRFrame{ Napi::Persistent(Plugins::XRFrame::New(info)) }
-            , m_xrFrame{ *Plugins::XRFrame::Unwrap(m_jsXRFrame.Get("_nativeImpl").As<Napi::Object>()) }
+            , m_xrFrame{ *Plugins::XRFrame::Unwrap(Plugins::XRFrame::New(info)) }
+            , m_jsXRFrame{ Napi::Weak(Plugins::XRFrame::WrapForScript(m_xrFrame.Value())) }
             , m_renderState{ Napi::Persistent(Napi::Object::New(info.Env())) }
             , m_jsInputSources{ Napi::Persistent(Napi::Array::New(info.Env())) }
         {
@@ -347,13 +366,21 @@ namespace Babylon
             m_renderState.Set("layers", Napi::Array::New(info.Env()));
 
             auto session = info.This().As<Napi::Object>();
+            // Keep the ownership cycle in JS, where it is collectible. A pending animation callback roots its session.
+            const auto frame = m_xrFrame.Value();
+            session.DefineProperty(Napi::PropertyDescriptor::Value(Napi::Symbol::New(info.Env(), "XRFrame"), frame));
+            const auto scriptFrame = m_jsXRFrame.Value();
+            if (!frame.StrictEquals(scriptFrame))
+            {
+                session.DefineProperty(Napi::PropertyDescriptor::Value(Napi::Symbol::New(info.Env(), "XRFrame wrapper"), scriptFrame));
+            }
+            frame.DefineProperty(Napi::PropertyDescriptor::Value("session", session, napi_enumerable));
             session.Set("renderState", m_renderState.Value());
             session.Set("environmentBlendMode", immersiveAr ? "alpha-blend" : "opaque");
             session.Set("interactionMode", immersiveAr ? "screen-space" : "world-space");
             session.Set("visibilityState", "visible");
 
-            auto enabledFeatures = Napi::Array::New(info.Env());
-            uint32_t enabledFeatureCount{};
+            m_enabledFeatures = {XRReferenceSpaceType::VIEWER, XRReferenceSpaceType::LOCAL};
             if (info.Length() > 1 && info[1].IsObject())
             {
                 const auto sessionInit = info[1].As<Napi::Object>();
@@ -379,22 +406,18 @@ namespace Babylon
                             continue;
                         }
 
-                        bool alreadyEnabled{};
-                        for (uint32_t enabledIndex = 0; enabledIndex < enabledFeatureCount; ++enabledIndex)
+                        if (std::find(m_enabledFeatures.begin(), m_enabledFeatures.end(), feature) == m_enabledFeatures.end())
                         {
-                            if (enabledFeatures.Get(enabledIndex).As<Napi::String>().Utf8Value() == feature)
-                            {
-                                alreadyEnabled = true;
-                                break;
-                            }
-                        }
-                        if (!alreadyEnabled)
-                        {
-                            enabledFeatures.Set(enabledFeatureCount++, feature);
+                            m_enabledFeatures.push_back(feature);
                         }
                         m_webGPUFeatureEnabled = m_webGPUFeatureEnabled || feature == "webgpu";
                     }
                 }
+            }
+            auto enabledFeatures = Napi::Array::New(info.Env(), m_enabledFeatures.size());
+            for (uint32_t index = 0; index < m_enabledFeatures.size(); ++index)
+            {
+                enabledFeatures.Set(index, m_enabledFeatures[index]);
             }
             session.Set("enabledFeatures", enabledFeatures);
         }
@@ -412,6 +435,11 @@ namespace Babylon
         std::optional<XRGPUSubImageData> XRSession::GetWebGPUSubImage(uint32_t viewIndex) const
         {
             return m_xr->GetWebGPUSubImage(viewIndex);
+        }
+
+        const char* XRSession::GetWebGPUColorFormat() const
+        {
+            return m_xr->GetWebGPUColorFormat();
         }
 
         uint32_t XRSession::GetWebGPUTextureWidth() const
@@ -473,9 +501,7 @@ namespace Babylon
 
         Napi::Value XRSession::RequestReferenceSpace(const Napi::CallbackInfo& info)
         {
-            auto deferred = Napi::Promise::Deferred::New(info.Env());
-            deferred.Resolve(XRReferenceSpace::New(info));
-            return deferred.Promise();
+            return XRReferenceSpace::Request(info, m_enabledFeatures);
         }
 
         Napi::Value XRSession::UpdateRenderState(const Napi::CallbackInfo& info)
@@ -556,6 +582,7 @@ namespace Babylon
             {
                 const auto layers = update.Get("layers").As<Napi::Array>();
                 m_activeProjectionLayer = projectionLayerCandidate;
+                m_xr->SetProjectionDepthFormat(m_activeProjectionLayer ? m_activeProjectionLayer->DepthStencilFormat() : "");
                 m_renderState.Set("layers", layers);
                 m_renderState.Set("baseLayer", info.Env().Null());
             }
@@ -565,12 +592,22 @@ namespace Babylon
                 m_renderState.Set("baseLayer", baseLayer.IsUndefined() ? info.Env().Null() : baseLayer);
                 m_renderState.Set("layers", Napi::Array::New(info.Env()));
                 m_activeProjectionLayer = nullptr;
+                m_xr->SetProjectionDepthFormat("");
             }
 
             if (update.Has("inlineVerticalFieldOfView"))
             {
                 m_renderState.Set("inlineVerticalFieldOfView", update.Get("inlineVerticalFieldOfView"));
             }
+#if defined(__ANDROID__) && defined(BABYLON_NATIVE_XR_OPENXR)
+            if (hasLayers || update.Has("baseLayer"))
+            {
+                if (auto session = m_xr->GetPlatformSession().lock())
+                {
+                    session->SetProjectionScale(m_activeProjectionLayer ? m_activeProjectionLayer->ScaleFactor() : 1.0);
+                }
+            }
+#endif
 
             auto deferred = Napi::Promise::Deferred::New(info.Env());
             deferred.Resolve(info.Env().Undefined());
@@ -774,7 +811,7 @@ namespace Babylon
                 this,
                 callbackPtr{ std::make_shared<Napi::FunctionReference>(Napi::Persistent(callback)) },
                 sessionPtr{ std::make_shared<Napi::ObjectReference>(Napi::Persistent(info.This().As<Napi::Object>())) }](const std::shared_ptr<const xr::System::Session::Frame>& frame) {
-                (void)sessionPtr;
+                NotifyFrameRateChange(sessionPtr->Value());
                 ProcessEyeInputSource(*frame.get(), Env());
                 ProcessControllerInputSources(*frame.get(), Env());
 
@@ -899,6 +936,101 @@ namespace Babylon
             bool enabled = m_xr->TrySetFeaturePointCloudEnabled(featurePointCloudEnabled);
 
             return Napi::Value::From(info.Env(), enabled);
+        }
+
+        Napi::Value XRSession::GetFrameRate(const Napi::CallbackInfo& info)
+        {
+            auto session = m_rateSession.lock();
+            if (session && session->GetDisplayRateControl())
+            {
+                return Napi::Number::New(info.Env(), session->GetDisplayRateControl()->Nominal.load());
+            }
+            return info.Env().Null();
+        }
+
+        Napi::Value XRSession::GetSupportedFrameRates(const Napi::CallbackInfo& info)
+        {
+            auto session = m_rateSession.lock();
+            if (!session || !session->GetDisplayRateControl()) return info.Env().Null();
+            const auto& supported = session->GetDisplayRateControl()->Supported;
+            auto rates = Napi::Float32Array::New(info.Env(), supported.size());
+            std::copy(supported.begin(), supported.end(), rates.Data());
+            return rates;
+        }
+
+        Napi::Value XRSession::UpdateTargetFrameRate(const Napi::CallbackInfo& info)
+        {
+            const auto env = info.Env();
+            const auto deferred = Napi::Promise::Deferred::New(env);
+            auto reject = [deferred](Napi::Env env, const char* name, const char* message) {
+                auto ctor = env.Global().Get("DOMException");
+                if (ctor.IsFunction())
+                {
+                    deferred.Reject(ctor.As<Napi::Function>().New({Napi::String::New(env, message), Napi::String::New(env, name)}));
+                }
+                else
+                {
+                    auto error = Napi::Error::New(env, message).Value();
+                    error.Set("name", name);
+                    deferred.Reject(error);
+                }
+            };
+            auto session = m_rateSession.lock();
+            if (!m_endPromise.IsEmpty() || !session || !session->GetDisplayRateControl())
+            {
+                reject(env, "InvalidStateError", "The XR session has no active display rate control.");
+                return deferred.Promise();
+            }
+            float rate;
+            try
+            {
+                rate = info[0].ToNumber().FloatValue();
+            }
+            catch (const Napi::Error& error)
+            {
+                deferred.Reject(error.Value());
+                return deferred.Promise();
+            }
+            const auto& rates = session->GetDisplayRateControl()->Supported;
+            if (std::find(rates.begin(), rates.end(), rate) == rates.end())
+            {
+                reject(env, "TypeError", "The requested rate is not in XRSession.supportedFrameRates.");
+                return deferred.Promise();
+            }
+            auto keepAlive = std::make_shared<Napi::ObjectReference>(Napi::Persistent(info.This().As<Napi::Object>()));
+            JsRuntime::GetFromJavaScript(env).Dispatch([this, deferred, reject, rate, keepAlive](Napi::Env env) {
+                (void)keepAlive;
+                auto session = m_rateSession.lock();
+                const auto* control = session ? session->GetDisplayRateControl() : nullptr;
+                if (!m_endPromise.IsEmpty() || !control || !control->Request(rate))
+                {
+                    reject(env, "InvalidStateError", "The XR runtime could not accept the display rate request.");
+                    return;
+                }
+                deferred.Resolve(env.Undefined());
+            });
+            return deferred.Promise();
+        }
+
+        void XRSession::NotifyFrameRateChange(const Napi::Object& session)
+        {
+            const auto platform = m_rateSession.lock();
+            if (!m_endPromise.IsEmpty() || !platform || !platform->GetDisplayRateControl()) return;
+            const float rate = platform->GetDisplayRateControl()->Nominal.load();
+            if (rate == m_reportedFrameRate) return;
+            m_reportedFrameRate = rate;
+            auto event = Napi::Object::New(Env());
+            event.Set("type", "frameratechange");
+            event.Set("session", session);
+            event.Set("target", session);
+            std::vector<Napi::Function> callbacks;
+            for (const auto& [name, listener] : m_eventNamesAndCallbacks)
+            {
+                if (name == "frameratechange") callbacks.emplace_back(listener.Value());
+            }
+            const auto onChange = session.Get("onframeratechange");
+            if (onChange.IsFunction()) callbacks.emplace_back(onChange.As<Napi::Function>());
+            for (const auto& callback : callbacks) callback.Call(session, {event});
         }
 
         Napi::Value XRSession::End(const Napi::CallbackInfo& info)

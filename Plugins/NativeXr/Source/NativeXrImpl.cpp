@@ -115,7 +115,12 @@ namespace Babylon
 
         bool ShouldUseAsyncXrComposite()
         {
-#if defined(__APPLE__)
+#if defined(__ANDROID__) && defined(BABYLON_NATIVE_XR_OPENXR)
+            // The Vulkan binding names the renderer's queue. The release-layout
+            // transition must be submitted before xrReleaseSwapchainImage, but
+            // the runtime accepts commands on that queue still in flight.
+            return true;
+#elif defined(__APPLE__)
             static const bool enabled = std::getenv("BABYLON_NATIVE_XR_ASYNC_COMPOSITE") != nullptr;
             static bool didLog{};
             if (enabled && !didLog)
@@ -239,6 +244,15 @@ namespace Babylon
                 renderTargetIndex};
         }
 
+        const char* NativeXr::Impl::GetWebGPUColorFormat() const
+        {
+            if (!m_sessionState || !m_sessionState->Session)
+            {
+                throw std::runtime_error{"No active XR session for a WebGPU binding."};
+            }
+            return XrTextureFormatToWebGpuFormat(m_sessionState->Session->GetColorTextureFormat());
+        }
+
         uint32_t NativeXr::Impl::GetWebGPUTextureWidth() const
         {
             return m_sessionState == nullptr ? 0 : m_sessionState->LastTextureWidth;
@@ -301,7 +315,8 @@ namespace Babylon
                         static_cast<uintptr_t>(nativeVulkanBinding.queue),
                         nativeVulkanBinding.api_version,
                         nativeVulkanBinding.queue_family_index,
-                        nativeVulkanBinding.queue_index});
+                        nativeVulkanBinding.queue_index,
+                        nativeVulkanBinding.max_texture_dimension_2d});
                     void* graphicsDevice = vulkanBinding.get();
                     void* graphicsQueue = nullptr;
                     std::shared_ptr<void> graphicsBindingLifetime = vulkanBinding;
@@ -313,6 +328,10 @@ namespace Babylon
                         .then(m_sessionState->GraphicsContext.AfterRenderScheduler(), arcana::cancellation::none(), [this, thisRef{shared_from_this()}, graphicsBindingLifetime{std::move(graphicsBindingLifetime)}](std::shared_ptr<xr::System::Session> session) {
                             static_cast<void>(graphicsBindingLifetime);
                             m_sessionState->Session = std::move(session);
+#if defined(__ANDROID__) && defined(BABYLON_NATIVE_XR_OPENXR)
+                            babylon_wgpu_suspend_window_presentation();
+                            m_sessionState->ResumeWindowPresentation.emplace(&babylon_wgpu_resume_window_presentation);
+#endif
                             NotifySessionStateChanged(true);
                         });
                 }));
@@ -537,12 +556,22 @@ namespace Babylon
                 m_sessionState->LastTextureHeight = static_cast<uint32_t>(view.ColorTextureSize.Height);
                 m_sessionState->LastTextureArrayLength = std::max<uint32_t>(1, static_cast<uint32_t>(view.ColorTextureSize.Depth));
                 const auto& it{m_sessionState->TextureToViewConfigurationMap.find(view.ColorTexturePointer)};
+                const auto* depthFormat = m_sessionState->ProjectionDepthFormat.empty()
+                    ? XrDepthTextureFormatToWebGpuFormat(view.DepthTextureFormat)
+                    : m_sessionState->ProjectionDepthFormat.c_str();
 
                 if (it == m_sessionState->TextureToViewConfigurationMap.end() ||
                     it->second.ViewTextureSize.Width != view.ColorTextureSize.Width ||
                     it->second.ViewTextureSize.Height != view.ColorTextureSize.Height ||
-                    it->second.ViewTextureSize.Depth != view.ColorTextureSize.Depth)
+                    it->second.ViewTextureSize.Depth != view.ColorTextureSize.Depth ||
+                    it->second.DepthFormat != depthFormat)
                 {
+                    if (it != m_sessionState->TextureToViewConfigurationMap.end() && !m_sessionState->DestroyRenderTexture.IsEmpty())
+                    {
+                        for (auto& target : it->second.RenderTargets)
+                            if (!target.JsRenderTarget.IsEmpty())
+                                m_sessionState->DestroyRenderTexture.Call({target.JsRenderTarget.Value()});
+                    }
                     auto& viewConfig = m_sessionState->TextureToViewConfigurationMap[view.ColorTexturePointer] = {};
                     m_sessionState->ActiveViewConfigurations[viewIdx] = &viewConfig;
                     m_sessionState->ViewConfigurationStartViewIdx[&viewConfig] = viewIdx;
@@ -550,6 +579,7 @@ namespace Babylon
                     viewConfig.ColorTexturePointer = view.ColorTexturePointer;
                     viewConfig.DepthTexturePointer = view.DepthTexturePointer;
                     viewConfig.ViewTextureSize = view.ColorTextureSize;
+                    viewConfig.DepthFormat = depthFormat;
 
                     assert(view.ColorTextureSize.Width != 0);
                     assert(view.ColorTextureSize.Height != 0);
@@ -561,7 +591,6 @@ namespace Babylon
                     const auto textureHeight = static_cast<uint32_t>(view.ColorTextureSize.Height);
                     const auto textureLayers = std::max<uint32_t>(1, static_cast<uint32_t>(view.ColorTextureSize.Depth));
                     const auto* colorFormat = XrTextureFormatToWebGpuFormat(view.ColorTextureFormat);
-                    const auto* depthFormat = XrDepthTextureFormatToWebGpuFormat(view.DepthTextureFormat);
                     const auto colorUsage = WEBGPU_TEXTURE_USAGE_TEXTURE_BINDING | WEBGPU_TEXTURE_USAGE_RENDER_ATTACHMENT;
                     const auto depthUsage = WEBGPU_TEXTURE_USAGE_RENDER_ATTACHMENT;
                     const auto colorDescriptor = MakeTextureDescriptorJson("NativeXR.color", textureWidth, textureHeight, textureLayers, colorFormat, colorUsage);
@@ -592,6 +621,7 @@ namespace Babylon
 #elif defined(__ANDROID__) && defined(BABYLON_NATIVE_XR_OPENXR)
                     const auto colorTextureId = babylon_wgpu_native_import_vulkan_texture(
                         static_cast<uint64_t>(reinterpret_cast<uintptr_t>(view.ColorTexturePointer)),
+                        view.SwapchainWidth, view.SwapchainHeight, view.SwapchainFormat,
                         colorDescriptor.c_str());
 #else
 #error NativeXR requires an explicit platform texture import path.
@@ -614,28 +644,12 @@ namespace Babylon
 
                     const auto eyeCount = std::max<uint32_t>(1, static_cast<uint32_t>(viewConfig.ViewTextureSize.Depth));
                     viewConfig.RenderTargets.resize(eyeCount);
-                    for (uint32_t eyeIdx = 0; eyeIdx < eyeCount; eyeIdx++)
+                    auto jsColorTexture = Plugins::NativeWebGPU::CreateTextureFromNativeId(
+                        m_env, colorTextureId, "NativeXR.color", colorFormat, textureWidth, textureHeight, textureLayers, colorUsage);
+                    auto jsDepthTexture = Plugins::NativeWebGPU::CreateTextureFromNativeId(
+                        m_env, depthTextureId, "NativeXR.depth", depthFormat, textureWidth, textureHeight, textureLayers, depthUsage);
+                    for (auto& renderTarget : viewConfig.RenderTargets)
                     {
-                        auto& renderTarget = viewConfig.RenderTargets[eyeIdx];
-                        auto jsColorTexture = Plugins::NativeWebGPU::CreateTextureFromNativeId(
-                            m_env,
-                            colorTextureId,
-                            "NativeXR.color",
-                            colorFormat,
-                            textureWidth,
-                            textureHeight,
-                            textureLayers,
-                            colorUsage);
-                        auto jsDepthTexture = Plugins::NativeWebGPU::CreateTextureFromNativeId(
-                            m_env,
-                            depthTextureId,
-                            "NativeXR.depth",
-                            depthFormat,
-                            textureWidth,
-                            textureHeight,
-                            textureLayers,
-                            depthUsage);
-
                         renderTarget.ColorTextureId = colorTextureId;
                         renderTarget.DepthTextureId = depthTextureId;
                         renderTarget.JsColorTexture = Napi::Persistent(jsColorTexture);
@@ -672,8 +686,11 @@ namespace Babylon
                 const auto renderTargetIndex = viewIdx - startViewIterator->second;
                 if (renderTargetIndex < viewConfig->RenderTargets.size())
                 {
-                    m_sessionState->FrameColorTextureIds.emplace_back(
-                        viewConfig->RenderTargets[renderTargetIndex].ColorTextureId);
+                    // Views of one array are acquired and released as a single swapchain image.
+                    if (renderTargetIndex == 0)
+                    {
+                        m_sessionState->FrameColorTextureIds.emplace_back(viewConfig->RenderTargets.front().ColorTextureId);
+                    }
                 }
             }
 #endif
@@ -695,12 +712,10 @@ namespace Babylon
             arcana::trace_region endFrameRegion{"NativeXR::EndFrame"};
 
 #if defined(__ANDROID__) && defined(BABYLON_NATIVE_XR_OPENXR)
-            for (const auto colorTextureId : m_sessionState->FrameColorTextureIds)
+            const auto& colorTextures = m_sessionState->FrameColorTextureIds;
+            if (!colorTextures.empty() && !babylon_wgpu_native_prepare_openxr_textures_for_release(colorTextures.data(), colorTextures.size()))
             {
-                if (!babylon_wgpu_native_prepare_openxr_texture_for_release(colorTextureId))
-                {
-                    throw std::runtime_error{"NativeXR failed to prepare its WebGPU color texture for OpenXR release: " + GetLastWgpuError()};
-                }
+                throw std::runtime_error{"NativeXR failed to prepare its WebGPU color textures for OpenXR release: " + GetLastWgpuError()};
             }
 #endif
 

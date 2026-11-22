@@ -67,6 +67,15 @@ namespace Babylon::Graphics
         return FrameCompletionScope{m_graphicsImpl};
     }
 
+    std::optional<FrameCompletionScope> DeviceContext::TryAcquireFrameCompletionScope()
+    {
+        if (!m_graphicsImpl.TryIncrementPendingFrameScopes())
+        {
+            return std::nullopt;
+        }
+        return FrameCompletionScope{m_graphicsImpl, FrameCompletionScope::Adopt{}};
+    }
+
     void DeviceContext::SetActiveEncoder(bgfx::Encoder* encoder)
     {
         m_graphicsImpl.SetActiveEncoder(encoder);

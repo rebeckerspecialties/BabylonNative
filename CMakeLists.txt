@@ -81,8 +81,15 @@ FetchContent_Declare(wgpu_native
         "-DPATCH_FILE=${CMAKE_CURRENT_LIST_DIR}/Patches/wgpu-native/0001-wgpu-30.0.1.patch"
         -P "${CMAKE_CURRENT_LIST_DIR}/Patches/apply_patch_if_needed.cmake"
     EXCLUDE_FROM_ALL)
-# Naga-only correction at the same wgpu revision as Cargo.toml. This does not
-# upgrade wgpu or substitute another device/backend implementation.
+set(BABYLON_NATIVE_CANVAS_REV d10169ee08d1fc79f9556df283e16dd6d985c1f9)
+set(BABYLON_NATIVE_CANVAS_PATCH "${CMAKE_CURRENT_LIST_DIR}/Patches/femtovg/0001-share-device-canvas-pipelines.patch")
+FetchContent_Declare(canvas_femtovg
+    GIT_REPOSITORY https://github.com/rebeckerspecialties/femtovg.git
+    GIT_TAG ${BABYLON_NATIVE_CANVAS_REV}
+    PATCH_COMMAND ${CMAKE_COMMAND} "-DPATCH_FILE=${BABYLON_NATIVE_CANVAS_PATCH}"
+        -P "${CMAKE_CURRENT_LIST_DIR}/Patches/apply_patch_if_needed.cmake"
+    EXCLUDE_FROM_ALL)
+# Shader and Vulkan driver corrections at the same wgpu revision as Cargo.toml.
 set(BABYLON_NATIVE_WGPU_SHADER_REV 40f4a34ebaf56f9a046231f54125ad046239d3f3)
 FetchContent_Declare(wgpu_shader_codegen
     GIT_REPOSITORY https://github.com/gfx-rs/wgpu.git
@@ -92,6 +99,15 @@ FetchContent_Declare(wgpu_shader_codegen
         -P "${CMAKE_CURRENT_LIST_DIR}/Patches/apply_patch_if_needed.cmake"
         COMMAND ${CMAKE_COMMAND}
         "-DPATCH_FILE=${CMAKE_CURRENT_LIST_DIR}/Patches/wgpu/0002-explicit-shader-workspace.patch"
+        -P "${CMAKE_CURRENT_LIST_DIR}/Patches/apply_patch_if_needed.cmake"
+        COMMAND ${CMAKE_COMMAND}
+        "-DPATCH_FILE=${CMAKE_CURRENT_LIST_DIR}/Patches/wgpu/0003-adreno-5xx-empty-descriptor-layout.patch"
+        -P "${CMAKE_CURRENT_LIST_DIR}/Patches/apply_patch_if_needed.cmake"
+        COMMAND ${CMAKE_COMMAND}
+        "-DPATCH_FILE=${CMAKE_CURRENT_LIST_DIR}/Patches/wgpu/0004-explicit-hal-workspace.patch"
+        -P "${CMAKE_CURRENT_LIST_DIR}/Patches/apply_patch_if_needed.cmake"
+        COMMAND ${CMAKE_COMMAND}
+        "-DPATCH_FILE=${CMAKE_CURRENT_LIST_DIR}/Patches/wgpu/0005-preserve-vulkan-instance-flags.patch"
         -P "${CMAKE_CURRENT_LIST_DIR}/Patches/apply_patch_if_needed.cmake"
     EXCLUDE_FROM_ALL)
 FetchContent_Declare(metal-cpp
@@ -385,6 +401,15 @@ set(BABYLON_NATIVE_PLUGIN_TESTUTILS ON CACHE BOOL "" FORCE)
 
 if(BABYLON_NATIVE_WGPU_USE_UPSTREAM_NATIVE)
     FetchContent_MakeAvailable_With_Message(wgpu_native)
+    FetchContent_MakeAvailable_With_Message(canvas_femtovg)
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${BABYLON_NATIVE_CANVAS_PATCH}")
+    execute_process(COMMAND git rev-parse HEAD WORKING_DIRECTORY "${canvas_femtovg_SOURCE_DIR}"
+        OUTPUT_VARIABLE _canvas_rev OUTPUT_STRIP_TRAILING_WHITESPACE COMMAND_ERROR_IS_FATAL ANY)
+    if(NOT _canvas_rev STREQUAL BABYLON_NATIVE_CANVAS_REV)
+        message(FATAL_ERROR "The canvas source must use femtovg ${BABYLON_NATIVE_CANVAS_REV}.")
+    endif()
+    execute_process(COMMAND git apply --reverse --check "${BABYLON_NATIVE_CANVAS_PATCH}"
+        WORKING_DIRECTORY "${canvas_femtovg_SOURCE_DIR}" COMMAND_ERROR_IS_FATAL ANY)
     file(STRINGS "${CMAKE_CURRENT_LIST_DIR}/Cargo.toml" _shader_wgpu_dependencies REGEX "^wgpu = ")
     if(NOT _shader_wgpu_dependencies)
         message(FATAL_ERROR "The workspace wgpu dependency pin was not found.")
@@ -405,14 +430,17 @@ if(BABYLON_NATIVE_WGPU_USE_UPSTREAM_NATIVE)
     endif()
     # Source overrides bypass FetchContent's patch command. Require the fix
     # there too instead of silently building a different shader compiler.
-    foreach(_shader_patch IN ITEMS 0001-metal-snorm16-vertex-unpacking.patch 0002-explicit-shader-workspace.patch)
+    foreach(_shader_patch IN ITEMS 0001-metal-snorm16-vertex-unpacking.patch 0002-explicit-shader-workspace.patch
+            0003-adreno-5xx-empty-descriptor-layout.patch 0004-explicit-hal-workspace.patch
+            0005-preserve-vulkan-instance-flags.patch)
+        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_LIST_DIR}/Patches/wgpu/${_shader_patch}")
         execute_process(
             COMMAND git apply --reverse --check "${CMAKE_CURRENT_LIST_DIR}/Patches/wgpu/${_shader_patch}"
             WORKING_DIRECTORY "${wgpu_shader_codegen_SOURCE_DIR}"
             RESULT_VARIABLE _shader_patch_status
             ERROR_VARIABLE _shader_patch_error)
         if(NOT _shader_patch_status EQUAL 0)
-            message(FATAL_ERROR "The Naga patch ${_shader_patch} is missing or has drifted: ${_shader_patch_error}")
+            message(FATAL_ERROR "The wgpu patch ${_shader_patch} is missing or has drifted: ${_shader_patch_error}")
         endif()
     endforeach()
     set(webgpu_headers_SOURCE_DIR "${wgpu_native_SOURCE_DIR}/ffi/webgpu-headers" CACHE PATH "webgpu-headers bundled with wgpu-native" FORCE)

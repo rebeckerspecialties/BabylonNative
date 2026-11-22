@@ -125,7 +125,7 @@ namespace Babylon::Graphics
         return babylon_wgpu_request_screenshot(m_context);
     }
 
-    std::vector<uint8_t> WgpuNative::CopyScreenShot() const
+    ScreenShotData WgpuNative::CopyScreenShot() const
     {
         if (m_context == nullptr)
         {
@@ -135,16 +135,15 @@ namespace Babylon::Graphics
 #if defined(__APPLE__)
         const ScopedAutoreleasePool pool{};
 #endif
-        uint32_t width{};
-        uint32_t height{};
+        ScreenShotData result{};
         size_t byteLen{};
-        if (!babylon_wgpu_get_screenshot_info(m_context, &width, &height, &byteLen) || byteLen == 0)
+        if (!babylon_wgpu_get_screenshot_info(m_context, &result.Width, &result.Height, &byteLen) || byteLen == 0)
         {
             return {};
         }
 
-        std::vector<uint8_t> result(byteLen);
-        if (!babylon_wgpu_copy_screenshot(m_context, result.data(), result.size()))
+        result.Pixels.resize(byteLen);
+        if (!babylon_wgpu_copy_screenshot(m_context, result.Pixels.data(), result.Pixels.size()))
         {
             return {};
         }

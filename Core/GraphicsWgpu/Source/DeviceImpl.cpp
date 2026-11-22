@@ -49,8 +49,11 @@ namespace Babylon::Graphics
         m_state.Hdr10 = config.Hdr10;
         m_state.Resolution.Width = std::max<size_t>(1, config.Width);
         m_state.Resolution.Height = std::max<size_t>(1, config.Height);
-        m_state.Resolution.HardwareScalingLevel = 1.0f;
         m_state.Resolution.DevicePixelRatio = GetDevicePixelRatio(config.Window);
+        // WebGPU canvases size their own backing textures and do not call the
+        // NativeEngine hardware-scaling API. Present at native pixel density
+        // by default; an explicit hardware-scaling level still overrides it.
+        m_state.Resolution.HardwareScalingLevel = 1.0f / m_state.Resolution.DevicePixelRatio;
     }
 
     DeviceImpl::~DeviceImpl()
@@ -142,6 +145,22 @@ namespace Babylon::Graphics
         return DeviceContext::Create(env, *this);
     }
 
+    std::optional<arcana::task<bool, std::exception_ptr>> DeviceContext::TryGetInitializationTask(Napi::Env env)
+    {
+        const auto graphics = JsRuntime::NativeObject::GetFromJavaScript(env).Get(JS_GRAPHICS_NAME);
+        if (!graphics.IsExternal())
+        {
+            return {};
+        }
+        return graphics.As<Napi::External<DeviceImpl>>().Data()->GetInitializationTask();
+    }
+
+    std::optional<arcana::task<bool, std::exception_ptr>> DeviceImpl::GetInitializationTask()
+    {
+        std::scoped_lock lock{m_state.Mutex};
+        return m_initializationTask;
+    }
+
     void DeviceImpl::SetRenderResetCallback(std::function<void()> callback)
     {
         m_renderResetCallback = std::move(callback);
@@ -175,8 +194,20 @@ namespace Babylon::Graphics
             m_pendingWgpuHeight = config.Height;
             m_rendering = true;
             m_wgpuInitializationLogged = false;
-            m_pendingWgpu = std::async(std::launch::async, [config] {
-                return std::make_shared<WgpuNative>(config);
+            arcana::task_completion_source<bool, std::exception_ptr> ready{};
+            m_initializationTask = ready.as_task();
+            m_pendingWgpu = std::async(std::launch::async, [config, ready]() mutable {
+                try
+                {
+                    auto renderer = std::make_shared<WgpuNative>(config);
+                    ready.complete(renderer->IsValid());
+                    return renderer;
+                }
+                catch (...)
+                {
+                    ready.complete(false);
+                    throw;
+                }
             }).share();
         }
     }
@@ -348,7 +379,7 @@ namespace Babylon::Graphics
 
     void DeviceImpl::DisableRendering()
     {
-        std::queue<std::function<void(std::vector<uint8_t>)>> pendingScreenShots{};
+        std::queue<std::function<void(ScreenShotData)>> pendingScreenShots{};
         std::shared_ptr<arcana::cancellation_source> cancellationSource{};
         std::shared_future<std::shared_ptr<WgpuNative>> pendingWgpu{};
 
@@ -533,7 +564,7 @@ namespace Babylon::Graphics
             m_beforeRenderDispatcher.tick(*cancellationSource);
         }
 
-        std::queue<std::function<void(std::vector<uint8_t>)>> pendingCallbacks{};
+        std::queue<std::function<void(ScreenShotData)>> pendingCallbacks{};
         {
             std::scoped_lock lock{m_screenShotCallbacksMutex};
             pendingCallbacks.swap(m_screenShotCallbacks);
@@ -556,8 +587,8 @@ namespace Babylon::Graphics
             return;
         }
 
-        auto frame = wgpu ? wgpu->CopyScreenShot() : std::vector<uint8_t>{};
-        if (frame.empty())
+        auto frame = wgpu ? wgpu->CopyScreenShot() : ScreenShotData{};
+        if (frame.Pixels.empty())
         {
             if (renderWidth == 0 || renderHeight == 0)
             {
@@ -565,7 +596,9 @@ namespace Babylon::Graphics
                 renderHeight = 1;
             }
 
-            frame.resize(renderWidth * renderHeight * 4u, 0);
+            frame.Width = static_cast<uint32_t>(renderWidth);
+            frame.Height = static_cast<uint32_t>(renderHeight);
+            frame.Pixels.resize(renderWidth * renderHeight * 4u, 0);
         }
 
         while (!pendingCallbacks.empty())
@@ -665,7 +698,18 @@ namespace Babylon::Graphics
         m_frameSyncCV.notify_all();
     }
 
-    void DeviceImpl::RequestScreenShot(std::function<void(std::vector<uint8_t>)> callback)
+    bool DeviceImpl::TryIncrementPendingFrameScopes()
+    {
+        std::lock_guard lock{m_frameSyncMutex};
+        if (m_frameBlocked)
+        {
+            return false;
+        }
+        ++m_pendingFrameScopes;
+        return true;
+    }
+
+    void DeviceImpl::RequestScreenShot(std::function<void(ScreenShotData)> callback)
     {
         std::scoped_lock lock{m_screenShotCallbacksMutex};
         m_screenShotCallbacks.emplace(std::move(callback));
