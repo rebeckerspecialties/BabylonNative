@@ -47,6 +47,15 @@ static CANVAS_CPU_SNAPSHOTS: AtomicU64 = AtomicU64::new(0);
 static EXTERNAL_IMAGE_UPLOAD_OWNED_BYTES: AtomicU64 = AtomicU64::new(0);
 static ACTIVE_CONTEXT: AtomicPtr<BackendContext> = AtomicPtr::new(ptr::null_mut());
 
+// The host presents on the display thread; NativeWebGPU can resize or replace the
+// same canvas texture on the JS thread. An atomic pointer publishes the context,
+// but does not protect a borrow of its contents or a lookup racing destruction.
+static CONTEXT_ACCESS: Mutex<()> = Mutex::new(());
+
+fn lock_context() -> std::sync::MutexGuard<'static, ()> {
+    CONTEXT_ACCESS.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 #[no_mangle]
 pub extern "C" fn babylon_wgpu_has_active_context() -> bool {
     !ACTIVE_CONTEXT.load(Ordering::Acquire).is_null()
@@ -685,6 +694,7 @@ where
     }
     let error_serial = error_bridge::serial();
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _guard = lock_context();
         let context = ACTIVE_CONTEXT.load(Ordering::Acquire);
         if context.is_null() {
             return Err(format!(
@@ -2038,6 +2048,7 @@ pub extern "C" fn babylon_wgpu_create(config: *const BabylonWgpuConfig) -> *mut 
     let result = std::panic::catch_unwind(|| create_context(config_value));
     match result {
         Ok(Ok(context)) => {
+            let _guard = lock_context();
             let mut published = RENDERER_DEVICE.lock().unwrap_or_else(|e| e.into_inner());
             *published = std::sync::Arc::downgrade(&context.shared_gpu);
             let raw = Box::into_raw(context);
@@ -2068,6 +2079,7 @@ pub extern "C" fn babylon_wgpu_destroy(context: *mut c_void) {
     }
 
     {
+        let _guard = lock_context();
         let mut published = RENDERER_DEVICE.lock().unwrap_or_else(|e| e.into_inner());
         if ACTIVE_CONTEXT.load(Ordering::Acquire) == context.cast::<BackendContext>() {
             ACTIVE_CONTEXT.store(ptr::null_mut(), Ordering::Release);
@@ -2093,6 +2105,7 @@ pub extern "C" fn babylon_wgpu_resize(context: *mut c_void, width: u32, height: 
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         // SAFETY: `context` comes from `babylon_wgpu_create` and remains exclusively
         // owned by the caller for the duration of this call.
+        let _guard = lock_context();
         let context_ref = unsafe { &mut *(context as *mut BackendContext) };
         context_ref.resize(width, height);
     }));
@@ -2122,6 +2135,7 @@ pub extern "C" fn babylon_wgpu_render(context: *mut c_void) -> bool {
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         // SAFETY: `context` comes from `babylon_wgpu_create` and remains valid for
         // this call by C ABI contract.
+        let _guard = lock_context();
         let context_ref = unsafe { &mut *(context as *mut BackendContext) };
         context_ref.render();
     }));
@@ -2151,6 +2165,7 @@ pub extern "C" fn babylon_wgpu_request_screenshot(context: *mut c_void) -> bool 
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         // SAFETY: `context` comes from `babylon_wgpu_create` and remains valid for
         // this call by C ABI contract.
+        let _guard = lock_context();
         let context_ref = unsafe { &mut *(context as *mut BackendContext) };
         context_ref.screenshot_requested = true;
     }));
@@ -2184,6 +2199,7 @@ pub extern "C" fn babylon_wgpu_get_screenshot_info(
 
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         // SAFETY: pointers were checked for null and are valid by C ABI contract.
+        let _guard = lock_context();
         let context_ref = unsafe { &*(context as *const BackendContext) };
         unsafe {
             *width = context_ref.screenshot_width;
@@ -2220,6 +2236,7 @@ pub extern "C" fn babylon_wgpu_copy_screenshot(
 
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         // SAFETY: pointers were checked for null and are valid by C ABI contract.
+        let _guard = lock_context();
         let context_ref = unsafe { &*(context as *const BackendContext) };
         if output_len < context_ref.screenshot_rgba.len() {
             return false;
@@ -2267,6 +2284,7 @@ pub extern "C" fn babylon_wgpu_get_info(
     // we keep ABI checks minimal and rely on upstream/runtime validation for
     // deeper invariants that are covered by WebGPU conformance paths.
     // SAFETY: pointers come from the C++ layer and are expected to remain valid.
+    let _guard = lock_context();
     let context_ref = unsafe { &*(context as *const BackendContext) };
     // SAFETY: caller provides a valid writable output pointer.
     let output_info_ref = unsafe { &mut *output_info };
@@ -2280,6 +2298,7 @@ pub extern "C" fn babylon_wgpu_get_feature_info(output_info: *mut BabylonWgpuFea
         return false;
     }
 
+    let _guard = lock_context();
     let context = ACTIVE_CONTEXT.load(Ordering::Acquire);
     if context.is_null() {
         set_last_error("WGPU feature info requested before backend context creation.");
