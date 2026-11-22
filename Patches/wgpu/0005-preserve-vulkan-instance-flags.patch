@@ -1,0 +1,90 @@
+diff --git a/wgpu-core/Cargo.toml b/wgpu-core/Cargo.toml
+index 839f941b6..a9e857ee6 100644
+--- a/wgpu-core/Cargo.toml
++++ b/wgpu-core/Cargo.toml
+@@ -1,4 +1,5 @@
+ [package]
++workspace = ".."
+ name = "wgpu-core"
+ version.workspace = true
+ authors.workspace = true
+@@ -161,23 +162,23 @@ noop = []
+ # platform crates from being included in the build at a time, preventing users
+ # from getting confused by seeing them in the list of crates.
+ [target.'cfg(target_vendor = "apple")'.dependencies]
+-wgpu-core-deps-apple = { workspace = true, optional = true }
++wgpu-core-deps-apple = { git = "https://github.com/gfx-rs/wgpu.git", rev = "40f4a34ebaf56f9a046231f54125ad046239d3f3", optional = true }
+ 
+ [target.'cfg(target_os = "emscripten")'.dependencies]
+-wgpu-core-deps-emscripten = { workspace = true, optional = true }
++wgpu-core-deps-emscripten = { git = "https://github.com/gfx-rs/wgpu.git", rev = "40f4a34ebaf56f9a046231f54125ad046239d3f3", optional = true }
+ 
+ [target.'cfg(all(target_arch = "wasm32", not(target_os = "emscripten")))'.dependencies]
+-wgpu-core-deps-wasm = { workspace = true, optional = true }
++wgpu-core-deps-wasm = { git = "https://github.com/gfx-rs/wgpu.git", rev = "40f4a34ebaf56f9a046231f54125ad046239d3f3", optional = true }
+ 
+ [target.'cfg(any(windows, target_os = "linux", target_os = "android", target_os = "freebsd"))'.dependencies]
+-wgpu-core-deps-windows-linux-android = { workspace = true, optional = true }
++wgpu-core-deps-windows-linux-android = { git = "https://github.com/gfx-rs/wgpu.git", rev = "40f4a34ebaf56f9a046231f54125ad046239d3f3", optional = true }
+ 
+ [dependencies]
+ naga.workspace = true
+ naga-types.workspace = true
+-wgpu-naga-bridge.workspace = true
++wgpu-naga-bridge = { git = "https://github.com/gfx-rs/wgpu.git", rev = "40f4a34ebaf56f9a046231f54125ad046239d3f3" }
+ wgpu-hal.workspace = true
+-wgpu-types.workspace = true
++wgpu-types = { git = "https://github.com/gfx-rs/wgpu.git", rev = "40f4a34ebaf56f9a046231f54125ad046239d3f3", default-features = false }
+ 
+ arrayvec.workspace = true
+ bit-vec.workspace = true
+diff --git a/wgpu-core/src/instance.rs b/wgpu-core/src/instance.rs
+index 26a3050a4..5f16a1986 100644
+--- a/wgpu-core/src/instance.rs
++++ b/wgpu-core/src/instance.rs
+@@ -149,12 +149,13 @@ impl Instance {
+         name: String,
+         hal_instance: <A as hal::Api>::Instance,
+     ) -> Self {
++        let flags = hal::Instance::creation_flags(&hal_instance);
+         Self {
+             _name: name,
+             instance_per_backend: vec![(A::VARIANT, Box::new(hal_instance))],
+             requested_backends: A::VARIANT.into(),
+             supported_backends: A::VARIANT.into(),
+-            flags: InstanceFlags::default(),
++            flags,
+             display: None, // TODO: Extract display from HAL instance if available?
+         }
+     }
+diff --git a/wgpu-hal/src/lib.rs b/wgpu-hal/src/lib.rs
+index ca626f275..b7bb89252 100644
+--- a/wgpu-hal/src/lib.rs
++++ b/wgpu-hal/src/lib.rs
+@@ -657,6 +657,11 @@ pub trait Api: Clone + fmt::Debug + Sized + WasmNotSendSync + 'static {
+ pub trait Instance: Sized + WasmNotSendSync {
+     type A: Api;
+ 
++    /// Flags to retain when importing this instance into wgpu-core.
++    fn creation_flags(&self) -> wgt::InstanceFlags {
++        wgt::InstanceFlags::default()
++    }
++
+     unsafe fn init(desc: &InstanceDescriptor<'_>) -> Result<Self, InstanceError>;
+     unsafe fn create_surface(
+         &self,
+diff --git a/wgpu-hal/src/vulkan/instance.rs b/wgpu-hal/src/vulkan/instance.rs
+index 177587582..f93d7427d 100644
+--- a/wgpu-hal/src/vulkan/instance.rs
++++ b/wgpu-hal/src/vulkan/instance.rs
+@@ -877,6 +877,10 @@ impl Drop for super::InstanceShared {
+ impl crate::Instance for super::Instance {
+     type A = super::Api;
+ 
++    fn creation_flags(&self) -> wgt::InstanceFlags {
++        self.shared.flags
++    }
++
+     unsafe fn init(desc: &crate::InstanceDescriptor<'_>) -> Result<Self, crate::InstanceError> {
+         unsafe { Self::init_with_callback(desc, None) }
+     }

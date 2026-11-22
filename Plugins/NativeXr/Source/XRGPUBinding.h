@@ -21,6 +21,7 @@ namespace Babylon
         Napi::ObjectReference m_sessionReference{};
         Napi::ObjectReference m_deviceReference{};
         Plugins::XRSession& m_session;
+        const char* m_preferredColorFormat{};
 
         Napi::Value GetNativeProjectionScaleFactor(const Napi::CallbackInfo& info);
         Napi::Value GetPreferredColorFormat(const Napi::CallbackInfo& info);

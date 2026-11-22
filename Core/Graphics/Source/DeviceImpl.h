@@ -120,6 +120,7 @@ namespace Babylon::Graphics
 
         // Frame completion scope support
         void IncrementPendingFrameScopes();
+        bool TryIncrementPendingFrameScopes();
         void DecrementPendingFrameScopes();
 
         // Active encoder for the current frame.

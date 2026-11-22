@@ -47,6 +47,10 @@ It exits nonzero if either provider fails. A third argument selects a query mani
 caffeinate -i node Plugins/NativeWebGPU/Tests/CTS/run.mjs '' build_wgpu_cts/results/errors Plugins/NativeWebGPU/Tests/CTS/errors.json
 ```
 
+`texture-views.json` selects the two core-format `createTexture:viewFormats`
+and `createView:format` cases (5,376 subcases at the pinned revision). Pass it
+in the same manifest position to check declared and undeclared view formats.
+
 For a single case, without the Dawn control:
 
 ```sh

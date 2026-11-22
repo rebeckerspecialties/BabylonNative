@@ -2,6 +2,7 @@
 
 #include "XRPose.h"
 #include "XRFrame.h"
+#include "XRReferenceSpace.h"
 
 namespace Babylon
 {
@@ -88,10 +89,10 @@ namespace Babylon
 
             Napi::Value GetPose(const Napi::CallbackInfo& info)
             {
-                // TODO: Once multiple reference views are supported, we need to convert the values into the passed in reference space.
+                auto* referenceSpace = XRReferenceSpace::Unwrap(info[0].As<Napi::Object>());
                 Napi::Object napiPose = XRPose::New(info);
                 XRPose* pose = XRPose::Unwrap(napiPose);
-                pose->Update(info, m_hitResult.Pose);
+                pose->Update(info, referenceSpace->GetPoseInReferenceSpace(m_hitResult.Pose));
 
                 return napiPose;
             }

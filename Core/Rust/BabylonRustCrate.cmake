@@ -319,6 +319,9 @@ string(STRIP "${BABYLON_RUST_PROFILE_RUSTFLAGS}" BABYLON_RUST_PROFILE_RUSTFLAGS)
 # workspace for every member, so every invocation applies the same patch or --locked
 # rejects the lock.
 set(BABYLON_RUST_WORKSPACE_CARGO_ARGS)
+if(BABYLON_NATIVE_WGPU_USE_UPSTREAM_NATIVE)
+    list(APPEND BABYLON_RUST_WORKSPACE_CARGO_ARGS "--config" "patch.crates-io.femtovg.path=\"${canvas_femtovg_SOURCE_DIR}\"")
+endif()
 if(BABYLON_NATIVE_WGPU_USE_UPSTREAM_NATIVE AND BABYLON_NATIVE_WGPU_NATIVE_RLIB)
     if(NOT DEFINED wgpu_native_rlib_SOURCE_DIR OR wgpu_native_rlib_SOURCE_DIR STREQUAL "")
         message(FATAL_ERROR "BABYLON_NATIVE_WGPU_NATIVE_RLIB requires wgpu_native_rlib_SOURCE_DIR.")
@@ -331,7 +334,9 @@ if(BABYLON_NATIVE_WGPU_USE_UPSTREAM_NATIVE AND BABYLON_NATIVE_WGPU_NATIVE_RLIB)
     endif()
     list(APPEND BABYLON_RUST_WORKSPACE_CARGO_ARGS
         "--config" "patch.\"https://github.com/gfx-rs/wgpu.git\".naga.path=\"${wgpu_shader_codegen_SOURCE_DIR}/naga\""
-        "--config" "patch.\"https://github.com/gfx-rs/wgpu.git\".naga-types.path=\"${wgpu_shader_codegen_SOURCE_DIR}/naga-types\"")
+        "--config" "patch.\"https://github.com/gfx-rs/wgpu.git\".naga-types.path=\"${wgpu_shader_codegen_SOURCE_DIR}/naga-types\""
+        "--config" "patch.\"https://github.com/gfx-rs/wgpu.git\".wgpu-core.path=\"${wgpu_shader_codegen_SOURCE_DIR}/wgpu-core\""
+        "--config" "patch.\"https://github.com/gfx-rs/wgpu.git\".wgpu-hal.path=\"${wgpu_shader_codegen_SOURCE_DIR}/wgpu-hal\"")
 endif()
 
 # Environment of every cargo invocation: per profile for multi-config generators, per

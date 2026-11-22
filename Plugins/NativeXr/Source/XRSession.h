@@ -52,6 +52,7 @@ namespace Babylon
             bool IsProjectionLayerActive(const Babylon::XRProjectionLayer& layer) const;
             std::optional<XRGPUSubImageData> GetWebGPUSubImage(uint32_t viewIndex) const;
             uint32_t GetWebGPUTextureWidth() const;
+            const char* GetWebGPUColorFormat() const;
             uint32_t GetWebGPUTextureHeight() const;
             uint32_t GetWebGPUTextureArrayLength() const;
             Napi::Value GetRenderTargetForEye(const std::string& eye) const;
@@ -62,15 +63,22 @@ namespace Babylon
 
             JsRuntimeScheduler m_runtimeScheduler;
             std::shared_ptr<Plugins::NativeXr::Impl> m_xr;
+            std::weak_ptr<xr::System::Session> m_rateSession;
+            float m_reportedFrameRate{};
+            Napi::Value GetFrameRate(const Napi::CallbackInfo&);
+            Napi::Value GetSupportedFrameRates(const Napi::CallbackInfo&);
+            Napi::Value UpdateTargetFrameRate(const Napi::CallbackInfo&);
+            void NotifyFrameRateChange(const Napi::Object& session);
             Napi::ObjectReference m_endPromise{};
-            Napi::ObjectReference m_jsXRFrame{};
             Plugins::XRFrame& m_xrFrame;
+            Napi::ObjectReference m_jsXRFrame{};
             uint32_t m_timestamp{ 0 };
             Napi::ObjectReference m_renderState{};
             Babylon::XRProjectionLayer* m_activeProjectionLayer{};
             float m_depthNear{0.1f};
             float m_depthFar{1000.0f};
             bool m_webGPUFeatureEnabled{};
+            std::vector<std::string> m_enabledFeatures{};
 
             std::vector<std::pair<std::string, Napi::FunctionReference>> m_eventNamesAndCallbacks{};
 

@@ -1,6 +1,9 @@
 #pragma once
 
 #include <stdexcept>
+#include <algorithm>
+#include <string>
+#include <vector>
 
 namespace Babylon
 {
@@ -34,6 +37,50 @@ namespace Babylon
             return env.Global().Get(JS_CLASS_NAME).As<Napi::Function>().New({napiTransform});
         }
 
+        static Napi::Object FromType(Napi::Env env, Napi::String type)
+        {
+            return env.Global().Get(JS_CLASS_NAME).As<Napi::Function>().New({type});
+        }
+
+        static Napi::Promise Request(const Napi::CallbackInfo& info, const std::vector<std::string>& enabledFeatures)
+        {
+            auto deferred = Napi::Promise::Deferred::New(info.Env());
+            try
+            {
+                const auto typeValue = info[0].ToString();
+                const auto type = typeValue.Utf8Value();
+                if (type != XRReferenceSpaceType::VIEWER && type != XRReferenceSpaceType::LOCAL &&
+                    type != XRReferenceSpaceType::LOCAL_FLOOR && type != XRReferenceSpaceType::UNBOUNDED && type != "bounded-floor")
+                {
+                    deferred.Reject(Napi::TypeError::New(info.Env(), "Invalid XRReferenceSpaceType: " + type).Value());
+                }
+                else if (type == "bounded-floor" || std::find(enabledFeatures.begin(), enabledFeatures.end(), type) == enabledFeatures.end())
+                {
+                    const auto message = "Reference space is not supported by this session: " + type;
+                    auto ctor = info.Env().Global().Get("DOMException");
+                    if (ctor.IsFunction())
+                    {
+                        deferred.Reject(ctor.As<Napi::Function>().New({Napi::String::New(info.Env(), message), Napi::String::New(info.Env(), "NotSupportedError")}));
+                    }
+                    else
+                    {
+                        auto error = Napi::Error::New(info.Env(), message).Value();
+                        error.Set("name", "NotSupportedError");
+                        deferred.Reject(error);
+                    }
+                }
+                else
+                {
+                    deferred.Resolve(XRReferenceSpace::FromType(info.Env(), typeValue));
+                }
+            }
+            catch (const Napi::Error& error)
+            {
+                deferred.Reject(error.Value());
+            }
+            return deferred.Promise();
+        }
+
         XRReferenceSpace(const Napi::CallbackInfo& info)
             : Napi::ObjectWrap<XRReferenceSpace>{info}
         {
@@ -41,12 +88,22 @@ namespace Babylon
             {
                 if (info[0].IsString())
                 {
-                    // TODO: Actually support the different types of reference spaces.
                     const auto referenceSpaceType = info[0].As<Napi::String>().Utf8Value();
-                    assert(referenceSpaceType == XRReferenceSpaceType::UNBOUNDED ||
-                            referenceSpaceType == XRReferenceSpaceType::VIEWER);
-                    (void)XRReferenceSpaceType::UNBOUNDED;
-                    (void)XRReferenceSpaceType::VIEWER;
+                    if (referenceSpaceType == XRReferenceSpaceType::LOCAL_FLOOR)
+                    {
+#ifdef __ANDROID__
+                        // Our OpenXR tracking origin is LOCAL. Emulate standing height
+                        // when the binding does not provide a calibrated floor offset.
+                        auto transform = XRRigidTransform::New(info.Env());
+                        XRRigidTransform::Unwrap(transform)->Update(xr::Pose{{0.f, -1.6f, 0.f}, {0.f, 0.f, 0.f, 1.f}});
+                        SetTransform(transform);
+#endif
+                    }
+                    else if (referenceSpaceType != XRReferenceSpaceType::LOCAL &&
+                        referenceSpaceType != XRReferenceSpaceType::VIEWER && referenceSpaceType != XRReferenceSpaceType::UNBOUNDED)
+                    {
+                        throw Napi::TypeError::New(info.Env(), "Unsupported XRReferenceSpace type: " + referenceSpaceType);
+                    }
                 }
                 else
                 {
@@ -63,6 +120,18 @@ namespace Babylon
         XRRigidTransform* GetTransform()
         {
             return m_jsTransform.IsEmpty() ? nullptr : XRRigidTransform::Unwrap(m_jsTransform.Value());
+        }
+
+        xr::Pose GetPoseInReferenceSpace(const xr::Pose& nativePose)
+        {
+            auto* transform = GetTransform();
+            return transform == nullptr ? nativePose : ComposePoses(InvertPose(transform->GetNativePose()), nativePose);
+        }
+
+        xr::Pose GetPoseInNativeSpace(const xr::Pose& referencePose)
+        {
+            auto* transform = GetTransform();
+            return transform == nullptr ? referencePose : ComposePoses(transform->GetNativePose(), referencePose);
         }
 
     private:

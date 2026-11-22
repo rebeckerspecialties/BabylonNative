@@ -1,13 +1,15 @@
 #pragma once
 
 #include "SafeTimespanGuarantor.h"
+#include "ScreenShotData.h"
 #include "continuation_scheduler.h"
 
 #include <napi/env.h>
+#include <arcana/threading/task.h>
 
 #include <cstddef>
 #include <functional>
-#include <vector>
+#include <optional>
 
 namespace Babylon::Graphics
 {
@@ -32,6 +34,8 @@ namespace Babylon::Graphics
         friend class DeviceContext;
 
         explicit FrameCompletionScope(DeviceImpl&);
+        struct Adopt {};
+        FrameCompletionScope(DeviceImpl& impl, Adopt) : m_impl{&impl} {}
 
         DeviceImpl* m_impl;
     };
@@ -84,6 +88,7 @@ namespace Babylon::Graphics
         explicit DeviceContext(DeviceImpl&);
 
         static DeviceContext& GetFromJavaScript(Napi::Env);
+        static std::optional<arcana::task<bool, std::exception_ptr>> TryGetInitializationTask(Napi::Env);
 
         static Napi::Value Create(Napi::Env, DeviceImpl&);
         static DeviceContext& GetFromJavaScript(Napi::Value);
@@ -94,8 +99,9 @@ namespace Babylon::Graphics
 
         Update GetUpdate(const char* updateName);
         FrameCompletionScope AcquireFrameCompletionScope();
+        std::optional<FrameCompletionScope> TryAcquireFrameCompletionScope();
 
-        void RequestScreenShot(std::function<void(std::vector<uint8_t>)> callback);
+        void RequestScreenShot(std::function<void(ScreenShotData)> callback);
         void UpdateMSAA(uint8_t value);
         void SetRenderResetCallback(std::function<void()> callback);
 

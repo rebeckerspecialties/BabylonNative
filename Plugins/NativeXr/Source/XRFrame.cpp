@@ -54,10 +54,13 @@ namespace Babylon
 
         Napi::Object XRFrame::New(const Napi::CallbackInfo& info)
         {
-            // Instead of creating just a C++ XRFrame object, wrap it in a JS NativeXRFrame object (see nativeXRFrame.ts in Babylon.JS)
-            const auto nativeImpl = info.Env().Global().Get(JS_CLASS_NAME).As<Napi::Function>().New({});
-            const auto nativeXRFrame = JsRuntime::NativeObject::GetFromJavaScript(info.Env()).Get("NativeXRFrame").As<Napi::Function>().New({ nativeImpl }).As<Napi::Object>();
-            return nativeXRFrame;
+            return info.Env().Global().Get(JS_CLASS_NAME).As<Napi::Function>().New({});
+        }
+
+        Napi::Object XRFrame::WrapForScript(const Napi::Object& frame)
+        {
+            const auto wrapper = JsRuntime::NativeObject::GetFromJavaScript(frame.Env()).Get("NativeXRFrame");
+            return wrapper.IsFunction() ? wrapper.As<Napi::Function>().New({frame}) : frame;
         }
 
         XRFrame::XRFrame(const Napi::CallbackInfo& info)
@@ -176,18 +179,11 @@ namespace Babylon
 
         Napi::Value XRFrame::GetViewerPose(const Napi::CallbackInfo& info)
         {
-            // To match the WebXR implementation we should return undefined here until we have gotten
-            // initial tracking. After that point we can just continue returning the position
-            // as it will be marked as estimated if tracking is lost.
-            if (!m_hasBegunTracking && !m_frame->IsTracking)
+            if (!m_frame || (!m_hasBegunTracking && !m_frame->IsTracking))
             {
-                return info.Env().Undefined();
+                return info.Env().Null();
             }
-            else
-            {
-                // We've received initial tracking, update the flag
-                m_hasBegunTracking = true;
-            }
+            m_hasBegunTracking = true;
 
             auto* referenceSpace = XRReferenceSpace::Unwrap(info[0].As<Napi::Object>());
             m_xrViewerPose.Update(
@@ -200,11 +196,11 @@ namespace Babylon
 
         Napi::Value XRFrame::GetPoseData(const Napi::CallbackInfo& info)
         {
-            assert(XRReferenceSpace::Unwrap(info[1].As<Napi::Object>()) != nullptr);
+            auto* referenceSpace = XRReferenceSpace::Unwrap(info[1].As<Napi::Object>());
             const auto& space = *info[0].As<Napi::External<xr::Space>>().Data();
             auto vectorBuffer = info[2].As<Napi::ArrayBuffer>();
             auto matrixBuffer = info[3].As<Napi::ArrayBuffer>();
-            m_transform.Update(space, vectorBuffer, matrixBuffer, false);
+            m_transform.Update(xr::Space{referenceSpace->GetPoseInReferenceSpace(space.Pose)}, vectorBuffer, matrixBuffer, false);
             return Napi::Boolean::From(info.Env(), true);
         }
 
@@ -216,7 +212,8 @@ namespace Babylon
 
             if (jointSpace.PoseTracked)
             {
-                m_transform.Update(jointSpace, false);
+                auto* referenceSpace = XRReferenceSpace::Unwrap(info[1].As<Napi::Object>());
+                m_transform.Update(xr::Space{referenceSpace->GetPoseInReferenceSpace(jointSpace.Pose)}, false);
                 m_jsJointPose.Set("radius", jointSpace.PoseRadius);
                 return m_jsJointPose.Value();
             }
@@ -229,6 +226,7 @@ namespace Babylon
         Napi::Value XRFrame::FillPoses(const Napi::CallbackInfo& info)
         {
             const auto spaces = info[0].As<Napi::Array>();
+            auto* referenceSpace = XRReferenceSpace::Unwrap(info[1].As<Napi::Object>());
             auto transforms = info[2].As<Napi::Float32Array>();
             if (spaces.Length() != (transforms.ElementLength() >> 4))
             {
@@ -238,7 +236,7 @@ namespace Babylon
             for (uint32_t spaceIdx = 0; spaceIdx < spaces.Length(); spaceIdx++)
             {
                 const auto& jointSpace = *spaces[spaceIdx].As<Napi::External<xr::System::Session::Frame::JointSpace>>().Data();
-                const auto transformMatrix = CreateTransformMatrix(jointSpace, false);
+                const auto transformMatrix = CreateTransformMatrix(xr::Space{referenceSpace->GetPoseInReferenceSpace(jointSpace.Pose)}, false);
                 std::memcpy(transforms.Data() + (spaceIdx << 4), transformMatrix.data(), sizeof(float) << 4);
             }
 
@@ -301,7 +299,8 @@ namespace Babylon
         Napi::Value XRFrame::CreateAnchor(const Napi::CallbackInfo& info)
         {
             XRRigidTransform* transform = XRRigidTransform::Unwrap(info[0].As<Napi::Object>());
-            return CreateNativeAnchor(info, transform->GetNativePose(), nullptr);
+            auto* referenceSpace = XRReferenceSpace::Unwrap(info[1].As<Napi::Object>());
+            return CreateNativeAnchor(info, referenceSpace->GetPoseInNativeSpace(transform->GetNativePose()), nullptr);
         }
 
         Napi::Value XRFrame::GetTrackedAnchors(const Napi::CallbackInfo& info)

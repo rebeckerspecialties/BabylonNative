@@ -1,0 +1,22 @@
+diff --git a/wgpu-hal/Cargo.toml b/wgpu-hal/Cargo.toml
+index da99cb126..f0e01e99d 100644
+--- a/wgpu-hal/Cargo.toml
++++ b/wgpu-hal/Cargo.toml
+@@ -1,4 +1,5 @@
+ [package]
++workspace = ".."
+ name = "wgpu-hal"
+ version.workspace = true
+ authors.workspace = true
+@@ -206,9 +207,9 @@ required-features = ["gles"]
+ 
+ [dependencies]
+ naga.workspace = true
+-wgpu-naga-bridge.workspace = true
++wgpu-naga-bridge = { git = "https://github.com/gfx-rs/wgpu.git", rev = "40f4a34ebaf56f9a046231f54125ad046239d3f3" }
+ naga-types = { workspace = true }
+-wgpu-types = { workspace = true, default-features = false }
++wgpu-types = { git = "https://github.com/gfx-rs/wgpu.git", rev = "40f4a34ebaf56f9a046231f54125ad046239d3f3", default-features = false }
+ 
+ # Dependencies in the lib and empty backend
+ bitflags.workspace = true

@@ -1,0 +1,56 @@
+diff --git a/packages/dev/core/src/Cameras/camera.pure.ts b/packages/dev/core/src/Cameras/camera.pure.ts
+index c102665dbf..f110aa4094 100644
+--- a/packages/dev/core/src/Cameras/camera.pure.ts
++++ b/packages/dev/core/src/Cameras/camera.pure.ts
+@@ -396,6 +396,12 @@ export class Camera extends Node {
+      */
+     public outputRenderTarget: Nullable<RenderTargetTexture> = null;
+ 
++    /**
++     * Allows the scene to leave the default framebuffer untouched when only this stereo rig's
++     * offscreen views are rendered. Leave false when presenting, mirroring or reading the canvas.
++     */
++    public skipUnusedParentFramebufferClear = false;
++
+     /**
+      * Observable triggered when the camera view matrix has changed.
+      * Beware of reentrance! Some methods like Camera.getViewMatrix and Camera.getWorldMatrix can trigger the onViewMatrixChangedObservable
+diff --git a/packages/dev/core/src/scene.pure.ts b/packages/dev/core/src/scene.pure.ts
+index 37b77bb48c..511f14037e 100644
+--- a/packages/dev/core/src/scene.pure.ts
++++ b/packages/dev/core/src/scene.pure.ts
+@@ -5117,6 +5117,23 @@ export class Scene implements IAnimatable, IClipPlanesHolder, IAssetContainer {
+     /** @internal */
+     public _useCurrentFrameBuffer = false;
+ 
++    private _canSkipParentClear(camera: Nullable<Camera>): boolean {
++        if (!camera?.skipUnusedParentFramebufferClear || !this._engine.isWebGPU || this.activeCameras?.length || this.prePass || this._useCurrentFrameBuffer) {
++            return false;
++        }
++        const eyes = camera.rigCameras;
++        return (
++            camera.cameraRigMode === Constants.RIG_MODE_CUSTOM &&
++            !camera.outputRenderTarget &&
++            !camera._multiviewTexture &&
++            eyes.length === 2 &&
++            eyes[0] !== eyes[1] &&
++            !!eyes[0].outputRenderTarget?.renderTarget &&
++            !!eyes[1].outputRenderTarget?.renderTarget &&
++            this._engine._currentFrameBufferIsDefaultFrameBuffer()
++        );
++    }
++
+     private _bindFrameBuffer(camera: Nullable<Camera>, clear = true) {
+         if (!this._useCurrentFrameBuffer) {
+             if (camera && camera._multiviewTexture) {
+@@ -5828,7 +5845,9 @@ export class Scene implements IAnimatable, IClipPlanesHolder, IAssetContainer {
+             }
+ 
+             // Clear
+-            this._clearFrameBuffer(this.activeCamera);
++            if (!this._canSkipParentClear(this.activeCamera)) {
++                this._clearFrameBuffer(this.activeCamera);
++            }
+ 
+             // Collects render targets from external components.
+             for (const step of this._gatherRenderTargetsStage) {

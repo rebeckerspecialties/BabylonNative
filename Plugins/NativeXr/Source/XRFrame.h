@@ -11,6 +11,7 @@ namespace Babylon
         public:
             static void Initialize(Napi::Env env);
             static Napi::Object New(const Napi::CallbackInfo& info);
+            static Napi::Object WrapForScript(const Napi::Object& frame);
 
             XRFrame(const Napi::CallbackInfo& info);
             void Update(const Napi::Env& env, const std::shared_ptr<const xr::System::Session::Frame>& frame, uint32_t timestamp);

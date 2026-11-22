@@ -1,0 +1,78 @@
+diff --git a/wgpu-hal/src/vulkan/adapter.rs b/wgpu-hal/src/vulkan/adapter.rs
+index 196daf4c5..dce8ec1cf 100644
+--- a/wgpu-hal/src/vulkan/adapter.rs
++++ b/wgpu-hal/src/vulkan/adapter.rs
+@@ -2301,6 +2301,11 @@ impl super::Instance {
+                 super::Workarounds::EMPTY_RESOLVE_ATTACHMENT_LISTS,
+                 phd_capabilities.properties.vendor_id == db::qualcomm::VENDOR,
+             );
++            workarounds.set(
++                super::Workarounds::NONEMPTY_DESCRIPTOR_SET_LAYOUT,
++                phd_capabilities.properties.vendor_id == db::qualcomm::VENDOR
++                    && (0x0500_0000..0x0600_0000).contains(&phd_capabilities.properties.device_id),
++            );
+             workarounds.set(
+                 super::Workarounds::FORCE_FILL_BUFFER_WITH_SIZE_GREATER_4096_ALIGNED_OFFSET_16,
+                 phd_capabilities.properties.vendor_id == db::nvidia::VENDOR,
+@@ -2896,9 +2901,12 @@ impl super::Adapter {
+ 
+         let drop_guard = crate::DropGuard::from_option(drop_callback);
+ 
++        let placeholder = self.workarounds.empty_set_placeholder();
++        let empty_layout =
++            vk::DescriptorSetLayoutCreateInfo::default().bindings(placeholder.as_slice());
+         let empty_descriptor_set_layout = unsafe {
+             raw_device
+-                .create_descriptor_set_layout(&vk::DescriptorSetLayoutCreateInfo::default(), None)
++                .create_descriptor_set_layout(&empty_layout, None)
+                 .map_err(super::map_host_device_oom_err)?
+         };
+ 
+diff --git a/wgpu-hal/src/vulkan/device.rs b/wgpu-hal/src/vulkan/device.rs
+index 948f77a58..994c2c776 100644
+--- a/wgpu-hal/src/vulkan/device.rs
++++ b/wgpu-hal/src/vulkan/device.rs
+@@ -1494,6 +1494,15 @@ impl crate::Device for super::Device {
+             }
+         }
+ 
++        // The placeholder is never statically used. Reserve its pool capacity,
++        // but leave the shader binding map and logical layout unchanged.
++        if vk_bindings.is_empty() {
++            if let Some(binding) = self.shared.workarounds.empty_set_placeholder() {
++                vk_bindings.push(binding);
++                binding_flags.push(vk::DescriptorBindingFlags::empty());
++                desc_count.uniform_buffer = 1;
++            }
++        }
+         let vk_info = vk::DescriptorSetLayoutCreateInfo::default()
+             .bindings(&vk_bindings)
+             .flags(if contains_binding_arrays {
+diff --git a/wgpu-hal/src/vulkan/mod.rs b/wgpu-hal/src/vulkan/mod.rs
+index 51e7414b6..05cfb757a 100644
+--- a/wgpu-hal/src/vulkan/mod.rs
++++ b/wgpu-hal/src/vulkan/mod.rs
+@@ -461,9 +461,23 @@ bitflags::bitflags!(
+         /// As such, we need to make sure all calls to vkCmdFillBuffer are aligned to 16 bytes
+         /// if they cover a range of 4096 bytes or more.
+         const FORCE_FILL_BUFFER_WITH_SIZE_GREATER_4096_ALIGNED_OFFSET_16 = 0x4;
++        /// Adreno 5xx drivers mishandle draws with an empty set before a used set.
++        const NONEMPTY_DESCRIPTOR_SET_LAYOUT = 0x8;
+     }
+ );
+ 
++impl Workarounds {
++    fn empty_set_placeholder(self) -> Option<vk::DescriptorSetLayoutBinding<'static>> {
++        self.contains(Self::NONEMPTY_DESCRIPTOR_SET_LAYOUT)
++            .then(|| {
++                vk::DescriptorSetLayoutBinding::default()
++                    .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
++                    .descriptor_count(1)
++                    .stage_flags(vk::ShaderStageFlags::ALL)
++            })
++    }
++}
++
+ #[derive(Clone, Debug, Eq, Hash, PartialEq)]
+ struct AttachmentKey {
+     format: vk::Format,

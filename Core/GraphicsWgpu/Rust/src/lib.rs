@@ -9,6 +9,20 @@
 extern crate wgpu_native;
 
 mod error_bridge;
+mod pipeline_compiler;
+mod presentation_damage;
+#[cfg(target_os = "android")]
+mod xr_eye_resolve;
+#[cfg(target_os = "android")]
+mod xr_depth_clear;
+#[cfg(target_os = "android")]
+mod xr_eye_timing;
+#[cfg(any(target_os = "android", test))]
+mod xr_eye_sample;
+mod canvas_snapshot;
+#[cfg(any(target_os = "android", test))]
+mod vulkan_instance_retry;
+mod presentation_retirement;
 
 use std::any::Any;
 #[cfg(target_os = "android")]
@@ -28,8 +42,60 @@ static ESTIMATED_GPU_MEMORY_BYTES: AtomicU64 = AtomicU64::new(0);
 static EXTERNAL_IMAGE_UPLOAD_BORROWED_COUNT: AtomicU64 = AtomicU64::new(0);
 static EXTERNAL_IMAGE_UPLOAD_BORROWED_BYTES: AtomicU64 = AtomicU64::new(0);
 static EXTERNAL_IMAGE_UPLOAD_OWNED_COUNT: AtomicU64 = AtomicU64::new(0);
+static CANVAS_GPU_SNAPSHOTS: AtomicU64 = AtomicU64::new(0);
+static CANVAS_CPU_SNAPSHOTS: AtomicU64 = AtomicU64::new(0);
 static EXTERNAL_IMAGE_UPLOAD_OWNED_BYTES: AtomicU64 = AtomicU64::new(0);
 static ACTIVE_CONTEXT: AtomicPtr<BackendContext> = AtomicPtr::new(ptr::null_mut());
+
+// The host presents on the display thread; NativeWebGPU can resize or replace the
+// same canvas texture on the JS thread. An atomic pointer publishes the context,
+// but does not protect a borrow of its contents or a lookup racing destruction.
+static CONTEXT_ACCESS: Mutex<()> = Mutex::new(());
+
+fn lock_context() -> std::sync::MutexGuard<'static, ()> {
+    CONTEXT_ACCESS.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+#[no_mangle]
+pub extern "C" fn babylon_wgpu_has_active_context() -> bool {
+    !ACTIVE_CONTEXT.load(Ordering::Acquire).is_null()
+}
+type RendererDeviceQueue = (wgpu::Device, wgpu::Queue);
+struct RendererGpu {
+    device_queue: RendererDeviceQueue,
+    compute_cache: Mutex<upstream_wgpu_native::ComputeCache>,
+}
+// Canvas may be created on another JS thread. Publish handles, not the mutable context.
+static RENDERER_DEVICE: Mutex<std::sync::Weak<RendererGpu>> = Mutex::new(std::sync::Weak::new());
+
+fn active_renderer() -> Result<std::sync::Arc<RendererGpu>, String> {
+    RENDERER_DEVICE
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .upgrade()
+        .ok_or_else(|| "GraphicsWgpu renderer is not initialized".to_owned())
+}
+#[cfg(target_os = "android")]
+static WINDOW_PRESENTATION_LEASES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+#[cfg(target_os = "android")]
+#[no_mangle]
+pub extern "C" fn babylon_wgpu_suspend_window_presentation() {
+    WINDOW_PRESENTATION_LEASES.fetch_add(1, Ordering::AcqRel);
+}
+
+#[cfg(target_os = "android")]
+#[no_mangle]
+pub extern "C" fn babylon_wgpu_resume_window_presentation() {
+    WINDOW_PRESENTATION_LEASES.fetch_sub(1, Ordering::AcqRel);
+}
+
+fn window_presentation_suspended() -> bool {
+    #[cfg(target_os = "android")]
+    { WINDOW_PRESENTATION_LEASES.load(Ordering::Acquire) != 0 }
+    #[cfg(not(target_os = "android"))]
+    { false }
+}
 static LAST_ERROR: OnceLock<Mutex<String>> = OnceLock::new();
 
 /// Ids of the NativeXR depth attachment textures and their views. Render-pass
@@ -145,6 +211,8 @@ pub struct BabylonWgpuFeatureInfo {
     pub multi_draw_indirect_count: u32,
     pub min_subgroup_size: u32,
     pub max_subgroup_size: u32,
+    pub timestamp_query: u32,
+    pub xr_stereo_multiview: u32,
 }
 
 #[repr(C)]
@@ -165,9 +233,11 @@ pub struct BabylonWgpuVulkanBinding {
     pub api_version: u32,
     pub queue_family_index: u32,
     pub queue_index: u32,
+    pub max_texture_dimension_2d: u32,
 }
 
 struct BackendContext {
+    shared_gpu: std::sync::Arc<RendererGpu>,
     backend: upstream_wgpu_native::InteropBackendContext,
     info: BabylonWgpuInfo,
     feature_info: BabylonWgpuFeatureInfo,
@@ -557,6 +627,10 @@ fn create_context(config: BabylonWgpuConfig) -> Result<Box<BackendContext>, Stri
     let feature_info = adapter_info.feature_info;
 
     let context = BackendContext {
+        shared_gpu: std::sync::Arc::new(RendererGpu {
+            device_queue: backend.device_queue(),
+            compute_cache: Mutex::default(),
+        }),
         backend,
         info: context_info,
         feature_info,
@@ -572,7 +646,7 @@ fn create_context(config: BabylonWgpuConfig) -> Result<Box<BackendContext>, Stri
 
 fn dispatch_compute_global(shader_source: &str, entry_point: &str, x: u32, y: u32, z: u32) -> bool {
     if let Err(error) =
-        upstream_wgpu_native::dispatch_compute_global(shader_source, entry_point, x, y, z, false)
+        upstream_wgpu_native::dispatch_compute_global(shader_source, entry_point, x, y, z)
     {
         log_backend_error(&format!(
             "upstream wgpu-native compute dispatch failed: {error}"
@@ -607,12 +681,20 @@ fn run_with_active_backend<T, F>(operation: &str, fallback: T, f: F) -> T
 where
     F: FnOnce(&mut upstream_wgpu_native::InteropBackendContext) -> Result<T, String>,
 {
+    access_active_backend(operation, fallback, true, f)
+}
+
+fn access_active_backend<T, F>(operation: &str, fallback: T, report_to_device: bool, f: F) -> T
+where
+    F: FnOnce(&mut upstream_wgpu_native::InteropBackendContext) -> Result<T, String>,
+{
     // Lost logical JS devices must not issue work on the shared physical renderer.
     if !error_bridge::active() && !operation.starts_with("GPUObject.") {
         return fallback;
     }
     let error_serial = error_bridge::serial();
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _guard = lock_context();
         let context = ACTIVE_CONTEXT.load(Ordering::Acquire);
         if context.is_null() {
             return Err(format!(
@@ -628,7 +710,7 @@ where
         Ok(Ok(value)) => value,
         Ok(Err(error)) => {
             set_last_error(&error);
-            if error_bridge::serial() == error_serial {
+            if report_to_device && error_bridge::serial() == error_serial {
                 error_bridge::record(1, error);
             }
             fallback
@@ -639,7 +721,7 @@ where
                     panic_payload_to_string(payload.as_ref())
                 );
             set_last_error(&error);
-            error_bridge::record(3, error);
+            if report_to_device { error_bridge::record(3, error); }
             fallback
         }
     }
@@ -715,9 +797,25 @@ pub extern "C" fn babylon_wgpu_native_write_mapped_ranges(
 }
 
 #[no_mangle]
-pub extern "C" fn babylon_wgpu_native_map_buffer(buffer_id: u64, mode: u32, offset: u64, size: u64) -> bool {
+pub extern "C" fn babylon_wgpu_native_begin_map(buffer_id: u64, mode: u32, offset: u64, size: u64, completed: extern "C" fn(usize, bool), context: usize) -> bool {
     run_with_active_backend("GPUBuffer.mapAsync", false, |backend| {
-        backend.map_buffer(buffer_id, mode, offset, size)?;
+        backend.begin_map(buffer_id, mode, offset, size, completed, context)?;
+        Ok(true)
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn babylon_wgpu_native_finish_map(buffer_id: u64) -> bool {
+    run_with_active_backend("GPUBuffer.mapAsync", false, |backend| {
+        backend.finish_map(buffer_id)?;
+        Ok(true)
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn babylon_wgpu_native_work_done(completed: extern "C" fn(usize, bool), context: usize) -> bool {
+    run_with_active_backend("GPUQueue.onSubmittedWorkDone", false, |backend| {
+        backend.notify_work_done(completed, context)?;
         Ok(true)
     })
 }
@@ -788,11 +886,15 @@ pub extern "C" fn babylon_wgpu_native_get_metal_queue() -> *mut c_void {
 #[no_mangle]
 pub extern "C" fn babylon_wgpu_native_import_vulkan_texture(
     native_image: u64,
+    width: u32,
+    height: u32,
+    vk_format: i64,
     descriptor_json: *const c_char,
 ) -> u64 {
     run_with_active_backend("NativeWebGPU.importVulkanTexture", 0, |backend| {
         backend.import_vulkan_texture(
             native_image,
+            width, height, vk_format,
             read_c_string(descriptor_json, "GPUTextureDescriptor")?,
         )
     })
@@ -876,11 +978,64 @@ pub extern "C" fn babylon_wgpu_native_create_pipeline_layout(
     })
 }
 
+#[repr(C)]
+pub struct BabylonWgpuBindGroupEntry {
+    binding: u32,
+    kind: u32,
+    resource: u64,
+    offset: u64,
+    size: u64,
+}
+
 #[no_mangle]
-pub extern "C" fn babylon_wgpu_native_create_bind_group(descriptor_json: *const c_char) -> u64 {
+pub extern "C" fn babylon_wgpu_native_create_bind_group(
+    layout: u64,
+    label: *const c_char,
+    entries: *const BabylonWgpuBindGroupEntry,
+    count: usize,
+) -> u64 {
     run_with_active_backend("GPUDevice.createBindGroup", 0, |backend| {
-        backend.create_bind_group(read_c_string(descriptor_json, "GPUBindGroupDescriptor")?)
+        let entries = if count == 0 {
+            &[][..]
+        } else if entries.is_null() {
+            return Err("GPUBindGroupDescriptor entries are missing".to_owned());
+        } else {
+            // The C++ caller owns count initialized entries for the duration of this call.
+            unsafe { std::slice::from_raw_parts(entries, count) }
+        };
+        backend.create_bind_group(layout, read_c_string(label, "GPUBindGroupDescriptor.label")?, entries)
     })
+}
+
+#[no_mangle]
+pub extern "C" fn babylon_wgpu_native_start_pipeline(
+    descriptor: *const c_char, compute: bool, completed: extern "C" fn(usize, bool), context: usize,
+) -> *const c_void {
+    access_active_backend("GPUDevice.createPipelineAsync", ptr::null(), false, |backend| {
+        backend.start_pipeline(read_c_string(descriptor, "pipeline descriptor")?, compute, completed, context).map(|job| job.cast())
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn babylon_wgpu_native_pipeline_failure(job: *const c_void, internal: *mut bool) -> *const c_char {
+    let job = unsafe { &*job.cast::<upstream_wgpu_native::AsyncPipeline>() };
+    job.error().map_or(ptr::null(), |(reason, msg)| {
+        unsafe { *internal = reason; }
+        msg
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn babylon_wgpu_native_adopt_pipeline(job: *const c_void) -> u64 {
+    let job = unsafe { &*job.cast::<upstream_wgpu_native::AsyncPipeline>() };
+    access_active_backend("GPUDevice.createPipelineAsync", 0, false, |backend| backend.adopt_pipeline(job))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn babylon_wgpu_native_drop_pipeline_job(job: *const c_void) {
+    if !job.is_null() {
+        drop(unsafe { std::sync::Arc::from_raw(job.cast::<upstream_wgpu_native::AsyncPipeline>()) });
+    }
 }
 
 #[no_mangle]
@@ -924,6 +1079,20 @@ pub extern "C" fn babylon_wgpu_native_compute_pipeline_get_bind_group_layout(
 ) -> u64 {
     run_with_active_backend("GPUComputePipeline.getBindGroupLayout", 0, |backend| {
         backend.compute_pipeline_get_bind_group_layout(pipeline_id, index)
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn babylon_wgpu_native_create_query_set(timestamp: bool, count: u32, label: *const c_char) -> u64 {
+    run_with_active_backend("GPUDevice.createQuerySet", 0, |backend| {
+        backend.create_query_set(timestamp, count, read_c_string(label, "GPUQuerySet.label")?)
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn babylon_wgpu_native_resolve_query_set(encoder: u64, queries: u64, first: u32, count: u32, dst: u64, offset: u64) {
+    run_with_active_backend("GPUCommandEncoder.resolveQuerySet", (), |backend| {
+        backend.resolve_query_set(encoder, queries, first, count, dst, offset)
     })
 }
 
@@ -1062,8 +1231,7 @@ pub extern "C" fn babylon_wgpu_native_render_pass_set_pipeline(
     pipeline_id: u64,
 ) -> bool {
     run_with_active_backend("GPURenderPassEncoder.setPipeline", false, |backend| {
-        backend.render_pass_set_pipeline(pass_id, pipeline_id)?;
-        Ok(true)
+        backend.render_pass_set_pipeline(pass_id, pipeline_id)
     })
 }
 
@@ -1367,7 +1535,7 @@ fn decode_render_pass_command_stream(
                 // setPipeline(pipeline)
                 1 => {
                     let pipeline_id = read_u64(&mut cursor)?;
-                    backend.render_pass_set_pipeline(pass_id, pipeline_id)?;
+                    backend.try_render_pass_set_pipeline(pass_id, pipeline_id)?;
                 }
                 // setBindGroup(index, bindGroup, dynamicOffsets)
                 2 => {
@@ -1650,12 +1818,22 @@ pub extern "C" fn babylon_wgpu_native_queue_wait_submitted_work() -> bool {
 }
 
 #[no_mangle]
-pub extern "C" fn babylon_wgpu_native_prepare_openxr_texture_for_release(texture_id: u64) -> bool {
+pub extern "C" fn babylon_wgpu_native_prepare_openxr_textures_for_release(
+    texture_ids: *const u64,
+    count: usize,
+) -> bool {
+    if count == 0 {
+        return true;
+    }
     run_with_active_backend(
-        "NativeXR.prepareOpenXRTextureForRelease",
+        "NativeXR.prepareOpenXRTexturesForRelease",
         false,
         |backend| {
-            backend.prepare_openxr_texture_for_release(texture_id)?;
+            if texture_ids.is_null() {
+                return Err("NativeXR color texture list was null".to_string());
+            }
+            let ids = unsafe { std::slice::from_raw_parts(texture_ids, count) };
+            backend.prepare_openxr_textures_for_release(ids)?;
             Ok(true)
         },
     )
@@ -1693,6 +1871,9 @@ pub extern "C" fn babylon_wgpu_native_queue_copy_external_image_to_texture(
     native_texture: *const c_void,
     source_width: u32,
     source_height: u32,
+    source_origin_x: u32,
+    source_origin_y: u32,
+    flip_y: u32,
     destination_json: *const c_char,
     size_json: *const c_char,
 ) -> bool {
@@ -1701,6 +1882,8 @@ pub extern "C" fn babylon_wgpu_native_queue_copy_external_image_to_texture(
             native_texture,
             source_width,
             source_height,
+            [source_origin_x, source_origin_y],
+            flip_y != 0,
             read_c_string(destination_json, "GPUImageCopyTexture")?,
             read_c_string(size_json, "GPUExtent3D")?,
         )?;
@@ -1814,7 +1997,14 @@ pub extern "C" fn babylon_wgpu_native_get_external_image_upload_owned_bytes() ->
 }
 
 #[no_mangle]
+pub extern "C" fn babylon_wgpu_native_get_canvas_snapshot_count(cpu: bool) -> u64 {
+    if cpu { &CANVAS_CPU_SNAPSHOTS } else { &CANVAS_GPU_SNAPSHOTS }.load(Ordering::Relaxed)
+}
+
+#[no_mangle]
 pub extern "C" fn babylon_wgpu_native_reset_external_image_upload_stats() {
+    CANVAS_GPU_SNAPSHOTS.store(0, Ordering::Relaxed);
+    CANVAS_CPU_SNAPSHOTS.store(0, Ordering::Relaxed);
     EXTERNAL_IMAGE_UPLOAD_BORROWED_COUNT.store(0, Ordering::Relaxed);
     EXTERNAL_IMAGE_UPLOAD_BORROWED_BYTES.store(0, Ordering::Relaxed);
     EXTERNAL_IMAGE_UPLOAD_OWNED_COUNT.store(0, Ordering::Relaxed);
@@ -1858,6 +2048,9 @@ pub extern "C" fn babylon_wgpu_create(config: *const BabylonWgpuConfig) -> *mut 
     let result = std::panic::catch_unwind(|| create_context(config_value));
     match result {
         Ok(Ok(context)) => {
+            let _guard = lock_context();
+            let mut published = RENDERER_DEVICE.lock().unwrap_or_else(|e| e.into_inner());
+            *published = std::sync::Arc::downgrade(&context.shared_gpu);
             let raw = Box::into_raw(context);
             ACTIVE_CONTEXT.store(raw, Ordering::Release);
             raw as *mut c_void
@@ -1885,9 +2078,13 @@ pub extern "C" fn babylon_wgpu_destroy(context: *mut c_void) {
         return;
     }
 
-    let active = ACTIVE_CONTEXT.load(Ordering::Acquire);
-    if active == context as *mut BackendContext {
-        ACTIVE_CONTEXT.store(ptr::null_mut(), Ordering::Release);
+    {
+        let _guard = lock_context();
+        let mut published = RENDERER_DEVICE.lock().unwrap_or_else(|e| e.into_inner());
+        if ACTIVE_CONTEXT.load(Ordering::Acquire) == context.cast::<BackendContext>() {
+            ACTIVE_CONTEXT.store(ptr::null_mut(), Ordering::Release);
+            *published = std::sync::Weak::new();
+        }
     }
 
     // SAFETY: The pointer was allocated by babylon_wgpu_create and is owned by the caller.
@@ -1908,6 +2105,7 @@ pub extern "C" fn babylon_wgpu_resize(context: *mut c_void, width: u32, height: 
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         // SAFETY: `context` comes from `babylon_wgpu_create` and remains exclusively
         // owned by the caller for the duration of this call.
+        let _guard = lock_context();
         let context_ref = unsafe { &mut *(context as *mut BackendContext) };
         context_ref.resize(width, height);
     }));
@@ -1937,6 +2135,7 @@ pub extern "C" fn babylon_wgpu_render(context: *mut c_void) -> bool {
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         // SAFETY: `context` comes from `babylon_wgpu_create` and remains valid for
         // this call by C ABI contract.
+        let _guard = lock_context();
         let context_ref = unsafe { &mut *(context as *mut BackendContext) };
         context_ref.render();
     }));
@@ -1966,6 +2165,7 @@ pub extern "C" fn babylon_wgpu_request_screenshot(context: *mut c_void) -> bool 
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         // SAFETY: `context` comes from `babylon_wgpu_create` and remains valid for
         // this call by C ABI contract.
+        let _guard = lock_context();
         let context_ref = unsafe { &mut *(context as *mut BackendContext) };
         context_ref.screenshot_requested = true;
     }));
@@ -1999,6 +2199,7 @@ pub extern "C" fn babylon_wgpu_get_screenshot_info(
 
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         // SAFETY: pointers were checked for null and are valid by C ABI contract.
+        let _guard = lock_context();
         let context_ref = unsafe { &*(context as *const BackendContext) };
         unsafe {
             *width = context_ref.screenshot_width;
@@ -2035,6 +2236,7 @@ pub extern "C" fn babylon_wgpu_copy_screenshot(
 
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         // SAFETY: pointers were checked for null and are valid by C ABI contract.
+        let _guard = lock_context();
         let context_ref = unsafe { &*(context as *const BackendContext) };
         if output_len < context_ref.screenshot_rgba.len() {
             return false;
@@ -2082,6 +2284,7 @@ pub extern "C" fn babylon_wgpu_get_info(
     // we keep ABI checks minimal and rely on upstream/runtime validation for
     // deeper invariants that are covered by WebGPU conformance paths.
     // SAFETY: pointers come from the C++ layer and are expected to remain valid.
+    let _guard = lock_context();
     let context_ref = unsafe { &*(context as *const BackendContext) };
     // SAFETY: caller provides a valid writable output pointer.
     let output_info_ref = unsafe { &mut *output_info };
@@ -2095,6 +2298,7 @@ pub extern "C" fn babylon_wgpu_get_feature_info(output_info: *mut BabylonWgpuFea
         return false;
     }
 
+    let _guard = lock_context();
     let context = ACTIVE_CONTEXT.load(Ordering::Acquire);
     if context.is_null() {
         set_last_error("WGPU feature info requested before backend context creation.");
@@ -2194,6 +2398,7 @@ mod upstream_wgpu_native {
     fn make_feature_info(
         adapter_info: &wgpu::AdapterInfo,
         features: wgpu::Features,
+        timestamp_period_ns: f32,
     ) -> super::BabylonWgpuFeatureInfo {
         super::BabylonWgpuFeatureInfo {
             shader_f16: features.contains(wgpu::Features::SHADER_F16) as u32,
@@ -2219,6 +2424,10 @@ mod upstream_wgpu_native {
                 as u32,
             min_subgroup_size: adapter_info.subgroup_min_size,
             max_subgroup_size: adapter_info.subgroup_max_size,
+            // WebGPU returns nanoseconds, not backend-specific clock ticks.
+            timestamp_query: (features.contains(wgpu::Features::TIMESTAMP_QUERY)
+                && timestamp_period_ns == 1.0) as u32,
+            xr_stereo_multiview: features.contains(wgpu::Features::MULTIVIEW) as u32,
         }
     }
 
@@ -2255,6 +2464,7 @@ mod upstream_wgpu_native {
         pub hdr10: bool,
         pub used_fallback_adapter: bool,
         pub surface_acquire_failures: u32,
+        presentation_retirement: super::presentation_retirement::PresentationRetirement<wgpu::SubmissionIndex>,
     }
 
     #[repr(C)]
@@ -2296,6 +2506,7 @@ mod upstream_wgpu_native {
     pub struct InteropBackendContext {
         runtime: LocalRuntimeState,
         resources: WebGpuResourceTable,
+        pipeline_compiler: Option<crate::pipeline_compiler::PipelineCompiler>,
         offscreen_texture: Option<wgpu::Texture>,
         offscreen_view: Option<wgpu::TextureView>,
         offscreen_width: u32,
@@ -2304,10 +2515,23 @@ mod upstream_wgpu_native {
         canvas_targets: HashMap<u64, CanvasTarget>,
         current_surface_frame: Option<wgpu::SurfaceTexture>,
         current_surface_frame_submitted: bool,
+        direct_canvas_id: Option<u64>,
+        direct_texture_id: Option<u64>,
         current_canvas_texture: Option<wgpu::Texture>,
         current_canvas_texture_id: Option<u64>,
         current_canvas_id: Option<u64>,
         presentation_blitter: Option<(wgpu::TextureFormat, wgpu::util::TextureBlitter)>,
+        #[cfg(target_os = "android")]
+        eye_resolvers: HashMap<wgpu::TextureFormat, crate::xr_eye_resolve::Pipeline>,
+        #[cfg(target_os = "android")]
+        xr_depth_clears: HashMap<(wgpu::TextureFormat, wgpu::TextureFormat, bool, Option<std::num::NonZeroU32>), wgpu::RenderBundle>,
+        #[cfg(target_os = "android")]
+        needs_layered_depth_clear: bool,
+        #[cfg(target_os = "android")]
+        eye_timer: crate::xr_eye_timing::Timer,
+        canvas_snapshots: super::canvas_snapshot::CanvasSnapshots,
+        progress_worker: Option<std::sync::mpsc::SyncSender<()>>,
+        presentation_damage: super::presentation_damage::PresentationDamage,
         staging_belt: wgpu::util::StagingBelt,
         pending_buffer_writes: Vec<PendingBufferWrite>,
         free_buffer_write_data: Vec<Vec<u8>>,
@@ -2326,8 +2550,19 @@ mod upstream_wgpu_native {
         mapped: bool,
     }
 
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum XrReleaseState {
+        FirstUse,
+        Initialized,
+        MayDiscard,
+    }
+
     struct TextureResource {
+        xr_release: XrReleaseState,
         texture: wgpu::Texture,
+        default_binding_view: std::sync::OnceLock<wgpu::TextureView>,
+        #[cfg(target_os = "android")]
+        eye_target: Option<crate::xr_eye_resolve::Target>,
         width: u32,
         height: u32,
         depth_or_array_layers: u32,
@@ -2348,6 +2583,11 @@ mod upstream_wgpu_native {
     }
 
     struct TextureViewResource {
+        #[cfg(target_os = "android")]
+        base_array_layer: u32,
+        #[cfg(target_os = "android")]
+        format: wgpu::TextureFormat,
+        texture_id: u64,
         view: wgpu::TextureView,
         width: u32,
         height: u32,
@@ -2378,12 +2618,47 @@ mod upstream_wgpu_native {
         vertex_buffer_slot_map: Option<Vec<(u32, u32)>>,
     }
 
+    // Private XR renderer specialization. This does not advertise a draft WebGPU feature.
+    fn xr_view_mask(descriptor: &Value, device: &wgpu::Device) -> Result<Option<std::num::NonZeroU32>, String> {
+        match descriptor.get("_xrViewCount").map(Value::as_u64) {
+            None | Some(Some(1)) => Ok(None),
+            Some(Some(2)) if device.features().contains(wgpu::Features::MULTIVIEW)
+                && device.limits().max_multiview_view_count >= 2 => Ok(std::num::NonZeroU32::new(3)),
+            _ => Err("XR render target requires supported view count (1 or 2)".into()),
+        }
+    }
+
     struct ComputePipelineResource {
         pipeline: wgpu::ComputePipeline,
     }
 
+    enum CompiledPipeline {
+        Render(RenderPipelineResource),
+        Compute(ComputePipelineResource),
+    }
+
+    type PipelineBuild = Box<dyn FnOnce(&wgpu::Device, &mut dyn FnMut(wgpu::Error)) -> Result<CompiledPipeline, String> + Send>;
+
+    pub(super) struct AsyncPipeline {
+        device: wgpu::Device,
+        pipeline: Mutex<Option<CompiledPipeline>>,
+        failure: OnceLock<(bool, std::ffi::CString)>,
+    }
+
+    impl AsyncPipeline {
+        pub(super) fn error(&self) -> Option<(bool, *const std::ffi::c_char)> {
+            self.failure.get().map(|(internal, msg)| (*internal, msg.as_ptr()))
+        }
+    }
+
     #[derive(Clone)]
     struct ColorAttachmentCommand {
+        #[cfg(target_os = "android")]
+        output_layer: u32,
+        #[cfg(target_os = "android")]
+        format: wgpu::TextureFormat,
+        #[cfg(target_os = "android")]
+        output_texture_id: u64,
         view: wgpu::TextureView,
         depth_slice: Option<u32>,
         resolve_target: Option<wgpu::TextureView>,
@@ -2403,7 +2678,16 @@ mod upstream_wgpu_native {
     }
 
     #[derive(Clone)]
+    struct PassTimestamps {
+        query_set: wgpu::QuerySet,
+        begin: Option<u32>,
+        end: Option<u32>,
+    }
+
+    #[derive(Clone)]
     struct RenderPassDescriptorCommand {
+        multiview_mask: Option<std::num::NonZeroU32>,
+        timestamps: Option<PassTimestamps>,
         label: Option<String>,
         color_attachments: Vec<Option<ColorAttachmentCommand>>,
         depth_stencil_attachment: Option<DepthStencilAttachmentCommand>,
@@ -2507,6 +2791,7 @@ mod upstream_wgpu_native {
     }
 
     struct ComputePassResource {
+        timestamps: Option<PassTimestamps>,
         encoder_id: u64,
         label: Option<String>,
         commands: Vec<ComputePassCommand>,
@@ -2520,7 +2805,14 @@ mod upstream_wgpu_native {
         },
         ComputePass {
             label: Option<String>,
+            timestamps: Option<PassTimestamps>,
             commands: Vec<ComputePassCommand>,
+        },
+        ResolveQuerySet {
+            queries: wgpu::QuerySet,
+            range: std::ops::Range<u32>,
+            destination: wgpu::Buffer,
+            offset: u64,
         },
         CopyBufferToBuffer {
             source: wgpu::Buffer,
@@ -2567,6 +2859,7 @@ mod upstream_wgpu_native {
 
     struct CommandEncoderResource {
         commands: Vec<EncoderCommand>,
+        validation_error: Option<String>,
     }
 
     struct CommandBufferResource {
@@ -2589,6 +2882,11 @@ mod upstream_wgpu_native {
         *ENABLED.get_or_init(|| std::env::var_os("BABYLON_NATIVE_WEBGPU_PROFILE_TRACE").is_some())
     }
 
+    fn profile_pipeline_markers_enabled() -> bool {
+        static ENABLED: OnceLock<bool> = OnceLock::new();
+        *ENABLED.get_or_init(|| std::env::var_os("BABYLON_NATIVE_WEBGPU_PROFILE_PIPELINE_MARKERS").is_some())
+    }
+
     fn elapsed_us(start: Instant, end: Instant) -> u128 {
         end.duration_since(start).as_micros()
     }
@@ -2596,6 +2894,7 @@ mod upstream_wgpu_native {
     fn create_with_error_scopes<T>(
         device: &wgpu::Device,
         operation: &str,
+        report: &mut dyn FnMut(wgpu::Error),
         create: impl FnOnce() -> T,
     ) -> Result<T, String> {
         let out_of_memory_scope = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
@@ -2615,7 +2914,7 @@ mod upstream_wgpu_native {
             .into_iter()
             .filter_map(|(kind, error)| error.map(|error| {
                 let detail = format!("{kind} error: {error}");
-                super::error_bridge::record_wgpu(error);
+                report(error);
                 detail
             }))
             .collect::<Vec<_>>();
@@ -2629,6 +2928,7 @@ mod upstream_wgpu_native {
 
     #[derive(Default)]
     struct WebGpuResourceTable {
+        query_sets: HashMap<u64, wgpu::QuerySet>,
         next_id: u64,
         buffers: HashMap<u64, BufferResource>,
         textures: HashMap<u64, TextureResource>,
@@ -3069,6 +3369,7 @@ mod upstream_wgpu_native {
         let mut upload = reusable_upload.unwrap_or_default();
         upload.resize(upload_stride * copy_height as usize, 0);
 
+        let mut previous_source: Option<&[u8]> = None;
         for row in 0..copy_height as usize {
             let source_row = if flip_y {
                 source_origin_y as usize + copy_height as usize - 1 - row
@@ -3077,6 +3378,21 @@ mod upstream_wgpu_native {
             };
             let source_start = source_row * source_stride;
             let upload_start = row * upload_stride;
+            let first = source_start + source_origin_x as usize * 4;
+            let source = &rgba[first..first + copy_width as usize * 4];
+            // Flat canvas regions often repeat across adjacent scanlines. Identical
+            // source bytes have identical output, even for flipped or cropped uploads.
+            if previous_source == Some(source) {
+                upload.copy_within(upload_start - upload_stride..upload_start, upload_start);
+                continue;
+            }
+            previous_source = Some(source);
+            if source_premultiplied_alpha == destination_premultiplied_alpha
+                && matches!(format, wgpu::TextureFormat::Rgba8Unorm | wgpu::TextureFormat::Rgba8UnormSrgb)
+            {
+                upload[upload_start..upload_start + upload_stride].copy_from_slice(source);
+                continue;
+            }
             for column in 0..copy_width as usize {
                 let src = source_start + (source_origin_x as usize + column) * 4;
                 let dst = upload_start + column * bytes_per_pixel as usize;
@@ -3372,29 +3688,18 @@ mod upstream_wgpu_native {
     }
 
     fn parse_extent3d(value: &Value) -> wgpu::Extent3d {
-        if let Some(array) = value.as_array() {
-            return wgpu::Extent3d {
-                width: array
-                    .get(0)
-                    .map(|raw| value_u32(raw, 1))
-                    .unwrap_or(1)
-                    .max(1),
-                height: array
-                    .get(1)
-                    .map(|raw| value_u32(raw, 1))
-                    .unwrap_or(1)
-                    .max(1),
-                depth_or_array_layers: array
-                    .get(2)
-                    .map(|raw| value_u32(raw, 1))
-                    .unwrap_or(1)
-                    .max(1),
-            };
-        }
+        let size = parse_copy_extent3d(value);
         wgpu::Extent3d {
-            width: json_u32(value, "width", 1).max(1),
-            height: json_u32(value, "height", 1).max(1),
-            depth_or_array_layers: json_u32(value, "depthOrArrayLayers", 1).max(1),
+            width: size.width.max(1), height: size.height.max(1), depth_or_array_layers: size.depth_or_array_layers.max(1),
+        }
+    }
+
+    fn parse_copy_extent3d(value: &Value) -> wgpu::Extent3d {
+        let component = |key: &str, index: usize| {
+            value.get(key).or_else(|| value.get(index)).map_or(1, |v| value_u32(v, 1))
+        };
+        wgpu::Extent3d {
+            width: component("width", 0), height: component("height", 1), depth_or_array_layers: component("depthOrArrayLayers", 2),
         }
     }
 
@@ -3464,13 +3769,23 @@ mod upstream_wgpu_native {
     }
 
     impl InteropBackendContext {
+        pub(super) fn device_queue(&self) -> super::RendererDeviceQueue {
+            (self.runtime.device.clone(), self.runtime.queue.clone())
+        }
+
         pub fn create(config: LocalBootstrapConfig) -> Result<Self, String> {
             let runtime = LocalRuntimeState::bootstrap(config)?;
+            #[cfg(target_os = "android")]
+            let needs_layered_depth_clear = {
+                let info = runtime.adapter.get_info();
+                info.vendor == 0x5143 && info.device == 0x05040001 && info.driver_info.contains("feb9270")
+            };
             let render_target_format = runtime.render_target_format;
             let staging_belt = wgpu::util::StagingBelt::new(runtime.device.clone(), 1024 * 1024);
             Ok(Self {
                 runtime,
                 resources: WebGpuResourceTable::default(),
+                pipeline_compiler: None,
                 offscreen_texture: None,
                 offscreen_view: None,
                 offscreen_width: 0,
@@ -3479,10 +3794,23 @@ mod upstream_wgpu_native {
                 canvas_targets: HashMap::new(),
                 current_surface_frame: None,
                 current_surface_frame_submitted: false,
+                direct_canvas_id: None,
+                direct_texture_id: None,
                 current_canvas_texture: None,
                 current_canvas_texture_id: None,
                 current_canvas_id: None,
                 presentation_blitter: None,
+                #[cfg(target_os = "android")]
+                eye_resolvers: HashMap::new(),
+                #[cfg(target_os = "android")]
+                xr_depth_clears: HashMap::new(),
+                #[cfg(target_os = "android")]
+                needs_layered_depth_clear,
+                #[cfg(target_os = "android")]
+                eye_timer: Default::default(),
+                canvas_snapshots: Default::default(),
+                progress_worker: None,
+                presentation_damage: Default::default(),
                 staging_belt,
                 pending_buffer_writes: Vec::new(),
                 free_buffer_write_data: Vec::new(),
@@ -3548,17 +3876,14 @@ mod upstream_wgpu_native {
         }
 
         fn take_external_image_upload_data(&mut self, len: usize) -> Vec<u8> {
-            let mut owned = self
-                .free_external_image_upload_data
+            self.free_external_image_upload_data
                 .iter()
                 .position(|buffer| buffer.capacity() >= len)
                 .map(|index| self.free_external_image_upload_data.swap_remove(index))
-                .unwrap_or_else(|| Vec::with_capacity(len));
-            owned.clear();
-            owned
+                .unwrap_or_else(|| Vec::with_capacity(len))
         }
 
-        fn recycle_external_image_upload_data(&mut self, mut data: Vec<u8>) {
+        fn recycle_external_image_upload_data(&mut self, data: Vec<u8>) {
             if data.capacity() > MAX_RETAINED_EXTERNAL_IMAGE_UPLOAD_BYTES
                 || self.free_external_image_upload_data.len()
                     >= MAX_RETAINED_EXTERNAL_IMAGE_UPLOAD_BUFFERS
@@ -3566,7 +3891,6 @@ mod upstream_wgpu_native {
                 return;
             }
 
-            data.clear();
             self.free_external_image_upload_data.push(data);
         }
 
@@ -3669,15 +3993,18 @@ mod upstream_wgpu_native {
                     depth_or_array_layers: 1,
                 },
             );
+            self.presentation_damage.invalidate();
             true
         }
 
         pub fn resize(&mut self, width: u32, height: u32) {
             let (width, height) = self.runtime.clamped_extent(width, height);
+            self.expire_direct_texture();
             self.current_surface_frame = None;
             self.current_surface_frame_submitted = false;
             // Host drawable size and individual canvas backing sizes are independent.
             self.runtime.reconfigure_surface(width, height);
+            self.presentation_damage.invalidate();
         }
 
         pub fn render(
@@ -3754,6 +4081,7 @@ mod upstream_wgpu_native {
                         source_texture.width(),
                         source_texture.height(),
                         source_texture.format(),
+                        false,
                     )?)
                 } else {
                     None
@@ -3762,7 +4090,42 @@ mod upstream_wgpu_native {
                 None
             };
 
-            if self.runtime.surface.is_some() && self.offscreen_texture.is_some() {
+            static SKIP_UNCHANGED: OnceLock<bool> = OnceLock::new();
+            if super::window_presentation_suspended() {
+                self.expire_direct_texture();
+                self.current_surface_frame = None;
+                self.current_surface_frame_submitted = false;
+                let _ = self.runtime.device.poll(wgpu::PollType::Poll);
+                return Ok(screenshot);
+            }
+            let skip_unchanged = *SKIP_UNCHANGED.get_or_init(|| {
+                std::env::var("BABYLON_NATIVE_WEBGPU_PROFILE_SKIP_UNCHANGED_PRESENT").as_deref() == Ok("1")
+            });
+            if let Some(frame) = self.current_surface_frame.take() {
+                let mut encoder = self.runtime.device.create_command_encoder(
+                    &wgpu::CommandEncoderDescriptor {
+                        label: Some("babylon-native-webgpu.present-direct"),
+                    },
+                );
+                // A different canvas can become the displayed source after acquisition.
+                if self.current_canvas_texture_id != self.direct_texture_id {
+                    if let Some(source) = self.offscreen_texture.as_ref() {
+                        encode_canvas_presentation(
+                            &self.runtime.device, &mut encoder, source, &frame.texture,
+                            &mut self.presentation_blitter,
+                        );
+                    }
+                }
+                submit_and_present(
+                    &self.runtime.device, &self.runtime.queue,
+                    &mut self.runtime.presentation_retirement, encoder.finish(), Some(frame),
+                );
+                self.presentation_damage.presented();
+                self.expire_direct_texture();
+            } else if skip_unchanged && !self.presentation_damage.is_pending() {
+                // Keep asynchronous callbacks and resource retirement progressing when idle.
+                let _ = self.runtime.device.poll(wgpu::PollType::Poll);
+            } else if self.runtime.surface.is_some() && self.offscreen_texture.is_some() {
                 if let (Some(surface), Some(source_texture)) = (
                     self.runtime.surface.as_ref(),
                     self.offscreen_texture.as_ref(),
@@ -3785,9 +4148,11 @@ mod upstream_wgpu_native {
                             submit_and_present(
                                 &self.runtime.device,
                                 &self.runtime.queue,
+                                &mut self.runtime.presentation_retirement,
                                 encoder.finish(),
                                 Some(frame),
                             );
+                            self.presentation_damage.presented();
                         }
                         wgpu::CurrentSurfaceTexture::Lost
                         | wgpu::CurrentSurfaceTexture::Outdated
@@ -4001,8 +4366,32 @@ mod upstream_wgpu_native {
             Ok(())
         }
 
-        pub fn map_buffer(&mut self, id: u64, mode: u32, offset: u64, size: u64) -> Result<(), String> {
+        // A headless device must also progress callbacks. Coalesce wakeups without
+        // holding the renderer mutex, owning JS references, or spawning a thread per map.
+        fn progress_worker(&mut self) -> Result<std::sync::mpsc::SyncSender<()>, String> {
+            if let Some(worker) = &self.progress_worker { return Ok(worker.clone()); }
+            let (wake, pending) = std::sync::mpsc::sync_channel(1);
+            let device = self.runtime.device.clone();
+            std::thread::Builder::new().name("WebGPU completions".into()).spawn(move || {
+                while pending.recv().is_ok() {
+                    let _ = device.poll(wgpu::PollType::wait_indefinitely());
+                }
+            }).map_err(|error| error.to_string())?;
+            self.progress_worker = Some(wake.clone());
+            Ok(wake)
+        }
+
+        pub fn notify_work_done(&mut self, completed: extern "C" fn(usize, bool), context: usize) -> Result<(), String> {
+            self.submit_pending_buffer_writes("on_submitted_work_done");
+            let wake = self.progress_worker()?;
+            self.runtime.queue.on_submitted_work_done(move || completed(context, true));
+            let _ = wake.try_send(());
+            Ok(())
+        }
+
+        pub fn begin_map(&mut self, id: u64, mode: u32, offset: u64, size: u64, completed: extern "C" fn(usize, bool), context: usize) -> Result<(), String> {
             self.submit_pending_buffer_writes("map_buffer");
+            let wake = self.progress_worker()?;
             let resource = self.resources.buffers.get_mut(&id)
                 .ok_or_else(|| format!("GPUBuffer {id} was not found"))?;
             let mode = match mode {
@@ -4010,14 +4399,16 @@ mod upstream_wgpu_native {
                 2 => wgpu::MapMode::Write,
                 _ => return Err("Invalid GPUMapMode".into()),
             };
-            let (tx, rx) = std::sync::mpsc::channel();
             resource.buffer.map_async(mode, offset..offset + size, move |result| {
-                let _ = tx.send(result);
+                completed(context, result.is_ok());
             });
-            self.runtime.device.poll(wgpu::PollType::wait_indefinitely())
-                .map_err(|error| error.to_string())?;
-            rx.recv().map_err(|error| error.to_string())?
-                .map_err(|error| error.to_string())?;
+            let _ = wake.try_send(());
+            Ok(())
+        }
+
+        pub fn finish_map(&mut self, id: u64) -> Result<(), String> {
+            let resource = self.resources.buffers.get_mut(&id)
+                .ok_or_else(|| format!("GPUBuffer {id} was not found"))?;
             resource.mapped = true;
             Ok(())
         }
@@ -4103,7 +4494,11 @@ mod upstream_wgpu_native {
             let format = map_texture_format(format_text)
                 .ok_or_else(|| format!("unsupported GPUTexture format '{format_text}'"))?;
             let usage = map_texture_usage(json_u32(&descriptor, "usage", 0x10));
-            let view_formats = compatible_view_formats(format);
+            let view_formats = descriptor.get("viewFormats").and_then(Value::as_array)
+                .into_iter().flatten()
+                .map(|value| value.as_str().and_then(map_texture_format)
+                    .ok_or_else(|| format!("unsupported GPUTexture view format {value}")))
+                .collect::<Result<Vec<_>, _>>()?;
             let mip_level_count = json_u32(&descriptor, "mipLevelCount", 1).max(1);
             let sample_count = json_u32(&descriptor, "sampleCount", 1).max(1);
             let label = json_str(&descriptor, "label").map(str::to_owned);
@@ -4168,7 +4563,11 @@ mod upstream_wgpu_native {
             self.resources.textures.insert(
                 id,
                 TextureResource {
+                    xr_release: XrReleaseState::FirstUse,
                     texture,
+                    default_binding_view: Default::default(),
+                    #[cfg(target_os = "android")]
+                    eye_target: None,
                     width: size.width,
                     height: size.height,
                     depth_or_array_layers: size.depth_or_array_layers,
@@ -4300,7 +4699,9 @@ mod upstream_wgpu_native {
             self.resources.textures.insert(
                 id,
                 TextureResource {
+                    xr_release: XrReleaseState::FirstUse,
                     texture,
+                    default_binding_view: Default::default(),
                     width: size.width,
                     height: size.height,
                     depth_or_array_layers: size.depth_or_array_layers,
@@ -4348,6 +4749,7 @@ mod upstream_wgpu_native {
         pub fn import_vulkan_texture(
             &mut self,
             native_image: u64,
+            width: u32, height: u32, vk_format: i64,
             descriptor_json: &str,
         ) -> Result<u64, String> {
             if native_image == 0 {
@@ -4415,6 +4817,24 @@ mod upstream_wgpu_native {
                 view_formats: view_formats.clone(),
             };
             let raw_image = ash::vk::Image::from_raw(native_image);
+            let output_format = match i32::try_from(vk_format).ok().map(ash::vk::Format::from_raw) {
+                Some(ash::vk::Format::R8G8B8A8_SRGB) => wgpu::TextureFormat::Rgba8UnormSrgb,
+                Some(ash::vk::Format::B8G8R8A8_SRGB) => wgpu::TextureFormat::Bgra8UnormSrgb,
+                Some(ash::vk::Format::R8G8B8A8_UNORM) => wgpu::TextureFormat::Rgba8Unorm,
+                Some(ash::vk::Format::B8G8R8A8_UNORM) => wgpu::TextureFormat::Bgra8Unorm,
+                Some(ash::vk::Format::R16G16B16A16_SFLOAT) => wgpu::TextureFormat::Rgba16Float,
+                _ => return Err(format!("Unsupported OpenXR Vulkan image format {vk_format}")),
+            };
+            if width == 0 || height == 0 || size.depth_or_array_layers == 0 || dimension != wgpu::TextureDimension::D2 || sample_count != 1 || mip_level_count != 1 {
+                return Err("Expected a single-sampled two-dimensional OpenXR projection image".into());
+            }
+            let extent = wgpu::Extent3d { width, height, depth_or_array_layers: size.depth_or_array_layers };
+            let resolve = size != extent || !output_format.is_srgb();
+            let wrapped_format = if resolve { output_format } else { format };
+            let import_formats = if resolve { &[][..] } else { &view_formats };
+            let hal_descriptor = wgpu::hal::TextureDescriptor {
+                size: extent, format: wrapped_format, view_formats: import_formats.to_vec(), ..hal_descriptor
+            };
             let hal_texture = unsafe {
                 hal_device.texture_from_raw(
                     raw_image,
@@ -4430,13 +4850,13 @@ mod upstream_wgpu_native {
                         hal_texture,
                         &wgpu::TextureDescriptor {
                             label: label.as_deref(),
-                            size,
+                            size: extent,
                             mip_level_count,
                             sample_count,
                             dimension,
-                            format,
+                            format: wrapped_format,
                             usage,
-                            view_formats: &view_formats,
+                            view_formats: import_formats,
                         },
                         // The swapchain image is fully rendered every frame; nothing
                         // written before the import needs preserving.
@@ -4444,11 +4864,27 @@ mod upstream_wgpu_native {
                     )
             };
 
+            let (texture, eye_target) = if resolve {
+                let device = &self.runtime.device;
+                let source = device.create_texture(&wgpu::TextureDescriptor {
+                    label: Some("NativeXR application eye"), size, mip_level_count, sample_count,
+                    dimension, format, usage: usage | wgpu::TextureUsages::TEXTURE_BINDING, view_formats: &[],
+                });
+                let resolver = self.eye_resolvers.entry(output_format)
+                    .or_insert_with(|| crate::xr_eye_resolve::Pipeline::new(device, output_format));
+                let target = resolver.target(device, &source, &texture);
+                (source, Some(target))
+            } else {
+                (texture, None)
+            };
             let id = self.resources.next();
             self.resources.textures.insert(
                 id,
                 TextureResource {
+                    xr_release: XrReleaseState::FirstUse,
                     texture,
+                    default_binding_view: Default::default(),
+                    eye_target,
                     width: size.width,
                     height: size.height,
                     depth_or_array_layers: size.depth_or_array_layers,
@@ -4473,6 +4909,7 @@ mod upstream_wgpu_native {
         pub fn import_vulkan_texture(
             &mut self,
             _native_image: u64,
+            _width: u32, _height: u32, _vk_format: i64,
             _descriptor_json: &str,
         ) -> Result<u64, String> {
             Err("native Vulkan texture import is only available on Android".to_string())
@@ -4556,6 +4993,7 @@ mod upstream_wgpu_native {
                 api_version: hal_instance.shared_instance().instance_api_version(),
                 queue_family_index: hal_device.queue_family_index(),
                 queue_index: hal_device.queue_index(),
+                max_texture_dimension_2d: self.runtime.device.limits().max_texture_dimension_2d,
             })
         }
 
@@ -4615,6 +5053,8 @@ mod upstream_wgpu_native {
                     .and_then(Value::as_u64)
                     .map(|raw| raw.min(u64::from(u32::MAX)) as u32),
             });
+            #[cfg(target_os = "android")]
+            let view_format = format.unwrap_or(texture.format);
             let id = self.resources.next();
             if crate::xr_depth_textures().lock().unwrap().contains(&texture_id) {
                 crate::xr_depth_views().lock().unwrap().insert(id);
@@ -4622,6 +5062,11 @@ mod upstream_wgpu_native {
             self.resources.texture_views.insert(
                 id,
                 TextureViewResource {
+                    #[cfg(target_os = "android")]
+                    base_array_layer: json_u32(&descriptor, "baseArrayLayer", 0),
+                    #[cfg(target_os = "android")]
+                    format: view_format,
+                    texture_id,
                     view,
                     width,
                     height,
@@ -4668,6 +5113,9 @@ mod upstream_wgpu_native {
             self.resources
                 .shader_modules
                 .insert(id, ShaderModuleResource { module });
+            if profile_pipeline_markers_enabled() {
+                eprintln!("NativeWebGPU shader-profile: id={id} code={}", serde_json::to_string(code).unwrap());
+            }
             Ok(id)
         }
 
@@ -4771,9 +5219,12 @@ mod upstream_wgpu_native {
             let mut layouts = Vec::new();
             if let Some(array) = descriptor.get("bindGroupLayouts").and_then(Value::as_array) {
                 for value in array {
-                    let Some(layout_id) = native_id(value) else {
+                    if value.is_null() {
+                        layouts.push(None);
                         continue;
-                    };
+                    }
+                    let layout_id = native_id(value)
+                        .ok_or_else(|| "GPUPipelineLayout entry must be a bind group layout or null".to_string())?;
                     let layout = self
                         .resources
                         .bind_group_layouts
@@ -4797,113 +5248,66 @@ mod upstream_wgpu_native {
             Ok(id)
         }
 
-        pub fn create_bind_group(&mut self, descriptor_json: &str) -> Result<u64, String> {
-            enum EntrySpec {
-                Buffer(usize),
-                Sampler(usize),
-                TextureView(usize),
-            }
-
-            let descriptor = parse_json(descriptor_json)?;
-            let layout_id = descriptor
-                .get("layout")
-                .and_then(native_id)
-                .ok_or_else(|| "GPUBindGroup descriptor missing layout".to_string())?;
-            let layout = self
-                .resources
-                .bind_group_layouts
-                .get(&layout_id)
+        pub fn create_bind_group(
+            &mut self,
+            layout_id: u64,
+            label: &str,
+            bindings: &[super::BabylonWgpuBindGroupEntry],
+        ) -> Result<u64, String> {
+            let layout = self.resources.bind_group_layouts.get(&layout_id)
                 .ok_or_else(|| format!("GPUBindGroupLayout {layout_id} was not found"))?;
-            let mut binding_numbers = Vec::new();
-            let mut specs = Vec::new();
-            let mut buffers: Vec<(wgpu::Buffer, u64, Option<std::num::NonZeroU64>)> = Vec::new();
-            let mut samplers = Vec::new();
-            let mut texture_views = Vec::new();
-
-            if let Some(array) = descriptor.get("entries").and_then(Value::as_array) {
-                for entry in array {
-                    let binding = json_u32(entry, "binding", 0);
-                    let Some(resource) = entry.get("resource") else {
-                        continue;
-                    };
-
-                    if let Some(buffer_value) = resource.get("buffer") {
-                        let buffer_id = native_id(buffer_value)
-                            .ok_or_else(|| "GPUBufferBinding missing buffer handle".to_string())?;
-                        let buffer = self
-                            .resources
-                            .buffers
-                            .get(&buffer_id)
-                            .ok_or_else(|| format!("GPUBuffer {buffer_id} was not found"))?;
-                        let offset = json_u64(resource, "offset", 0);
-                        let size = resource
-                            .get("size")
-                            .and_then(Value::as_u64)
-                            .and_then(std::num::NonZeroU64::new);
-                        binding_numbers.push(binding);
-                        specs.push(EntrySpec::Buffer(buffers.len()));
-                        buffers.push((buffer.buffer.clone(), offset, size));
-                    } else if let Some(resource_id) = native_id(resource) {
-                        if let Some(sampler) = self.resources.samplers.get(&resource_id) {
-                            binding_numbers.push(binding);
-                            specs.push(EntrySpec::Sampler(samplers.len()));
-                            samplers.push(sampler.sampler.clone());
-                        } else if let Some(view) = self.resources.texture_views.get(&resource_id) {
-                            binding_numbers.push(binding);
-                            specs.push(EntrySpec::TextureView(texture_views.len()));
-                            texture_views.push(view.view.clone());
-                        }
+            let mut entries = Vec::with_capacity(bindings.len());
+            for entry in bindings {
+                let id = entry.resource;
+                let resource = match entry.kind {
+                    1 => {
+                        let buffer = self.resources.buffers.get(&id)
+                            .ok_or_else(|| format!("GPUBuffer {id} was not found"))?;
+                        wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                            buffer: &buffer.buffer,
+                            offset: entry.offset,
+                            size: if entry.size == u64::MAX {
+                                None
+                            } else {
+                                Some(std::num::NonZeroU64::new(entry.size)
+                                    .ok_or_else(|| "GPUBufferBinding size must be nonzero".to_owned())?)
+                            },
+                        })
                     }
-                }
-            }
-
-            let buffer_bindings: Vec<_> = buffers
-                .iter()
-                .map(|(buffer, offset, size)| wgpu::BufferBinding {
-                    buffer,
-                    offset: *offset,
-                    size: *size,
-                })
-                .collect();
-            let mut entries = Vec::with_capacity(specs.len());
-            for (i, spec) in specs.iter().enumerate() {
-                let resource = match *spec {
-                    EntrySpec::Buffer(index) => {
-                        wgpu::BindingResource::Buffer(buffer_bindings[index].clone())
+                    2 => {
+                        let texture = self.resources.textures.get(&id)
+                            .ok_or_else(|| format!("GPUTexture {id} was not found"))?;
+                        let view = texture.default_binding_view.get_or_init(|| {
+                            texture.texture.create_view(&wgpu::TextureViewDescriptor::default())
+                        });
+                        wgpu::BindingResource::TextureView(view)
                     }
-                    EntrySpec::Sampler(index) => wgpu::BindingResource::Sampler(&samplers[index]),
-                    EntrySpec::TextureView(index) => {
-                        wgpu::BindingResource::TextureView(&texture_views[index])
-                    }
+                    3 => wgpu::BindingResource::TextureView(&self.resources.texture_views.get(&id)
+                        .ok_or_else(|| format!("GPUTextureView {id} was not found"))?.view),
+                    4 => wgpu::BindingResource::Sampler(&self.resources.samplers.get(&id)
+                        .ok_or_else(|| format!("GPUSampler {id} was not found"))?.sampler),
+                    _ => return Err(format!("Unsupported resource for binding {}", entry.binding)),
                 };
-                entries.push(wgpu::BindGroupEntry {
-                    binding: binding_numbers[i],
-                    resource,
-                });
+                entries.push(wgpu::BindGroupEntry { binding: entry.binding, resource });
             }
-
-            let bind_group = self
-                .runtime
-                .device
-                .create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: json_str(&descriptor, "label"),
-                    layout: &layout.layout,
-                    entries: &entries,
-                });
+            let bind_group = self.runtime.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some(label),
+                layout: &layout.layout,
+                entries: &entries,
+            });
             let id = self.resources.next();
-            self.resources
-                .bind_groups
-                .insert(id, BindGroupResource { bind_group });
+            self.resources.bind_groups.insert(id, BindGroupResource { bind_group });
             Ok(id)
         }
 
-        pub fn create_render_pipeline(&mut self, descriptor_json: &str) -> Result<u64, String> {
+        fn prepare_render_pipeline(&self, descriptor_json: &str) -> Result<PipelineBuild, String> {
             let descriptor = parse_json(descriptor_json)?;
+            let multiview_mask = xr_view_mask(&descriptor, &self.runtime.device)?;
             let layout = descriptor.get("layout").and_then(native_id).and_then(|id| {
                 self.resources
                     .pipeline_layouts
                     .get(&id)
-                    .map(|value| &value.layout)
+                    .map(|value| value.layout.clone())
             });
 
             let vertex = descriptor
@@ -4918,7 +5322,8 @@ mod upstream_wgpu_native {
                 .shader_modules
                 .get(&vertex_module_id)
                 .ok_or_else(|| format!("GPUShaderModule {vertex_module_id} was not found"))?;
-            let vertex_entry = json_str(vertex, "entryPoint").unwrap_or("main");
+            let vertex_module = vertex_module.module.clone();
+            let vertex_entry = json_str(vertex, "entryPoint").unwrap_or("main").to_owned();
 
             let mut attribute_storage: Vec<Vec<wgpu::VertexAttribute>> = Vec::new();
             let mut layout_specs: Vec<(u64, wgpu::VertexStepMode, usize)> = Vec::new();
@@ -4931,9 +5336,7 @@ mod upstream_wgpu_native {
                         continue;
                     }
                     let mut attributes = Vec::new();
-                    if let Some(attribute_array) =
-                        buffer.get("attributes").and_then(Value::as_array)
-                    {
+                    if let Some(attribute_array) = buffer.get("attributes").and_then(Value::as_array) {
                         for attribute in attribute_array {
                             let Some(format_text) = json_str(attribute, "format") else {
                                 continue;
@@ -4960,19 +5363,6 @@ mod upstream_wgpu_native {
                     vertex_buffer_slot_map.push((slot as u32, (layout_specs.len() - 1) as u32));
                 }
             }
-            let vertex_buffers: Vec<_> = layout_specs
-                .iter()
-                .map(
-                    |(array_stride, step_mode, attribute_index)| wgpu::VertexBufferLayout {
-                        array_stride: *array_stride,
-                        step_mode: *step_mode,
-                        attributes: &attribute_storage[*attribute_index],
-                    },
-                )
-                .collect();
-            // wgpu 30 models unused vertex slots as `None`; every layout here is bound.
-            let vertex_buffer_slots: Vec<Option<wgpu::VertexBufferLayout>> =
-                vertex_buffers.iter().cloned().map(Some).collect();
 
             let fragment_state = if let Some(fragment) = descriptor
                 .get("fragment")
@@ -5054,36 +5444,45 @@ mod upstream_wgpu_native {
             let multisample = wgpu::MultisampleState {
                 count: json_u32(multisample_value, "count", 1).max(1),
                 mask: json_u64(multisample_value, "mask", !0u64),
-                alpha_to_coverage_enabled: json_bool(
-                    multisample_value,
-                    "alphaToCoverageEnabled",
-                    false,
-                ),
+                alpha_to_coverage_enabled: json_bool(multisample_value, "alphaToCoverageEnabled", false),
             };
 
-            let fragment =
-                fragment_state
-                    .as_ref()
-                    .map(|(module, entry, targets)| wgpu::FragmentState {
-                        module,
-                        entry_point: Some(entry.as_str()),
-                        compilation_options: wgpu::PipelineCompilationOptions::default(),
-                        targets,
-                    });
+            let label = json_str(&descriptor, "label").map(str::to_owned);
+            Ok(Box::new(move |device, report| {
+                let vertex_buffer_slots: Vec<_> = layout_specs
+                    .iter()
+                    .map(|&(array_stride, step_mode, index)| {
+                        Some(wgpu::VertexBufferLayout {
+                            array_stride,
+                            step_mode,
+                            attributes: &attribute_storage[index],
+                        })
+                    })
+                    .collect();
+                let fragment =
+                    fragment_state
+                        .as_ref()
+                        .map(|(module, entry, targets)| wgpu::FragmentState {
+                            module,
+                            entry_point: Some(entry.as_str()),
+                            compilation_options: wgpu::PipelineCompilationOptions::default(),
+                            targets,
+                        });
 
-            let label = json_str(&descriptor, "label").unwrap_or("unlabeled");
-            let pipeline = create_with_error_scopes(
-                &self.runtime.device,
-                &format!("GPURenderPipeline '{label}'"),
-                || {
-                    self.runtime
-                        .device
-                        .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                            label: json_str(&descriptor, "label"),
-                            layout,
+                let pipeline = create_with_error_scopes(
+                    device,
+                    &format!(
+                        "GPURenderPipeline '{}'",
+                        label.as_deref().unwrap_or("unlabeled")
+                    ),
+                    report,
+                    || {
+                        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                            label: label.as_deref(),
+                            layout: layout.as_ref(),
                             vertex: wgpu::VertexState {
-                                module: &vertex_module.module,
-                                entry_point: Some(vertex_entry),
+                                module: &vertex_module,
+                                entry_point: Some(&vertex_entry),
                                 compilation_options: wgpu::PipelineCompilationOptions::default(),
                                 buffers: &vertex_buffer_slots,
                             },
@@ -5091,24 +5490,112 @@ mod upstream_wgpu_native {
                             depth_stencil,
                             multisample,
                             fragment,
-                            multiview_mask: None,
+                            multiview_mask,
                             cache: None,
                         })
-                },
-            )?;
+                    },
+                )?;
 
-            let id = self.resources.next();
-            self.resources.render_pipelines.insert(
-                id,
-                RenderPipelineResource {
+                Ok(CompiledPipeline::Render(RenderPipelineResource {
                     pipeline,
                     vertex_buffer_slot_map: if has_null_vertex_slots {
                         Some(vertex_buffer_slot_map)
                     } else {
                         None
                     },
-                },
-            );
+                }))
+            }))
+        }
+
+        fn install_pipeline(&mut self, pipeline: CompiledPipeline) -> u64 {
+            let id = self.resources.next();
+            match pipeline {
+                CompiledPipeline::Render(value) => {
+                    self.resources.render_pipelines.insert(id, value);
+                }
+                CompiledPipeline::Compute(value) => {
+                    self.resources.compute_pipelines.insert(id, value);
+                }
+            }
+            id
+        }
+
+        pub(super) fn start_pipeline(
+            &mut self,
+            descriptor: &str,
+            compute: bool,
+            completed: extern "C" fn(usize, bool),
+            context: usize,
+        ) -> Result<*const AsyncPipeline, String> {
+            use std::sync::Arc;
+            if self.pipeline_compiler.is_none() {
+                self.pipeline_compiler = Some(
+                    crate::pipeline_compiler::PipelineCompiler::new()
+                        .map_err(|error| format!("Could not start WebGPU compiler: {error}"))?,
+                );
+            }
+            // Resolve and retain handles on the renderer thread. The compiler never sees the resource table.
+            let build = if compute {
+                self.prepare_compute_pipeline(descriptor)
+            } else {
+                self.prepare_render_pipeline(descriptor)
+            };
+            let result = Arc::new(AsyncPipeline {
+                device: self.runtime.device.clone(),
+                pipeline: Mutex::new(None),
+                failure: OnceLock::new(),
+            });
+            let worker = result.clone();
+            self.pipeline_compiler.as_ref().unwrap().submit(move || {
+                let mut internal = false;
+                let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    build.and_then(|compile| {
+                        compile(&worker.device, &mut |error| {
+                            internal |= !matches!(error, wgpu::Error::Validation { .. });
+                        })
+                    })
+                }))
+                .unwrap_or_else(|panic| {
+                    internal = true;
+                    Err(format!(
+                        "WebGPU compiler panicked: {}",
+                        super::panic_payload_to_string(panic.as_ref())
+                    ))
+                });
+                match outcome {
+                    Ok(pipeline) => *worker.pipeline.lock().unwrap() = Some(pipeline),
+                    Err(message) => {
+                        let _ = worker.failure.set((
+                            internal,
+                            std::ffi::CString::new(message.replace('\0', "\\0")).unwrap(),
+                        ));
+                    }
+                }
+                completed(context, true);
+            })?;
+            Ok(Arc::into_raw(result))
+        }
+
+        pub(super) fn adopt_pipeline(&mut self, job: &AsyncPipeline) -> Result<u64, String> {
+            if self.runtime.device != job.device {
+                return Err("Pipeline compilation completed for a replaced renderer".to_owned());
+            }
+            let pipeline = job
+                .pipeline
+                .lock()
+                .unwrap()
+                .take()
+                .ok_or("Pipeline result unavailable")?;
+            Ok(self.install_pipeline(pipeline))
+        }
+
+        pub fn create_render_pipeline(&mut self, descriptor_json: &str) -> Result<u64, String> {
+            let build = self.prepare_render_pipeline(descriptor_json)?;
+            let pipeline = build(&self.runtime.device, &mut super::error_bridge::record_wgpu)?;
+            let id = self.install_pipeline(pipeline);
+            if profile_pipeline_markers_enabled() {
+                eprintln!("NativeWebGPU pipeline-profile: id={id} descriptor={descriptor_json}");
+            }
             Ok(id)
         }
 
@@ -5130,13 +5617,13 @@ mod upstream_wgpu_native {
             Ok(id)
         }
 
-        pub fn create_compute_pipeline(&mut self, descriptor_json: &str) -> Result<u64, String> {
+        fn prepare_compute_pipeline(&self, descriptor_json: &str) -> Result<PipelineBuild, String> {
             let descriptor = parse_json(descriptor_json)?;
             let layout = descriptor.get("layout").and_then(native_id).and_then(|id| {
                 self.resources
                     .pipeline_layouts
                     .get(&id)
-                    .map(|value| &value.layout)
+                    .map(|value| value.layout.clone())
             });
 
             let compute = descriptor
@@ -5151,31 +5638,40 @@ mod upstream_wgpu_native {
                 .shader_modules
                 .get(&module_id)
                 .ok_or_else(|| format!("GPUShaderModule {module_id} was not found"))?;
-            let entry = json_str(compute, "entryPoint").unwrap_or("main");
+            let entry = json_str(compute, "entryPoint").unwrap_or("main").to_owned();
+            let module = module.module.clone();
 
-            let label = json_str(&descriptor, "label").unwrap_or("unlabeled");
-            let pipeline = create_with_error_scopes(
-                &self.runtime.device,
-                &format!("GPUComputePipeline '{label}'"),
-                || {
-                    self.runtime
-                        .device
-                        .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                            label: json_str(&descriptor, "label"),
-                            layout,
-                            module: &module.module,
-                            entry_point: Some(entry),
+            let label = json_str(&descriptor, "label").map(str::to_owned);
+            Ok(Box::new(move |device, report| {
+                let pipeline = create_with_error_scopes(
+                    device,
+                    &format!(
+                        "GPUComputePipeline '{}'",
+                        label.as_deref().unwrap_or("unlabeled")
+                    ),
+                    report,
+                    || {
+                        device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                            label: label.as_deref(),
+                            layout: layout.as_ref(),
+                            module: &module,
+                            entry_point: Some(&entry),
                             compilation_options: wgpu::PipelineCompilationOptions::default(),
                             cache: None,
                         })
-                },
-            )?;
+                    },
+                )?;
 
-            let id = self.resources.next();
-            self.resources
-                .compute_pipelines
-                .insert(id, ComputePipelineResource { pipeline });
-            Ok(id)
+                Ok(CompiledPipeline::Compute(ComputePipelineResource {
+                    pipeline,
+                }))
+            }))
+        }
+
+        pub fn create_compute_pipeline(&mut self, descriptor_json: &str) -> Result<u64, String> {
+            let build = self.prepare_compute_pipeline(descriptor_json)?;
+            let pipeline = build(&self.runtime.device, &mut super::error_bridge::record_wgpu)?;
+            Ok(self.install_pipeline(pipeline))
         }
 
         pub fn compute_pipeline_get_bind_group_layout(
@@ -5218,7 +5714,7 @@ mod upstream_wgpu_native {
         }
 
         fn parse_render_pass_descriptor(
-            &self,
+            &mut self,
             descriptor_json: &str,
         ) -> Result<RenderPassDescriptorCommand, String> {
             let descriptor = parse_json(descriptor_json)?;
@@ -5257,7 +5753,24 @@ mod upstream_wgpu_native {
                         "discard" => wgpu::StoreOp::Discard,
                         _ => wgpu::StoreOp::Store,
                     };
+                    // A recorded discard can be submitted after a later release, in any order.
+                    // Keep wgpu's implicit initialization on release for that image's lifetime.
+                    if store == wgpu::StoreOp::Discard {
+                        if let Some(texture) = self.resources.textures.get_mut(&view.texture_id) {
+                            texture.xr_release = XrReleaseState::MayDiscard;
+                        }
+                    }
                     color_attachments.push(Some(ColorAttachmentCommand {
+                        #[cfg(target_os = "android")]
+                        output_layer: attachment.get("resolveTarget").and_then(native_id)
+                            .and_then(|id| self.resources.texture_views.get(&id))
+                            .unwrap_or(view).base_array_layer,
+                        #[cfg(target_os = "android")]
+                        format: view.format,
+                        #[cfg(target_os = "android")]
+                        output_texture_id: attachment.get("resolveTarget").and_then(native_id)
+                            .and_then(|id| self.resources.texture_views.get(&id))
+                            .unwrap_or(view).texture_id,
                         view: view.view.clone(),
                         depth_slice: attachment
                             .get("depthSlice")
@@ -5347,10 +5860,48 @@ mod upstream_wgpu_native {
                 .transpose()?;
 
             Ok(RenderPassDescriptorCommand {
+                multiview_mask: xr_view_mask(&descriptor, &self.runtime.device)?,
+                timestamps: self.pass_timestamps(&descriptor)?,
                 label: json_str(&descriptor, "label").map(ToOwned::to_owned),
                 color_attachments,
                 depth_stencil_attachment,
             })
+        }
+
+        pub(super) fn create_query_set(&mut self, timestamp: bool, count: u32, label: &str) -> Result<u64, String> {
+            let query_set = self.runtime.device.create_query_set(&wgpu::QuerySetDescriptor {
+                label: Some(label),
+                ty: if timestamp { wgpu::QueryType::Timestamp } else { wgpu::QueryType::Occlusion },
+                count,
+            });
+            let id = self.resources.next();
+            self.resources.query_sets.insert(id, query_set);
+            Ok(id)
+        }
+
+        fn pass_timestamps(&self, descriptor: &Value) -> Result<Option<PassTimestamps>, String> {
+            let Some(writes) = descriptor.get("timestampWrites").filter(|v| !v.is_null()) else { return Ok(None) };
+            let query_set = writes.get("querySet").and_then(native_id)
+                .and_then(|id| self.resources.query_sets.get(&id))
+                .ok_or("timestampWrites requires a live GPUQuerySet")?;
+            let index = |key: &str| writes.get(key).map(|value| value.as_u64().and_then(|v| u32::try_from(v).ok())
+                .ok_or_else(|| format!("invalid timestampWrites.{key}"))).transpose();
+            Ok(Some(PassTimestamps {
+                query_set: query_set.clone(),
+                begin: index("beginningOfPassWriteIndex")?,
+                end: index("endOfPassWriteIndex")?,
+            }))
+        }
+
+        pub(super) fn resolve_query_set(&mut self, encoder: u64, queries: u64, first: u32, count: u32, dst: u64, offset: u64) -> Result<(), String> {
+            let encoder = self.resources.command_encoders.get_mut(&encoder).ok_or("invalid query resolve encoder")?;
+            match (self.resources.query_sets.get(&queries), self.resources.buffers.get(&dst), first.checked_add(count)) {
+                (Some(queries), Some(dst), Some(end)) => encoder.commands.push(EncoderCommand::ResolveQuerySet {
+                    queries: queries.clone(), range: first..end, destination: dst.buffer.clone(), offset,
+                }),
+                _ => { encoder.validation_error.get_or_insert_with(|| "invalid query set, resolve destination or range".into()); }
+            }
+            Ok(())
         }
 
         pub fn create_command_encoder(&mut self) -> Result<u64, String> {
@@ -5359,6 +5910,7 @@ mod upstream_wgpu_native {
                 id,
                 CommandEncoderResource {
                     commands: Vec::new(),
+                    validation_error: None,
                 },
             );
             Ok(id)
@@ -5399,6 +5951,7 @@ mod upstream_wgpu_native {
             self.resources.compute_passes.insert(
                 id,
                 ComputePassResource {
+                    timestamps: self.pass_timestamps(&descriptor)?,
                     encoder_id,
                     label: json_str(&descriptor, "label").map(ToOwned::to_owned),
                     commands: Vec::new(),
@@ -5408,6 +5961,25 @@ mod upstream_wgpu_native {
         }
 
         pub fn render_pass_set_pipeline(
+            &mut self,
+            pass_id: u64,
+            pipeline_id: u64,
+        ) -> Result<bool, String> {
+            match self.try_render_pass_set_pipeline(pass_id, pipeline_id) {
+                Ok(()) => Ok(true),
+                Err(error) => {
+                    // A failed direct bind invalidates the encoder. Dropping just the
+                    // bind would replay subsequent draws with the previous pipeline.
+                    let Some(encoder) = self.resources.render_passes.get(&pass_id)
+                        .and_then(|pass| self.resources.command_encoders.get_mut(&pass.encoder_id))
+                    else { return Err(error) };
+                    encoder.validation_error.get_or_insert(error);
+                    Ok(false)
+                }
+            }
+        }
+
+        pub(super) fn try_render_pass_set_pipeline(
             &mut self,
             pass_id: u64,
             pipeline_id: u64,
@@ -5774,6 +6346,7 @@ mod upstream_wgpu_native {
                 .get_mut(&pass.encoder_id)
                 .ok_or_else(|| format!("GPUCommandEncoder {} was not found", pass.encoder_id))?;
             encoder.commands.push(EncoderCommand::ComputePass {
+                timestamps: pass.timestamps,
                 label: pass.label,
                 commands: pass.commands,
             });
@@ -5969,6 +6542,9 @@ mod upstream_wgpu_native {
                 .command_encoders
                 .remove(&encoder_id)
                 .ok_or_else(|| format!("GPUCommandEncoder {encoder_id} was not found"))?;
+            if let Some(error) = encoder.validation_error {
+                return Err(format!("Invalid render pass: {error}"));
+            }
             let id = self.resources.next();
             // Validate on the encoding timeline, before the caller can pop its scope.
             // Queue writes remain separate and are submitted before these commands.
@@ -5997,6 +6573,69 @@ mod upstream_wgpu_native {
                     descriptor,
                     commands,
                 } => {
+                    // Attribution-only mode. Instruments on older Apple GPUs
+                    // reports spills by encoder, not by shader. Split the scene
+                    // at pipeline changes, carrying all state and attachments.
+                    // Never use this mode for performance comparisons.
+                    if profile_pipeline_markers_enabled()
+                        && descriptor.label.as_deref().is_some_and(|label| label.contains("sceneprePassRT"))
+                        && descriptor.color_attachments.iter().flatten().all(|a| a.resolve_target.is_none())
+                        && commands.iter().any(|command| matches!(command,
+                            RenderPassCommand::Draw { .. } | RenderPassCommand::DrawIndexed { .. }
+                            | RenderPassCommand::DrawIndirect { .. } | RenderPassCommand::DrawIndexedIndirect { .. }
+                            | RenderPassCommand::MultiDrawIndirect { .. } | RenderPassCommand::MultiDrawIndexedIndirect { .. }))
+                        && {
+                            static PASS_SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+                            PASS_SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % 60 == 0
+                        }
+                    {
+                        let mut part = descriptor.clone();
+                        for attachment in part.color_attachments.iter_mut().flatten() {
+                            attachment.store = wgpu::StoreOp::Store;
+                        }
+                        if let Some(depth) = &mut part.depth_stencil_attachment {
+                            if let Some(ops) = &mut depth.depth_ops { ops.store = wgpu::StoreOp::Store; }
+                            if let Some(ops) = &mut depth.stencil_ops { ops.store = wgpu::StoreOp::Store; }
+                        }
+                        let mut history = Vec::new();
+                        let mut batch = Vec::new();
+                        let mut pipeline_id = 0;
+                        let mut has_draw = false;
+                        for command in commands {
+                            if let RenderPassCommand::SetPipeline { id, .. } = command {
+                                if has_draw {
+                                    part.label = Some(format!("pipeline-profile-{pipeline_id}"));
+                                    self.execute_encoder_command(encoder, &EncoderCommand::RenderPass {
+                                        descriptor: part.clone(), commands: std::mem::take(&mut batch),
+                                    });
+                                    for attachment in part.color_attachments.iter_mut().flatten() {
+                                        attachment.load = wgpu::LoadOp::Load;
+                                    }
+                                    if let Some(depth) = &mut part.depth_stencil_attachment {
+                                        if let Some(ops) = &mut depth.depth_ops { ops.load = wgpu::LoadOp::Load; }
+                                        if let Some(ops) = &mut depth.stencil_ops { ops.load = wgpu::LoadOp::Load; }
+                                    }
+                                    batch.clone_from(&history);
+                                    has_draw = false;
+                                }
+                                pipeline_id = *id;
+                            }
+                            let is_draw = matches!(command,
+                                RenderPassCommand::Draw { .. } | RenderPassCommand::DrawIndexed { .. }
+                                | RenderPassCommand::DrawIndirect { .. } | RenderPassCommand::DrawIndexedIndirect { .. }
+                                | RenderPassCommand::MultiDrawIndirect { .. } | RenderPassCommand::MultiDrawIndexedIndirect { .. });
+                            // Rebinding an old pipeline reports its compiler spill
+                            // size even when that pipeline does not draw here.
+                            if !is_draw && !matches!(command, RenderPassCommand::SetPipeline { .. }) {
+                                history.push(command.clone());
+                            }
+                            has_draw |= is_draw;
+                            batch.push(command.clone());
+                        }
+                        part.label = Some(format!("pipeline-profile-{pipeline_id}"));
+                        self.execute_encoder_command(encoder, &EncoderCommand::RenderPass { descriptor: part, commands: batch });
+                        return;
+                    }
                     if std::env::var_os("BABYLON_NATIVE_WEBGPU_TRACE").is_some()
                         && descriptor
                             .label
@@ -6125,22 +6764,64 @@ mod upstream_wgpu_native {
                                 .as_ref()
                                 .map(|attachment| (attachment.width, attachment.height))
                         });
+                    let timestamp_writes = descriptor.timestamps.as_ref().map(|writes| wgpu::RenderPassTimestampWrites {
+                        query_set: &writes.query_set,
+                        beginning_of_pass_write_index: writes.begin,
+                        end_of_pass_write_index: writes.end,
+                    });
+                    #[cfg(target_os = "android")]
+                    let timestamp_writes = if self.eye_timer.active() {
+                        let id = descriptor.color_attachments.iter().flatten().map(|a| (a.output_texture_id, a.output_layer))
+                            .find(|(id, _)| self.resources.textures.get(id).is_some_and(|t| t.eye_target.is_some()));
+                        id.and_then(|(id, layer)| {
+                            use crate::xr_eye_sample::Target;
+                            let target = if descriptor.multiview_mask.is_some() { Target::StereoArray(id) } else { Target::Slice(id, layer) };
+                            self.eye_timer.pass(target, false, timestamp_writes.is_some())
+                        }).or(timestamp_writes)
+                    } else { timestamp_writes };
                     let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                         label: descriptor.label.as_deref(),
                         color_attachments: &color_attachments,
                         depth_stencil_attachment,
                         occlusion_query_set: None,
-                        timestamp_writes: None,
-                        multiview_mask: None,
+                        timestamp_writes,
+                        multiview_mask: descriptor.multiview_mask,
                     });
                     let mut current_vertex_buffer_slot_map: Option<&[(u32, u32)]> = None;
+                    #[cfg(target_os = "android")]
+                    if self.needs_layered_depth_clear {
+                        if let ([Some(color)], Some(depth)) = (descriptor.color_attachments.as_slice(), &descriptor.depth_stencil_attachment) {
+                            if let Some(wgpu::Operations { load: wgpu::LoadOp::Clear(value), .. }) = depth.depth_ops {
+                                let depth_texture = depth.view.texture();
+                                if depth_texture.depth_or_array_layers() > 1 && depth_texture.sample_count() == 1 &&
+                                    color.resolve_target.is_none() && self.resources.textures.get(&color.output_texture_id).is_some_and(|t| t.eye_target.is_some()) {
+                                    let key = (color.format, depth_texture.format(), depth.stencil_ops.is_none(), descriptor.multiview_mask);
+                                    let bundle = self.xr_depth_clears.entry(key).or_insert_with(|| crate::xr_depth_clear::bundle(&self.runtime.device, key.0, key.1, key.2, key.3));
+                                    pass.set_viewport(0., 0., depth.width as f32, depth.height as f32, 0., value);
+                                    pass.execute_bundles(std::iter::once(&*bundle));
+                                    pass.set_viewport(0., 0., depth.width as f32, depth.height as f32, 0., 1.);
+                                }
+                            }
+                        }
+                    }
+                    // Diagnostic only: associate driver/compiler events with a
+                    // pipeline without splitting render passes or changing draws.
+                    let profile_pipeline_markers = profile_pipeline_markers_enabled();
+                    let mut pipeline_group_open = false;
                     for command in commands {
                         match command {
                             RenderPassCommand::SetPipeline {
                                 pipeline,
                                 vertex_buffer_slot_map,
-                                ..
+                                id,
                             } => {
+                                if profile_pipeline_markers {
+                                    if pipeline_group_open {
+                                        pass.pop_debug_group();
+                                    }
+                                    pass.push_debug_group(&format!("pipeline-{id}"));
+                                    pipeline_group_open = true;
+                                }
                                 pass.set_pipeline(pipeline);
                                 current_vertex_buffer_slot_map = vertex_buffer_slot_map.as_deref();
                             }
@@ -6254,11 +6935,21 @@ mod upstream_wgpu_native {
                             } => pass.multi_draw_indexed_indirect(buffer, *offset, *count),
                         }
                     }
+                    if pipeline_group_open {
+                        pass.pop_debug_group();
+                    }
                 }
-                EncoderCommand::ComputePass { label, commands } => {
+                EncoderCommand::ResolveQuerySet { queries, range, destination, offset } => {
+                    encoder.resolve_query_set(queries, range.clone(), destination, *offset);
+                }
+                EncoderCommand::ComputePass { label, timestamps, commands } => {
                     let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                         label: label.as_deref(),
-                        timestamp_writes: None,
+                        timestamp_writes: timestamps.as_ref().map(|writes| wgpu::ComputePassTimestampWrites {
+                            query_set: &writes.query_set,
+                            beginning_of_pass_write_index: writes.begin,
+                            end_of_pass_write_index: writes.end,
+                        }),
                     });
                     for command in commands {
                         match command {
@@ -6395,6 +7086,7 @@ mod upstream_wgpu_native {
                 buffers.push(self.resources.command_buffers.remove(id).unwrap().buffer);
             }
             self.runtime.queue.submit(buffers);
+            self.presentation_damage.invalidate();
             if encoded_pending_writes {
                 self.staging_belt.recall();
             }
@@ -6412,42 +7104,75 @@ mod upstream_wgpu_native {
             Ok(())
         }
 
-        pub fn prepare_openxr_texture_for_release(
+        pub fn prepare_openxr_textures_for_release(
             &mut self,
-            texture_id: u64,
+            texture_ids: &[u64],
         ) -> Result<(), String> {
-            let texture = &self
-                .resources
-                .textures
-                .get(&texture_id)
-                .ok_or_else(|| format!("NativeXR color texture {texture_id} was not found"))?
-                .texture;
-            let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+            if texture_ids.is_empty() {
+                return Ok(());
+            }
             let mut encoder =
                 self.runtime
                     .device
                     .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                         label: Some("NativeXR.prepareOpenXRTextureForRelease"),
                     });
-            {
-                let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("NativeXR.prepareOpenXRTextureForRelease"),
-                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: &view,
-                        depth_slice: None,
-                        resolve_target: None,
-                        ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Load,
-                            store: wgpu::StoreOp::Store,
-                        },
-                    })],
-                    depth_stencil_attachment: None,
-                    occlusion_query_set: None,
-                    timestamp_writes: None,
-                    multiview_mask: None,
-                });
+            for (index, texture_id) in texture_ids.iter().enumerate() {
+                if texture_ids[..index].contains(texture_id) {
+                    continue;
+                }
+                let resource = self
+                    .resources
+                    .textures
+                    .get(texture_id)
+                    .ok_or_else(|| format!("NativeXR color texture {texture_id} was not found"))?;
+                let texture = &resource.texture;
+                #[cfg(target_os = "android")]
+                if let Some(target) = &resource.eye_target {
+                    for layer in 0..target.layers() {
+                        target.encode(layer, &mut encoder, self.eye_timer.pass(crate::xr_eye_sample::Target::Slice(*texture_id, layer as u32), true, false));
+                    }
+                    continue;
+                }
+                if resource.xr_release == XrReleaseState::Initialized {
+                    encoder.transition_resources(std::iter::empty(), std::iter::once(wgpu::TextureTransition {
+                        texture,
+                        selector: None,
+                        state: wgpu::TextureUses::COLOR_TARGET,
+                    }));
+                    continue;
+                }
+                for layer in 0..texture.depth_or_array_layers() {
+                    let view = texture.create_view(&wgpu::TextureViewDescriptor {
+                        dimension: Some(wgpu::TextureViewDimension::D2),
+                        base_array_layer: layer,
+                        array_layer_count: Some(1),
+                        ..Default::default()
+                    });
+                    let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("NativeXR.prepareOpenXRTextureForRelease"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: &view,
+                            depth_slice: None,
+                            resolve_target: None,
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Load,
+                                store: wgpu::StoreOp::Store,
+                            },
+                        })],
+                        ..Default::default()
+                    });
+                }
             }
+            #[cfg(target_os = "android")]
+            self.eye_timer.finish(&self.runtime.device, &self.runtime.queue, &mut encoder);
             self.runtime.queue.submit(Some(encoder.finish()));
+            for id in texture_ids {
+                let texture = self.resources.textures.get_mut(id).unwrap();
+                if texture.xr_release == XrReleaseState::FirstUse {
+                    texture.xr_release = XrReleaseState::Initialized;
+                }
+            }
             Ok(())
         }
 
@@ -6491,6 +7216,7 @@ mod upstream_wgpu_native {
                 None
             };
             self.submit_pending_buffer_writes("write_texture");
+            self.presentation_damage.invalidate();
             let trace_after_flush = trace_start.as_ref().map(|_| Instant::now());
             self.runtime.queue.write_texture(
                 wgpu::TexelCopyTextureInfo {
@@ -6531,6 +7257,8 @@ mod upstream_wgpu_native {
             native_texture: *const c_void,
             source_width: u32,
             source_height: u32,
+            src_xy: [u32; 2],
+            flip_y: bool,
             destination_json: &str,
             size_json: &str,
         ) -> Result<(), String> {
@@ -6539,18 +7267,10 @@ mod upstream_wgpu_native {
             } else {
                 None
             };
-            let size = parse_extent3d(&parse_json(size_json)?);
+            let size = parse_copy_extent3d(&parse_json(size_json)?);
             let destination = parse_json(destination_json)?;
             let destination_premultiplied_alpha =
                 json_bool(&destination, "premultipliedAlpha", false);
-            let mut rgba = Vec::new();
-            let (width, height) = import_native_texture_rgba_into(
-                native_texture,
-                source_width.max(size.width),
-                source_height.max(size.height),
-                &mut rgba,
-            )?;
-            let trace_after_import = trace_start.as_ref().map(|_| Instant::now());
             let texture_id = destination
                 .get("texture")
                 .and_then(native_id)
@@ -6563,47 +7283,74 @@ mod upstream_wgpu_native {
                 .format;
             let (texture, mip_level, origin, aspect) =
                 self.parse_texture_copy_view(&destination)?;
-            let copy_width = size.width.min(width).max(1);
-            let copy_height = size.height.min(height).max(1);
-            let source_stride = width as usize * 4;
-            let expected_len = source_stride * copy_height as usize;
-            if rgba.len() < expected_len {
-                return Err("external image readback returned too few bytes".to_string());
+            let handle = opaque_ptr_as_ref::<CanvasNativeTextureHandle>(native_texture)
+                .ok_or("Invalid Canvas texture handle")?;
+            let source = opaque_ptr_as_ref::<wgpu::Texture>(handle.texture).ok_or("Invalid Canvas texture")?;
+            let device = opaque_ptr_as_ref::<wgpu::Device>(handle.device).ok_or("Invalid Canvas device")?;
+            let queue = opaque_ptr_as_ref::<wgpu::Queue>(handle.queue).ok_or("Invalid Canvas queue")?;
+            if source_width != source.width() || source_height != source.height()
+                || src_xy[0].checked_add(size.width).is_none_or(|end| end > source_width)
+                || src_xy[1].checked_add(size.height).is_none_or(|end| end > source_height)
+                || size.depth_or_array_layers != 1
+            {
+                return Err("Canvas snapshot exceeds the source bounds".into());
             }
-            let (upload, upload_stride) = encode_external_image_upload(
-                &rgba,
-                width,
-                0,
-                0,
-                copy_width,
-                copy_height,
-                true,
-                true,
-                destination_premultiplied_alpha,
-                texture_format,
-                if can_borrow_external_image_upload(
-                    width,
-                    0,
-                    0,
-                    copy_width,
-                    true,
-                    true,
+            if device == &self.runtime.device && queue == &self.runtime.queue {
+                self.submit_pending_buffer_writes("canvas_snapshot");
+                self.presentation_damage.invalidate();
+                self.canvas_snapshots.copy(device, queue, source, src_xy, flip_y,
                     destination_premultiplied_alpha,
-                    texture_format,
-                ) {
-                    None
-                } else {
-                    texture_format_bytes_per_pixel(texture_format).map(|bytes_per_pixel| {
+                    wgpu::TexelCopyTextureInfo { texture: &texture, mip_level, origin, aspect }, size)?;
+                super::CANVAS_GPU_SNAPSHOTS.fetch_add(1, Ordering::Relaxed);
+                return Ok(());
+            }
+            super::CANVAS_CPU_SNAPSHOTS.fetch_add(1, Ordering::Relaxed);
+            if size.width == 0 || size.height == 0 { return Ok(()); }
+            let (width, height, upload, upload_stride, trace_after_import) = with_mapped_native_rgba(
+                native_texture,
+                source_width,
+                source_height,
+                |mapped, width, height, bytes_per_row| {
+                    let imported = trace_start.map(|_| Instant::now());
+                    let copy_width = size.width.min(width).max(1);
+                    let copy_height = size.height.min(height).max(1);
+                    let scratch = texture_format_bytes_per_pixel(texture_format).map(|bytes_per_pixel| {
                         self.take_external_image_upload_data(
                             copy_width as usize * copy_height as usize * bytes_per_pixel as usize,
                         )
-                    })
+                    });
+                    // On Adreno 5xx, comparing or converting pixels directly in mapped
+                    // Vulkan memory is much slower than one sequential copy into CPU RAM.
+                    let info = &self.runtime.resolved_adapter_info;
+                    let cached = if cfg!(target_os = "android")
+                        && info.vendor_id == 0x5143
+                        && (0x0500_0000..0x0600_0000).contains(&info.device_id)
+                        && mapped.len() <= MAX_RETAINED_EXTERNAL_IMAGE_UPLOAD_BYTES
+                    {
+                        let mut bytes = self.take_external_image_upload_data(mapped.len());
+                        bytes.clear();
+                        bytes.extend_from_slice(mapped);
+                        Some(bytes)
+                    } else {
+                        None
+                    };
+                    let (upload, stride) = encode_external_image_upload(
+                        cached.as_deref().unwrap_or(mapped), bytes_per_row / 4, src_xy[0], src_xy[1], copy_width, copy_height,
+                        flip_y, true, destination_premultiplied_alpha, texture_format, scratch,
+                    )?;
+                    let upload = upload.into_owned();
+                    if let Some(bytes) = cached {
+                        self.recycle_external_image_upload_data(bytes);
+                    }
+                    Ok((width, height, upload, stride, imported))
                 },
             )?;
+            let copy_width = size.width.min(width).max(1);
+            let copy_height = size.height.min(height).max(1);
             let trace_after_encode = trace_start.as_ref().map(|_| Instant::now());
-            let upload_borrowed = matches!(upload, Cow::Borrowed(_));
             let upload_bytes = upload.len();
             self.submit_pending_buffer_writes("copy_external_image_to_texture");
+            self.presentation_damage.invalidate();
             let trace_after_flush = trace_start.as_ref().map(|_| Instant::now());
             self.runtime.queue.write_texture(
                 wgpu::TexelCopyTextureInfo {
@@ -6624,9 +7371,7 @@ mod upstream_wgpu_native {
                     depth_or_array_layers: 1,
                 },
             );
-            if let Cow::Owned(data) = upload {
-                self.recycle_external_image_upload_data(data);
-            }
+            self.recycle_external_image_upload_data(upload);
             if let (Some(start), Some(after_import), Some(after_encode), Some(after_flush)) = (
                 trace_start,
                 trace_after_import,
@@ -6643,7 +7388,7 @@ mod upstream_wgpu_native {
                     copy_width,
                     copy_height,
                     texture_format,
-                    upload_borrowed,
+                    false,
                     upload_bytes,
                     upload_stride,
                     mip_level,
@@ -6743,6 +7488,7 @@ mod upstream_wgpu_native {
             let upload_borrowed = matches!(upload, Cow::Borrowed(_));
             let upload_bytes = upload.len();
             self.submit_pending_buffer_writes("copy_external_image_rgba_to_texture");
+            self.presentation_damage.invalidate();
             let trace_after_flush = trace_start.as_ref().map(|_| Instant::now());
             self.runtime.queue.write_texture(
                 wgpu::TexelCopyTextureInfo {
@@ -6824,12 +7570,19 @@ mod upstream_wgpu_native {
                 _ => requested_format,
             };
 
+            if let Some(id) = self.try_direct_canvas_texture(canvas_id, width, height, format, usage)? {
+                return Ok(id);
+            }
+
             if let Some(target) = self.canvas_targets.get(&canvas_id) {
                 if target.width == width
                     && target.height == height
                     && target.format == format
                     && target.usage == usage
                 {
+                    if self.current_canvas_id != Some(canvas_id) {
+                        self.presentation_damage.invalidate();
+                    }
                     self.current_canvas_id = Some(canvas_id);
                     self.current_canvas_texture_id = Some(target.texture_id);
                     self.current_canvas_texture = Some(target.texture.clone());
@@ -6878,7 +7631,11 @@ mod upstream_wgpu_native {
             self.resources.textures.insert(
                 id,
                 TextureResource {
+                    xr_release: XrReleaseState::FirstUse,
                     texture: texture.clone(),
+                    default_binding_view: Default::default(),
+                    #[cfg(target_os = "android")]
+                    eye_target: None,
                     width,
                     height,
                     depth_or_array_layers: 1,
@@ -6907,6 +7664,7 @@ mod upstream_wgpu_native {
             }
             self.offscreen_texture = Some(texture.clone());
             self.offscreen_view = Some(view.clone());
+            self.presentation_damage.invalidate();
             self.offscreen_width = width;
             self.offscreen_height = height;
             self.offscreen_format = format;
@@ -6927,7 +7685,78 @@ mod upstream_wgpu_native {
             Ok(id)
         }
 
+        fn try_direct_canvas_texture(
+            &mut self, canvas_id: u64, width: u32, height: u32,
+            format: wgpu::TextureFormat, usage: u32,
+        ) -> Result<Option<u64>, String> {
+            static DIRECT: OnceLock<bool> = OnceLock::new();
+            if super::window_presentation_suspended() {
+                return Ok(None);
+            }
+            if !*DIRECT.get_or_init(|| {
+                std::env::var("BABYLON_NATIVE_WEBGPU_PROFILE_DIRECT_PRESENT").as_deref() == Ok("1")
+            }) || self.direct_canvas_id.is_some_and(|owner| owner != canvas_id) {
+                return Ok(None);
+            }
+            let Some(config) = self.runtime.surface_config.as_ref() else { return Ok(None); };
+            let requested_usage = map_texture_usage(usage) | wgpu::TextureUsages::COPY_SRC;
+            if width != config.width || height != config.height || format != config.format
+                || !config.usage.contains(requested_usage) {
+                return Ok(None);
+            }
+            if let Some(id) = self.direct_texture_id {
+                let texture = self.resources.textures.get(&id)
+                    .ok_or_else(|| "Current direct canvas texture was released before presentation".to_string())?;
+                self.current_canvas_id = Some(canvas_id);
+                self.current_canvas_texture_id = Some(id);
+                self.current_canvas_texture = Some(texture.texture.clone());
+                return Ok(Some(id));
+            }
+            let Some(surface) = self.runtime.surface.as_ref() else { return Ok(None); };
+            let frame = match surface.get_current_texture() {
+                wgpu::CurrentSurfaceTexture::Success(frame) | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => frame,
+                _ => return Ok(None),
+            };
+            self.direct_canvas_id = Some(canvas_id);
+            let id = self.resources.next();
+            self.resources.textures.insert(id, TextureResource {
+                xr_release: XrReleaseState::FirstUse,
+                default_binding_view: Default::default(),
+                #[cfg(target_os = "android")]
+                eye_target: None,
+                texture: frame.texture.clone(), width, height, depth_or_array_layers: 1,
+                mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2, format,
+            });
+            add_estimated_gpu_memory_bytes(estimated_texture_allocation_bytes(width, height, 1, format, 1, 1));
+            self.current_canvas_id = Some(canvas_id);
+            self.current_canvas_texture_id = Some(id);
+            self.current_canvas_texture = Some(frame.texture.clone());
+            self.current_surface_frame = Some(frame);
+            self.direct_texture_id = Some(id);
+            self.presentation_damage.invalidate();
+            Ok(Some(id))
+        }
+
+        fn expire_direct_texture(&mut self) {
+            let Some(id) = self.direct_texture_id.take() else { return; };
+            if let Some(texture) = self.resources.textures.remove(&id) {
+                subtract_estimated_gpu_memory_bytes(estimated_texture_resource_bytes(&texture));
+                // Expire canvas textures after presentation; retained JS views must not
+                // retain an arbitrarily long queue of native drawable allocations.
+                texture.texture.destroy();
+            }
+            if self.current_canvas_texture_id == Some(id) {
+                self.current_canvas_texture_id = None;
+                self.current_canvas_texture = None;
+            }
+        }
+
         pub fn canvas_destroy(&mut self, canvas_id: u64) {
+            if self.direct_canvas_id == Some(canvas_id) {
+                self.expire_direct_texture();
+                self.current_surface_frame = None;
+                self.direct_canvas_id = None;
+            }
             let Some(target) = self.canvas_targets.remove(&canvas_id) else {
                 return;
             };
@@ -6988,6 +7817,7 @@ mod upstream_wgpu_native {
                 texture_resource.width,
                 texture_resource.height,
                 texture_resource.format,
+                true,
             )?;
             let offset = ((y as usize * texture_resource.width as usize) + x as usize) * 4;
             Ok([
@@ -7066,6 +7896,7 @@ mod upstream_wgpu_native {
                     .remove(&resource_id)
                     .is_some(),
                 14 => self.resources.compute_passes.remove(&resource_id).is_some(),
+                15 => self.resources.query_sets.remove(&resource_id).is_some(),
                 _ => false,
             }
         }
@@ -7084,26 +7915,27 @@ mod upstream_wgpu_native {
                         resource.texture.destroy();
                     }
                 }
+                15 => {
+                    if let Some(queries) = self.resources.query_sets.get(&id) {
+                        queries.destroy();
+                    }
+                }
                 _ => {}
             }
         }
     }
 
-    #[derive(Default)]
     struct NativeReadbackCache {
-        device_key: usize,
-        size: u64,
-        buffer: Option<wgpu::Buffer>,
+        // Keep the HAL object alive until this cache entry is replaced.
+        _owner: wgpu::Device,
+        device_identity: usize,
+        buffer: wgpu::Buffer,
     }
 
-    static NATIVE_READBACK_CACHE: OnceLock<Mutex<NativeReadbackCache>> = OnceLock::new();
+    static NATIVE_READBACK_CACHE: Mutex<Option<NativeReadbackCache>> = Mutex::new(None);
     static NATIVE_READBACK_IMPORT_GUARD: OnceLock<Mutex<()>> = OnceLock::new();
     static DEBUG_TEXTURE_IMPORT_STATE: OnceLock<Mutex<DebugTextureImportState>> = OnceLock::new();
     static DEBUG_TEXTURE_UPLOAD_PENDING: AtomicBool = AtomicBool::new(false);
-
-    fn native_readback_cache() -> &'static Mutex<NativeReadbackCache> {
-        NATIVE_READBACK_CACHE.get_or_init(|| Mutex::new(NativeReadbackCache::default()))
-    }
 
     fn native_readback_import_guard() -> &'static Mutex<()> {
         NATIVE_READBACK_IMPORT_GUARD.get_or_init(|| Mutex::new(()))
@@ -7283,30 +8115,35 @@ mod upstream_wgpu_native {
         source_device: &wgpu::Device,
         required_size: u64,
     ) -> Result<wgpu::Buffer, String> {
-        let mut cache = native_readback_cache()
+        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos", target_os = "visionos"))]
+        type Api = wgpu::hal::api::Metal;
+        #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "tvos", target_os = "visionos")))]
+        type Api = wgpu::hal::api::Vulkan;
+        // Clones have different wrapper addresses, and wgpu-core device IDs are
+        // scoped to their instance. Only observe the HAL object's identity.
+        let device_identity = unsafe { source_device.as_hal::<Api>() }
+            .map(|device| std::ptr::from_ref(&*device) as usize);
+        let mut cache = NATIVE_READBACK_CACHE
             .lock()
             .map_err(|_| "native readback cache lock poisoned".to_string())?;
 
-        let device_key = (source_device as *const wgpu::Device) as usize;
-        let needs_rebuild =
-            cache.device_key != device_key || cache.size < required_size || cache.buffer.is_none();
-
-        if needs_rebuild {
-            cache.buffer = Some(source_device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("babylon-native-webgpu.native-debug-readback"),
-                size: required_size,
-                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-                mapped_at_creation: false,
-            }));
-            cache.device_key = device_key;
-            cache.size = required_size;
+        if let Some(entry) = cache.as_ref() {
+            if Some(entry.device_identity) == device_identity && entry.buffer.size() >= required_size {
+                return Ok(entry.buffer.clone());
+            }
         }
-
-        cache
-            .buffer
-            .as_ref()
-            .cloned()
-            .ok_or_else(|| "native readback buffer allocation failed".to_string())
+        let buffer = source_device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("babylon-native-webgpu.native-debug-readback"),
+            size: required_size,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        *cache = device_identity.map(|device_identity| NativeReadbackCache {
+            _owner: source_device.clone(),
+            device_identity,
+            buffer: buffer.clone(),
+        });
+        Ok(buffer)
     }
 
     fn align_to(value: u32, alignment: u32) -> u32 {
@@ -7344,7 +8181,14 @@ mod upstream_wgpu_native {
             return Err("invalid screenshot buffer size".to_string());
         }
 
-        let staging_buffer = acquire_native_readback_buffer(device, buffer_size)?;
+        // Unlike a serialized Canvas import, these pixels can be consumed after a
+        // later encoder has already submitted another screenshot.
+        let staging_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("babylon-native-webgpu.screenshot-readback"),
+            size: buffer_size,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
         encoder.copy_texture_to_buffer(
             wgpu::TexelCopyTextureInfo {
                 texture: source_texture,
@@ -7378,6 +8222,7 @@ mod upstream_wgpu_native {
         width: u32,
         height: u32,
         format: wgpu::TextureFormat,
+        float_rgb_is_linear: bool,
     ) -> Result<ScreenshotData, String> {
         let slice = staging_buffer.slice(..);
         let (tx, rx) = std::sync::mpsc::channel::<Result<(), String>>();
@@ -7443,15 +8288,16 @@ mod upstream_wgpu_native {
                     for x in 0..(width as usize) {
                         let src = src_start + x * source_bytes_per_pixel;
                         let dst = dst_start + x * 4;
-                        rgba[dst] = linear_to_srgb_u8(half_to_f32(u16::from_le_bytes([
+                        let encode_rgb = if float_rgb_is_linear { linear_to_srgb_u8 } else { linear_to_unorm_u8 };
+                        rgba[dst] = encode_rgb(half_to_f32(u16::from_le_bytes([
                             mapped[src],
                             mapped[src + 1],
                         ])));
-                        rgba[dst + 1] = linear_to_srgb_u8(half_to_f32(u16::from_le_bytes([
+                        rgba[dst + 1] = encode_rgb(half_to_f32(u16::from_le_bytes([
                             mapped[src + 2],
                             mapped[src + 3],
                         ])));
-                        rgba[dst + 2] = linear_to_srgb_u8(half_to_f32(u16::from_le_bytes([
+                        rgba[dst + 2] = encode_rgb(half_to_f32(u16::from_le_bytes([
                             mapped[src + 4],
                             mapped[src + 5],
                         ])));
@@ -7516,12 +8362,12 @@ mod upstream_wgpu_native {
         }
     }
 
-    fn import_native_texture_rgba_inner(
+    fn with_mapped_native_rgba<T>(
         native_texture: *const c_void,
         requested_width: u32,
         requested_height: u32,
-        rgba: &mut Vec<u8>,
-    ) -> Result<(u32, u32), String> {
+        consume: impl FnOnce(&[u8], u32, u32, u32) -> Result<T, String>,
+    ) -> Result<T, String> {
         let _import_guard = native_readback_import_guard()
             .lock()
             .map_err(|_| "native texture import lock poisoned".to_string())?;
@@ -7591,7 +8437,7 @@ mod upstream_wgpu_native {
         );
         source_queue.submit(Some(encoder.finish()));
 
-        let slice = staging_buffer.slice(..);
+        let slice = staging_buffer.slice(..buffer_size);
         let (tx, rx) = std::sync::mpsc::channel::<Result<(), String>>();
         slice.map_async(wgpu::MapMode::Read, move |result| {
             let _ = tx.send(result.map_err(|error| error.to_string()));
@@ -7609,21 +8455,10 @@ mod upstream_wgpu_native {
         let mapped = slice
             .get_mapped_range()
             .map_err(|error| format!("mapped range unavailable: {error}"))?;
-        let expected_len = (width as usize)
-            .saturating_mul(height as usize)
-            .saturating_mul(4);
-        rgba.resize(expected_len, 0);
-        for row in 0..(height as usize) {
-            let src_start = row.saturating_mul(padded_bytes_per_row as usize);
-            let src_end = src_start.saturating_add(unpadded_bytes_per_row as usize);
-            let dst_start = row.saturating_mul(unpadded_bytes_per_row as usize);
-            let dst_end = dst_start.saturating_add(unpadded_bytes_per_row as usize);
-            rgba[dst_start..dst_end].copy_from_slice(&mapped[src_start..src_end]);
-        }
+        let result = consume(&mapped, width, height, padded_bytes_per_row);
         drop(mapped);
         staging_buffer.unmap();
-
-        Ok((width, height))
+        result
     }
 
     pub fn import_native_texture_rgba_into(
@@ -7632,7 +8467,20 @@ mod upstream_wgpu_native {
         requested_height: u32,
         rgba: &mut Vec<u8>,
     ) -> Result<(u32, u32), String> {
-        import_native_texture_rgba_inner(native_texture, requested_width, requested_height, rgba)
+        with_mapped_native_rgba(native_texture, requested_width, requested_height, |mapped, width, height, stride| {
+            let row_bytes = width as usize * 4;
+            let size = row_bytes * height as usize;
+            rgba.clear();
+            rgba.reserve(size);
+            if row_bytes == stride as usize {
+                rgba.extend_from_slice(&mapped[..size]);
+            } else {
+                for row in mapped.chunks_exact(stride as usize).take(height as usize) {
+                    rgba.extend_from_slice(&row[..row_bytes]);
+                }
+            }
+            Ok((width, height))
+        })
     }
 
     #[repr(C)]
@@ -8363,6 +9211,7 @@ mod upstream_wgpu_native {
                 submit_and_present(
                     &runtime.device,
                     &runtime.queue,
+                    &mut runtime.presentation_retirement,
                     command_buffer,
                     surface_frame,
                 );
@@ -8383,6 +9232,7 @@ mod upstream_wgpu_native {
                     self.width,
                     self.height,
                     runtime.render_target_format,
+                    true,
                 )
                 .map(Some)
             } else {
@@ -8396,7 +9246,7 @@ mod upstream_wgpu_native {
             let requested_width = config.width.max(1);
             let requested_height = config.height.max(1);
 
-            let instance = create_local_instance();
+            let instance = create_local_instance()?;
             let surface = create_local_surface(&instance, config.surface_layer)?;
 
             let bootstrap =
@@ -8430,6 +9280,7 @@ mod upstream_wgpu_native {
                 feature_info: make_feature_info(
                     &bootstrap.adapter_info,
                     bootstrap.enabled_features,
+                    bootstrap.queue.get_timestamp_period(),
                 ),
             };
 
@@ -8448,6 +9299,7 @@ mod upstream_wgpu_native {
                 hdr10: config.hdr10,
                 used_fallback_adapter: bootstrap.used_fallback_adapter,
                 surface_acquire_failures: 0,
+                presentation_retirement: super::presentation_retirement::PresentationRetirement::new(),
             })
         }
 
@@ -8766,12 +9618,28 @@ mod upstream_wgpu_native {
     pub fn submit_and_present(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
+        retirement: &mut super::presentation_retirement::PresentationRetirement<wgpu::SubmissionIndex>,
         command_buffer: wgpu::CommandBuffer,
         surface_frame: Option<wgpu::SurfaceTexture>,
     ) {
-        queue.submit(Some(command_buffer));
+        let submission = queue.submit(Some(command_buffer));
+        let oldest = retirement.submit(submission);
         if let Some(frame) = surface_frame {
+            trace_surface_texture(&frame.texture);
             queue.present(frame);
+        }
+
+        static BOUNDED_POLL: OnceLock<bool> = OnceLock::new();
+        if *BOUNDED_POLL.get_or_init(|| {
+            std::env::var("BABYLON_NATIVE_WEBGPU_PROFILE_BOUNDED_POLL").as_deref() == Ok("1")
+        }) {
+            // Preserve overlap and bound outstanding presentations without draining the whole queue.
+            let poll = oldest.map_or(wgpu::PollType::Poll, |submission_index| wgpu::PollType::Wait {
+                submission_index: Some(submission_index),
+                timeout: None,
+            });
+            let _ = device.poll(poll);
+            return;
         }
 
         // Keep backend housekeeping progressing so completed submissions are
@@ -8820,6 +9688,50 @@ mod upstream_wgpu_native {
         }
     }
 
+    fn trace_surface_texture(texture: &wgpu::Texture) {
+        #[cfg(any(
+            target_os = "macos",
+            target_os = "ios",
+            target_os = "tvos",
+            target_os = "visionos"
+        ))]
+        {
+            use objc2_metal::{MTLResource, MTLTexture};
+            static ENABLED: OnceLock<bool> = OnceLock::new();
+            if !*ENABLED.get_or_init(|| {
+                std::env::var_os("BABYLON_NATIVE_WEBGPU_PROFILE_SURFACE").is_some()
+            }) {
+                return;
+            }
+            // Only inspect a live acquired texture; never retain the drawable.
+            if let Some(hal) = unsafe { texture.as_hal::<wgpu::hal::api::Metal>() } {
+                let raw = hal.raw_handle();
+                let entry = (
+                    texture.width(),
+                    texture.height(),
+                    raw.width(),
+                    raw.height(),
+                    raw.allocatedSize(),
+                );
+                type SurfaceSize = (u32, u32, usize, usize, usize);
+                static SEEN: OnceLock<Mutex<std::collections::HashSet<SurfaceSize>>> = OnceLock::new();
+                if SEEN.get_or_init(Default::default).lock().unwrap().insert(entry) {
+                    eprintln!(
+                        "NativeWebGPU surface inventory: configured={}x{} actual={}x{} allocatedBytes={}",
+                        entry.0, entry.1, entry.2, entry.3, entry.4
+                    );
+                }
+            }
+        }
+        #[cfg(not(any(
+            target_os = "macos",
+            target_os = "ios",
+            target_os = "tvos",
+            target_os = "visionos"
+        )))]
+        let _ = texture;
+    }
+
     fn map_local_backend_to_babylon_backend(backend: wgpu::Backend) -> u32 {
         match backend {
             wgpu::Backend::Vulkan => 1,
@@ -8858,17 +9770,64 @@ mod upstream_wgpu_native {
         }
     }
 
-    pub fn create_local_instance() -> wgpu::Instance {
+    pub(super) fn device_memory_hints(info: &wgpu::AdapterInfo) -> wgpu::MemoryHints {
+        // Both Vulkan devices suballocate from the same limited system memory on Adreno 5xx.
+        if cfg!(target_os = "android")
+            && info.backend == wgpu::Backend::Vulkan
+            && info.vendor == 0x5143
+            && (0x0500_0000..0x0600_0000).contains(&info.device)
+        {
+            wgpu::MemoryHints::MemoryUsage
+        } else {
+            wgpu::MemoryHints::default()
+        }
+    }
+
+    pub fn create_local_instance() -> Result<wgpu::Instance, String> {
         #[allow(unused_mut)]
         let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
         descriptor.backends = preferred_wgpu_backends();
+        descriptor.flags |= wgpu::InstanceFlags::AUTOMATIC_TIMESTAMP_NORMALIZATION;
 
         #[cfg(target_os = "android")]
         {
             descriptor.flags |= wgpu::InstanceFlags::ALLOW_UNDERLYING_NONCOMPLIANT_ADAPTER;
+            let mut hal_desc = wgpu::hal::InstanceDescriptor {
+                name: "BabylonNative",
+                flags: descriptor.flags,
+                memory_budget_thresholds: descriptor.memory_budget_thresholds,
+                backend_options: descriptor.backend_options,
+                telemetry: None,
+                display: None,
+            };
+            // OpenXR 1.0 runtimes may use the KHR aliases even on Vulkan 1.1.
+            let requested_debug_utils = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let instance = super::vulkan_instance_retry::create(|with_debug_utils| {
+                if !with_debug_utils {
+                    hal_desc.flags.remove(wgpu::InstanceFlags::DEBUG);
+                    super::log_backend_error("Retrying Vulkan instance creation without VK_EXT_debug_utils");
+                }
+                let requested_debug_utils = requested_debug_utils.clone();
+                unsafe { wgpu::hal::vulkan::Instance::init_with_callback(&hal_desc, Some(Box::new(move |args| {
+                    requested_debug_utils.store(args.extensions.contains(&ash::ext::debug_utils::NAME), std::sync::atomic::Ordering::Relaxed);
+                    let name = ash::khr::external_memory_capabilities::NAME;
+                    if !args.extensions.contains(&name)
+                        && args.entry.enumerate_instance_extension_properties(None).is_ok_and(|extensions|
+                            extensions.iter().any(|ext| ext.extension_name_as_c_str().ok() == Some(name)))
+                    {
+                        args.extensions.push(name);
+                    }
+                }))) }
+            }, |error| {
+                requested_debug_utils.load(std::sync::atomic::Ordering::Relaxed)
+                    && std::error::Error::source(error).and_then(|cause| cause.downcast_ref::<ash::vk::Result>())
+                        == Some(&ash::vk::Result::ERROR_EXTENSION_NOT_PRESENT)
+            }).map_err(|error| format!("failed to create Android Vulkan instance: {error}"))?;
+            return Ok(unsafe { wgpu::Instance::from_hal::<wgpu::hal::api::Vulkan>(instance) });
         }
 
-        wgpu::Instance::new(descriptor)
+        #[cfg(not(target_os = "android"))]
+        Ok(wgpu::Instance::new(descriptor))
     }
 
     pub fn bootstrap_local_wgpu_runtime(
@@ -8963,6 +9922,11 @@ mod upstream_wgpu_native {
         let make_device = |selected_adapter: &wgpu::Adapter, limits: &wgpu::Limits| {
             let supported_features = selected_adapter.features();
             let mut required_features = wgpu::Features::empty();
+            required_features |= supported_features & wgpu::Features::TIMESTAMP_QUERY;
+            #[cfg(target_os = "android")]
+            if limits.max_multiview_view_count >= 2 {
+                required_features |= supported_features & wgpu::Features::MULTIVIEW;
+            }
             if supported_features.contains(wgpu::Features::EXTERNAL_TEXTURE) {
                 required_features |= wgpu::Features::EXTERNAL_TEXTURE;
             }
@@ -9005,7 +9969,7 @@ mod upstream_wgpu_native {
                 required_features,
                 required_limits: limits.clone(),
                 experimental_features: wgpu::ExperimentalFeatures::disabled(),
-                memory_hints: wgpu::MemoryHints::default(),
+                memory_hints: device_memory_hints(&selected_adapter.get_info()),
                 trace: wgpu::Trace::default(),
             };
 
@@ -9015,14 +9979,11 @@ mod upstream_wgpu_native {
                     .ok_or_else(|| "selected Android adapter is not Vulkan-backed".to_string())?;
                 let xr_external_memory_extension =
                     ash::android::external_memory_android_hardware_buffer::NAME;
-                if !hal_adapter
-                    .physical_device_capabilities()
-                    .supports_extension(xr_external_memory_extension)
-                {
-                    return Err(
-                        "Vulkan adapter does not support VK_ANDROID_external_memory_android_hardware_buffer required by Android OpenXR"
-                            .to_string(),
-                    );
+                let xr_extensions = [xr_external_memory_extension, ash::ext::queue_family_foreign::NAME];
+                for name in xr_extensions {
+                    if !hal_adapter.physical_device_capabilities().supports_extension(name) {
+                        return Err(format!("Android OpenXR external memory requires {}", name.to_string_lossy()));
+                    }
                 }
 
                 let hal_device = unsafe {
@@ -9030,9 +9991,11 @@ mod upstream_wgpu_native {
                         required_features,
                         limits,
                         &descriptor.memory_hints,
-                        Some(Box::new(move |args| {
-                            if !args.extensions.contains(&xr_external_memory_extension) {
-                                args.extensions.push(xr_external_memory_extension);
+                        Some(Box::new(|args| {
+                            for name in xr_extensions.into_iter().chain([ash::khr::external_memory::NAME, ash::khr::get_memory_requirements2::NAME]) {
+                                if hal_adapter.physical_device_capabilities().supports_extension(name) && !args.extensions.contains(&name) {
+                                    args.extensions.push(name);
+                                }
                             }
                         })),
                     )
@@ -9115,10 +10078,285 @@ mod upstream_wgpu_native {
     mod enabled;
 
     pub use enabled::{dispatch_compute_global, version};
+    pub(crate) use enabled::ComputeCache;
 
     #[cfg(test)]
     mod tests {
         use super::map_texture_format;
+
+        #[test]
+        #[ignore = "requires a native GPU adapter; run explicitly on device"]
+        fn empty_pipeline_slots_preserve_subsequent_bindings_without_exposing_a_binding() {
+            use serde_json::json;
+            let mut context = super::InteropBackendContext::create(super::LocalBootstrapConfig {
+                width: 1, height: 1, surface_layer: std::ptr::null_mut(), prefer_low_power: false, hdr10: false,
+            }).unwrap();
+            let empty = context.create_bind_group_layout(r#"{"entries":[]}"#).unwrap();
+            let storage = context.create_bind_group_layout(
+                r#"{"entries":[{"binding":0,"visibility":4,"buffer":{"type":"storage"}}]}"#,
+            ).unwrap();
+            for first in [serde_json::Value::Null, json!({"$nativeId":empty})] {
+                let layout = context.create_pipeline_layout(
+                    &json!({"bindGroupLayouts":[first,{"$nativeId":storage}]}).to_string(),
+                ).unwrap();
+                for group in [1, 0] {
+                    let shader = context.create_shader_module(&format!(
+                        "@group({group}) @binding(0) var<storage, read_write> count: u32; @compute @workgroup_size(1) fn main() {{ count = 1u; }}"
+                    )).unwrap();
+                    let pipeline = context.create_compute_pipeline(&json!({
+                        "layout":{"$nativeId":layout},"compute":{"module":{"$nativeId":shader}}
+                    }).to_string());
+                    assert_eq!(pipeline.is_ok(), group == 1, "{pipeline:?}");
+                }
+            }
+        }
+
+        #[test]
+        #[ignore = "requires a native GPU adapter; run explicitly on device"]
+        fn openxr_release_preserves_distinct_eye_contents_and_accepts_shared_eye_images() {
+            let mut context = super::InteropBackendContext::create(super::LocalBootstrapConfig {
+                width: 16, height: 16, surface_layer: std::ptr::null_mut(), prefer_low_power: false, hdr10: false,
+            }).unwrap();
+            let descriptor = r#"{"size":{"width":1,"height":1},"format":"rgba8unorm","usage":19}"#;
+            let left = context.create_texture(descriptor).unwrap();
+            let right = context.create_texture(descriptor).unwrap();
+            context.prepare_openxr_textures_for_release(&[]).unwrap();
+            assert!(context.prepare_openxr_textures_for_release(&[left, u64::MAX]).is_err());
+            assert!(context.resources.textures[&left].xr_release == super::XrReleaseState::FirstUse);
+            context.prepare_openxr_textures_for_release(&[left]).unwrap();
+            assert_eq!(context.read_texture_pixel_rgba(left, 0, 0).unwrap(), [0; 4]);
+            for (id, pixel) in [(left, [10, 20, 30, 255]), (right, [30, 20, 10, 255])] {
+                let tex = &context.resources.textures[&id].texture;
+                context.runtime.queue.write_texture(tex.as_image_copy(), &pixel,
+                    wgpu::TexelCopyBufferLayout::default(), tex.size());
+            }
+            assert!(context.prepare_openxr_textures_for_release(&[left, u64::MAX]).is_err());
+            for ids in [&[left][..], &[left, right], &[left, left]] {
+                context.prepare_openxr_textures_for_release(ids).unwrap();
+                assert_eq!(context.read_texture_pixel_rgba(left, 0, 0).unwrap(), [10, 20, 30, 255]);
+                assert_eq!(context.read_texture_pixel_rgba(right, 0, 0).unwrap(), [30, 20, 10, 255]);
+            }
+            let view = context.create_texture_view(left, "{}").unwrap();
+            let encoder = context.create_command_encoder().unwrap();
+            let descriptor = serde_json::json!({"colorAttachments":[{
+                "view":{"$nativeId":view},"loadOp":"load","storeOp":"discard"
+            }]});
+            let pass = context.command_encoder_begin_render_pass(encoder, &descriptor.to_string()).unwrap();
+            context.render_pass_end(pass).unwrap();
+            let buffer = context.command_encoder_finish(encoder).unwrap();
+            context.prepare_openxr_textures_for_release(&[left, right]).unwrap();
+            context.queue_submit(&[buffer]).unwrap();
+            context.prepare_openxr_textures_for_release(&[left, right]).unwrap();
+            assert!(context.resources.textures[&left].xr_release == super::XrReleaseState::MayDiscard);
+            assert!(context.resources.textures[&right].xr_release == super::XrReleaseState::Initialized);
+            assert_eq!(context.read_texture_pixel_rgba(left, 0, 0).unwrap(), [0; 4]);
+            assert_eq!(context.read_texture_pixel_rgba(right, 0, 0).unwrap(), [30, 20, 10, 255]);
+        }
+
+        #[test]
+        #[ignore = "requires a native GPU adapter; run explicitly on device"]
+        fn canvas_readback_reuses_buffers_by_device_identity_and_capacity() {
+            let create = || super::InteropBackendContext::create(super::LocalBootstrapConfig {
+                width: 1, height: 1, surface_layer: std::ptr::null_mut(), prefer_low_power: false, hdr10: false,
+            }).unwrap();
+            let first = create();
+            let second = create();
+            let _guard = super::native_readback_import_guard().lock().unwrap();
+            let mut canvas_device = first.runtime.device.clone();
+            let small = super::acquire_native_readback_buffer(&canvas_device, 256).unwrap();
+            let sibling = first.runtime.device.clone();
+            assert_eq!(small, super::acquire_native_readback_buffer(&sibling, 128).unwrap());
+            let large = super::acquire_native_readback_buffer(&canvas_device, small.size() + 256).unwrap();
+            assert_ne!(small, large);
+            canvas_device = second.runtime.device.clone();
+            let replacement = super::acquire_native_readback_buffer(&canvas_device, 256).unwrap();
+            assert_eq!(replacement.size(), 256);
+            let mut encoder = canvas_device.create_command_encoder(&Default::default());
+            encoder.clear_buffer(&replacement, 0, None);
+            second.runtime.queue.submit([encoder.finish()]);
+            canvas_device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+        }
+
+        #[test]
+        #[ignore = "requires a native GPU adapter; run explicitly on device"]
+        fn outstanding_readbacks_preserve_their_own_pixels() {
+            let mut context = super::InteropBackendContext::create(super::LocalBootstrapConfig {
+                width: 1, height: 1, surface_layer: std::ptr::null_mut(), prefer_low_power: false, hdr10: false,
+            }).unwrap();
+            let id = context.create_texture(r#"{"size":[1,1],"format":"rgba8unorm","usage":3}"#).unwrap();
+            let texture = &context.resources.textures[&id].texture;
+            let device = &context.runtime.device;
+            let queue = &context.runtime.queue;
+            let pending = [[255,0,0,255], [0,0,255,255]].map(|pixel| {
+                queue.write_texture(texture.as_image_copy(), &pixel, Default::default(), texture.size());
+                let mut encoder = device.create_command_encoder(&Default::default());
+                let capture = super::copy_texture_to_readback_buffer(device, &mut encoder, texture, 1, 1, texture.format()).unwrap();
+                queue.submit([encoder.finish()]);
+                (pixel, capture)
+            });
+            for (pixel, (buffer, padded, unpadded)) in pending {
+                let image = super::map_readback_buffer_to_rgba(device, &buffer, padded, unpadded, 1, 1, texture.format(), false).unwrap();
+                assert_eq!(image.rgba.as_slice(), &pixel);
+            }
+        }
+
+        #[test]
+        #[ignore = "requires a native GPU adapter; run explicitly on device"]
+        fn timestamp_query_resolves_in_nanoseconds() {
+            let instance = super::create_local_instance().unwrap();
+            let runtime = super::bootstrap_local_wgpu_runtime(&instance, None, false).unwrap();
+            assert!(runtime.enabled_features.contains(wgpu::Features::TIMESTAMP_QUERY));
+            assert_eq!(runtime.queue.get_timestamp_period(), 1.0);
+            for (features, period, expected) in [
+                (wgpu::Features::TIMESTAMP_QUERY, 1.0, 1),
+                (wgpu::Features::TIMESTAMP_QUERY, 52.0, 0),
+                (wgpu::Features::empty(), 1.0, 0),
+            ] {
+                assert_eq!(super::make_feature_info(&runtime.adapter_info, features, period).timestamp_query, expected);
+            }
+        }
+
+        #[test]
+        #[ignore = "requires a native GPU adapter; run explicitly on device"]
+        fn shared_canvas_snapshot_flips_and_converts_alpha() {
+            let mut context = super::InteropBackendContext::create(super::LocalBootstrapConfig {
+                width: 16,
+                height: 16,
+                surface_layer: std::ptr::null_mut(),
+                prefer_low_power: false,
+                hdr10: false,
+            }).unwrap();
+            let descriptor = r#"{"size":{"width":1,"height":2},"format":"rgba8unorm","usage":23}"#;
+            let src = context.create_texture(descriptor).unwrap();
+            let dst = context.create_texture(descriptor).unwrap();
+            let source = context.resources.textures[&src].texture.clone();
+            let device = context.runtime.device.clone();
+            let queue = context.runtime.queue.clone();
+            queue.write_texture(source.as_image_copy(), &[20, 10, 0, 85, 0, 1, 2, 255],
+                wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(4), rows_per_image: Some(2) },
+                source.size());
+            let handle = super::CanvasNativeTextureHandle {
+                texture: std::ptr::from_ref(&source).cast(),
+                device: std::ptr::from_ref(&device).cast(),
+                queue: std::ptr::from_ref(&queue).cast(),
+                width: 1, height: 2, generation: 0,
+            };
+            for (premultiplied, expected) in [(false, [60, 30, 0, 85]), (true, [20, 10, 0, 85])] {
+                let dest = serde_json::json!({"texture":{"$nativeId":dst},"premultipliedAlpha":premultiplied});
+                context.queue_copy_external_image_to_texture(std::ptr::from_ref(&handle).cast(), 1, 2, [0, 0], true,
+                    &dest.to_string(), r#"{"width":1,"height":2}"#).unwrap();
+                assert_eq!(context.read_texture_pixel_rgba(dst, 0, 0).unwrap(), [0, 1, 2, 255]);
+                assert_eq!(context.read_texture_pixel_rgba(dst, 0, 1).unwrap(), expected);
+            }
+            let larger = context.create_texture(r#"{"size":[3,4],"format":"rgba8unorm","usage":23}"#).unwrap();
+            let wide = context.create_texture(r#"{"size":[96,4],"format":"rgba8unorm","usage":23}"#).unwrap();
+            let source = context.resources.textures[&wide].texture.clone();
+            queue.write_texture(
+                wgpu::TexelCopyTextureInfo { origin: wgpu::Origin3d { x: 11, y: 1, z: 0 }, ..source.as_image_copy() },
+                &[0, 255, 0, 255], Default::default(), wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 });
+            let handle = super::CanvasNativeTextureHandle { texture: std::ptr::from_ref(&source).cast(), width: 96, height: 4, ..handle };
+            for i in 0..12 {
+                let flip = i & 1 != 0;
+                let dest = serde_json::json!({"texture":{"$nativeId":larger},"origin":[1,1],"premultipliedAlpha":i & 2 == 0});
+                context.queue_copy_external_image_to_texture(std::ptr::from_ref(&handle).cast(), 96, 4, [11, 1], flip,
+                    &dest.to_string(), "[1,2]").unwrap();
+                assert_eq!(context.read_texture_pixel_rgba(larger, 1, if flip { 2 } else { 1 }).unwrap(), [0, 255, 0, 255], "iteration {i}");
+            }
+        }
+
+        #[test]
+        fn external_image_upload_repeats_only_equal_cropped_rows() {
+            let input = [
+                9, 9, 9, 9, 60, 30, 0, 85,
+                7, 7, 7, 7, 60, 30, 0, 85,
+                8, 8, 8, 8, 0, 15, 30, 255,
+            ];
+            for (premultiplied, expected) in [
+                (true, [0, 15, 30, 255, 60, 30, 0, 85, 60, 30, 0, 85]),
+                (false, [0, 15, 30, 255, 180, 90, 0, 85, 180, 90, 0, 85]),
+            ] {
+                let (data, stride) = super::encode_external_image_upload(
+                    &input, 2, 1, 0, 1, 3, true, true, premultiplied,
+                    wgpu::TextureFormat::Rgba8Unorm, Some(vec![42; 48]),
+                ).unwrap();
+                assert_eq!(stride, 4);
+                assert_eq!(data.as_ref(), expected);
+            }
+        }
+
+        #[test]
+        #[ignore = "requires a native GPU adapter; run explicitly on device"]
+        fn invalid_direct_pipeline_invalidates_only_its_encoder() {
+            let mut context = super::InteropBackendContext::create(super::LocalBootstrapConfig {
+                width: 16,
+                height: 16,
+                surface_layer: std::ptr::null_mut(),
+                prefer_low_power: false,
+                hdr10: false,
+            }).unwrap();
+            let encoder = context.create_command_encoder().unwrap();
+            let pass = context.command_encoder_begin_render_pass(encoder, r#"{"colorAttachments":[]}"#).unwrap();
+            // Rejecting an optional packed batch must still permit ordinary replay.
+            assert!(crate::decode_render_pass_command_stream(&mut context, pass, &[1, 0, 0]).is_err());
+            assert!(context.resources.command_encoders[&encoder].validation_error.is_none());
+            assert!(!context.render_pass_set_pipeline(pass, 0).unwrap());
+            context.render_pass_end(pass).unwrap();
+            assert!(context.command_encoder_finish(encoder).unwrap_err().contains("GPURenderPipeline"));
+            let next = context.create_command_encoder().unwrap();
+            let commands = context.command_encoder_finish(next).unwrap();
+            context.queue_submit(&[commands]).unwrap();
+        }
+
+        #[test]
+        #[ignore = "requires a native GPU adapter; run explicitly on device"]
+        fn canvas_presentation_damage_tracks_writes_switches_and_resize() {
+            let mut context = super::InteropBackendContext::create(super::LocalBootstrapConfig {
+                width: 16,
+                height: 16,
+                surface_layer: std::ptr::null_mut(),
+                prefer_low_power: false,
+                hdr10: false,
+            })
+            .expect("GPU test requires a native adapter");
+            assert!(!context.presentation_damage.is_pending());
+            let texture = context
+                .canvas_get_current_texture(1, 8, 4, "rgba8unorm", 0x10)
+                .unwrap();
+            assert!(context.presentation_damage.is_pending());
+            context.presentation_damage.presented();
+            context
+                .canvas_get_current_texture(1, 8, 4, "rgba8unorm", 0x10)
+                .unwrap();
+            assert!(!context.presentation_damage.is_pending());
+            context.queue_submit(&[]).unwrap();
+            assert!(!context.presentation_damage.is_pending());
+            let encoder = context.create_command_encoder().unwrap();
+            let commands = context.command_encoder_finish(encoder).unwrap();
+            context.queue_submit(&[commands]).unwrap();
+            assert!(context.presentation_damage.is_pending());
+            context.presentation_damage.presented();
+            context
+                .queue_write_texture(
+                    &format!("{{\"texture\":{{\"$nativeId\":{texture}}}}}"),
+                    &[255; 128],
+                    "{\"bytesPerRow\":32,\"rowsPerImage\":4}",
+                    "{\"width\":8,\"height\":4}",
+                )
+                .unwrap();
+            assert!(context.presentation_damage.is_pending());
+            context.presentation_damage.presented();
+            context
+                .canvas_get_current_texture(2, 8, 4, "rgba8unorm", 0x10)
+                .unwrap();
+            context.presentation_damage.presented();
+            context
+                .canvas_get_current_texture(1, 8, 4, "rgba8unorm", 0x10)
+                .unwrap();
+            assert!(context.presentation_damage.is_pending());
+            context.presentation_damage.presented();
+            context.resize(32, 32);
+            assert!(context.presentation_damage.is_pending());
+        }
 
         #[test]
         #[ignore = "requires a native GPU adapter; run explicitly on device"]
@@ -9266,6 +10504,7 @@ mod upstream_wgpu_native {
                     width,
                     height,
                     format,
+                    true,
                 )
                 .unwrap();
                 for y in 0..height {

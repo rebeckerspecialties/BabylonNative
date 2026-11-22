@@ -84,6 +84,7 @@ namespace xr
 
     namespace
     {
+        constexpr auto SessionColorFormat = TextureFormat::RGBA8_SRGB;
         constexpr GLfloat VERTEX_POSITIONS[]{ -1.0f, -1.0f, +1.0f, -1.0f, -1.0f, +1.0f, +1.0f, +1.0f };
         constexpr size_t VERTEX_COUNT{ std::size(VERTEX_POSITIONS) / 2 };
 
@@ -505,7 +506,7 @@ namespace xr
                     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
                     glBindTexture(GL_TEXTURE_2D, 0);
                     ActiveFrameViews[0].ColorTexturePointer = reinterpret_cast<void *>(colorTextureId);
-                    ActiveFrameViews[0].ColorTextureFormat = TextureFormat::RGBA8_SRGB;
+                    ActiveFrameViews[0].ColorTextureFormat = SessionColorFormat;
                     ActiveFrameViews[0].ColorTextureSize = {width, height};
                 }
 
@@ -1592,6 +1593,11 @@ namespace xr
     void System::Session::RequestEndSession()
     {
         m_impl->RequestEndSession();
+    }
+
+    TextureFormat System::Session::GetColorTextureFormat() const
+    {
+        return SessionColorFormat;
     }
 
     void System::Session::SetDepthsNearFar(float depthNear, float depthFar)

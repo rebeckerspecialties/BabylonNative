@@ -2,6 +2,7 @@
 #include <Babylon/JsRuntime.h>
 #include <Babylon/JsRuntimeScheduler.h>
 #include <Babylon/Graphics/WgpuInterop.h>
+#include <Babylon/Graphics/DeviceContext.h>
 
 #include <napi/env.h>
 #include <napi/napi.h>
@@ -38,6 +39,7 @@ namespace Babylon::Plugins::NativeWebGPU
     {
         std::atomic_bool g_sawWebGpuDrawCall{false};
         std::atomic_uint64_t g_renderPipelineCreateCount{0};
+        std::atomic_uint64_t g_asyncRenderPipelineCreateCount{0};
         std::atomic_uint64_t g_commandEncoderCreateCount{0};
         std::atomic_uint64_t g_renderPassBeginCount{0};
         std::atomic_uint64_t g_queueSubmitCount{0};
@@ -142,6 +144,7 @@ namespace Babylon::Plugins::NativeWebGPU
             CommandBuffer = 12,
             ComputePipeline = 13,
             ComputePass = 14,
+            QuerySet = 15,
         };
 
         struct MappedRangeState final
@@ -163,6 +166,7 @@ namespace Babylon::Plugins::NativeWebGPU
             uint32_t Usage{};
             bool Mapped{};
             bool MapPending{};
+            bool BackendMapPending{};
             uint64_t MapGeneration{};
             Napi::ObjectReference Object{};
             bool MappedForWrite{};
@@ -189,6 +193,7 @@ namespace Babylon::Plugins::NativeWebGPU
         struct NativeDeviceState final
         {
             uint64_t Id{};
+            bool TimestampQueryEnabled{};
             bool Destroyed{};
             Napi::ObjectReference Object{}; // Weak: listeners must not root the device through C++.
             std::shared_ptr<Napi::Promise::Deferred> Lost{};
@@ -280,9 +285,40 @@ namespace Babylon::Plugins::NativeWebGPU
 
             explicit DeviceRegistry(Babylon::JsRuntime& runtime) : Scheduler{runtime} {}
 
-            std::optional<GpuError> Drain(Napi::Env env, uint64_t suppressDevice = 0)
+            struct CompletionWake {
+                Babylon::JsRuntimeScheduler Scheduler;
+                std::weak_ptr<DeviceRegistry> Registry;
+                uint64_t Id;
+            };
+            uint64_t NextCompletion{};
+            std::unordered_map<uint64_t, std::function<void(Napi::Env, bool)>> Completions;
+
+            uintptr_t AddCompletion(std::function<void(Napi::Env, bool)> completion)
             {
-                std::optional<GpuError> suppressed;
+                const auto id = ++NextCompletion;
+                auto wake = std::make_unique<CompletionWake>(CompletionWake{Scheduler, WeakSelf, id});
+                Completions.emplace(id, std::move(completion));
+                return reinterpret_cast<uintptr_t>(wake.release());
+            }
+
+            static void Completed(uintptr_t context, bool success) noexcept
+            {
+                // Only the JS thread owns the promises and resource references.
+                std::unique_ptr<CompletionWake> wake{reinterpret_cast<CompletionWake*>(context)};
+                try {
+                    wake->Scheduler([weak = wake->Registry, id = wake->Id, success](Napi::Env env) {
+                        auto registry = weak.lock();
+                        if (!registry || registry->Stopped) return;
+                        auto node = registry->Completions.extract(id);
+                        if (!node.empty()) node.mapped()(env, success);
+                    });
+                } catch (...) {
+                    // Dispatch is no longer available during runtime shutdown.
+                }
+            }
+
+            void Drain(Napi::Env env)
+            {
                 uint64_t id{};
                 uint32_t kind{};
                 std::array<char, 2048> buffer{};
@@ -303,11 +339,6 @@ namespace Babylon::Plugins::NativeWebGPU
                         std::fprintf(stderr, "NativeWebGPU renderer error: %s\n", message.c_str());
                         continue;
                     }
-                    if (id == suppressDevice && kind != 4)
-                    {
-                        if (!suppressed) suppressed = GpuError{kind, std::move(message)};
-                        continue;
-                    }
                     for (auto it = Devices.begin(); it != Devices.end();)
                     {
                         auto device = it->second.lock();
@@ -317,7 +348,6 @@ namespace Babylon::Plugins::NativeWebGPU
                         else if (id == device->Id) ReportGpuError(env, device, {kind, message});
                     }
                 }
-                return suppressed;
             }
 
             static void Wake(void* data)
@@ -345,6 +375,7 @@ namespace Babylon::Plugins::NativeWebGPU
                 native.Set(JS_DEVICE_REGISTRY_NAME, Napi::External<std::shared_ptr<DeviceRegistry>>::New(env,
                     new std::shared_ptr<DeviceRegistry>{registry}, [](Napi::Env, std::shared_ptr<DeviceRegistry>* holder) {
                         (*holder)->Stopped = true;
+                        (*holder)->Completions.clear();
                         babylon_wgpu_native_set_error_notify(nullptr, &(*holder)->WeakSelf);
                         delete holder;
                     }));
@@ -1000,7 +1031,7 @@ namespace Babylon::Plugins::NativeWebGPU
             object.Set(JS_NATIVE_HANDLE_KIND_NAME, Napi::Number::From(object.Env(), static_cast<uint32_t>(kind)));
             constexpr std::array names{"GPUBuffer", "GPUTexture", "GPUTextureView", "GPUSampler", "GPUShaderModule",
                 "GPUBindGroupLayout", "GPUPipelineLayout", "GPUBindGroup", "GPURenderPipeline", "GPUCommandEncoder",
-                "GPURenderPassEncoder", "GPUCommandBuffer", "GPUComputePipeline", "GPUComputePassEncoder"};
+                "GPURenderPassEncoder", "GPUCommandBuffer", "GPUComputePipeline", "GPUComputePassEncoder", "GPUQuerySet"};
             SetGpuPrototype(object, names[static_cast<size_t>(kind) - 1]);
             return object;
         }
@@ -1769,11 +1800,9 @@ namespace Babylon::Plugins::NativeWebGPU
 
                   guard("transfer");
                   guard("transferToFixedLength");
-                  if (typeof originals.transfer !== "function") {
-                    throw new Error("ArrayBuffer.prototype.transfer is required by NativeWebGPU");
-                  }
-
                   const bridge = Object.freeze({
+                    canTransfer: typeof originals.transfer === "function",
+                    copy: Function.prototype.call.bind(ArrayBuffer.prototype.slice),
                     protect(buffer) {
                       protectedBuffers.add(buffer);
                       return buffer;
@@ -1854,9 +1883,7 @@ namespace Babylon::Plugins::NativeWebGPU
             bool detachSucceeded = true;
             std::vector<BabylonWgpuMappedRangeWrite> writes;
             std::vector<Napi::ArrayBuffer> transferredRanges;
-            std::vector<std::vector<uint8_t>> copiedRanges;
             transferredRanges.reserve(state.MappedRanges.size());
-            copiedRanges.reserve(state.MappedRanges.size());
             if (writeBack && state.MappedForWrite)
             {
                 writes.reserve(state.MappedRanges.size());
@@ -1870,24 +1897,25 @@ namespace Babylon::Plugins::NativeWebGPU
                 }
 
                 auto arrayBuffer = range.ArrayBuffer.Value();
-                const auto transferValue = arrayBuffer.Get("transfer");
-                if (!transferValue.IsFunction())
+                const auto bridge = GetMappedArrayBufferBridge(env, operationName);
+                if (!bridge.Get("canTransfer").ToBoolean().Value())
                 {
-                    // Older JavaScriptCore builds do not expose the ES2024
-                    // ArrayBuffer transfer/detach operation. Preserve mapped
-                    // writes by copying before releasing our reference. The
-                    // original JS ArrayBuffer remains attached, which is a
-                    // known conformance gap for the WebWorker/runtime work.
+                    // V8 can detach through Node-API before it exposes ES2024
+                    // transfer(). Only copy write mappings; never pin the source
+                    // with the native byte-pointer API before detaching it.
                     if (writeBack && state.MappedForWrite)
                     {
-                        const auto copySize = std::min(range.Size, arrayBuffer.ByteLength());
-                        copiedRanges.emplace_back(copySize);
-                        std::memcpy(copiedRanges.back().data(), arrayBuffer.Data(), copySize);
+                        auto copy = bridge.Get("copy").As<Napi::Function>().Call(bridge, {arrayBuffer}).As<Napi::ArrayBuffer>();
+                        transferredRanges.push_back(copy);
                         writes.push_back(BabylonWgpuMappedRangeWrite{
                             static_cast<uint64_t>(range.Offset),
-                            copiedRanges.back().data(),
-                            copySize,
+                            static_cast<const uint8_t*>(copy.Data()),
+                            std::min(range.Size, copy.ByteLength()),
                         });
+                    }
+                    if (napi_detach_arraybuffer(env, arrayBuffer) != napi_ok)
+                    {
+                        detachSucceeded = false;
                     }
                 }
                 else
@@ -1929,7 +1957,11 @@ namespace Babylon::Plugins::NativeWebGPU
             state.MappedOffset = 0;
             state.MappedSize = 0;
 
-            if (!writeSucceeded && detachSucceeded)
+            if (!detachSucceeded && !env.IsExceptionPending())
+            {
+                ThrowNativeOperationError(env, operationName, "Runtime could not detach the GPUBuffer mapped ArrayBuffer.");
+            }
+            else if (!writeSucceeded && detachSucceeded)
             {
                 ThrowNativeWebGpuError(env, "NativeWebGPU failed to write GPUBuffer mapped ranges.", operationName);
             }
@@ -2051,12 +2083,11 @@ namespace Babylon::Plugins::NativeWebGPU
             auto promise = deferred->Promise();
             auto& runtime = Babylon::JsRuntime::GetFromJavaScript(env);
             auto device = g_activeDevice;
-            const bool pipelineAsync = operationName == "GPUDevice.createRenderPipelineAsync" || operationName == "GPUDevice.createComputePipelineAsync";
-            auto scopes = device && !pipelineAsync ? (g_activeScopes ? *g_activeScopes : device->Scopes) : ErrorScopeList{};
+            auto scopes = device ? (g_activeScopes ? *g_activeScopes : device->Scopes) : ErrorScopeList{};
             for (auto& scope : scopes) ++scope->Pending;
 
             runtime.Dispatch([deferred = std::move(deferred),
-                                 device, scopes = std::move(scopes), pipelineAsync,
+                                 device, scopes = std::move(scopes),
                                  resolveFactory = std::move(resolveFactory),
                                  operationName = std::move(operationName),
                                  callSiteStack = std::move(callSiteStack)](Napi::Env callbackEnv) mutable {
@@ -2067,7 +2098,7 @@ namespace Babylon::Plugins::NativeWebGPU
                 try
                 {
                     auto result = resolveFactory(callbackEnv);
-                    if (registry) registry->Drain(callbackEnv, pipelineAsync ? device->Id : 0);
+                    if (registry) registry->Drain(callbackEnv);
                     deferred->Resolve(result);
                 }
                 catch (const Napi::Error& error)
@@ -2084,15 +2115,8 @@ namespace Babylon::Plugins::NativeWebGPU
                 }
                 if (!failure.empty())
                 {
-                    auto backendError = registry ? registry->Drain(callbackEnv, pipelineAsync ? device->Id : 0) : std::optional<GpuError>{};
-                    if (pipelineAsync)
-                    {
-                        auto options = Napi::Object::New(callbackEnv);
-                        options.Set("reason", backendError && backendError->Kind != 1 ? "internal" : "validation");
-                        deferred->Reject(callbackEnv.Global().Get("GPUPipelineError").As<Napi::Function>().New({
-                            Napi::String::New(callbackEnv, failure), options}));
-                    }
-                    else deferred->Reject(CreateRejectedErrorValue(callbackEnv, failure, operationName, callSiteStack));
+                    if (registry) registry->Drain(callbackEnv);
+                    deferred->Reject(CreateRejectedErrorValue(callbackEnv, failure, operationName, callSiteStack));
                 }
                 for (auto& pending : scopes) { --pending->Pending; SettleErrorScope(callbackEnv, pending); }
             });
@@ -2133,6 +2157,10 @@ namespace Babylon::Plugins::NativeWebGPU
 
         bool SupportsFeature(const BabylonWgpuFeatureInfo& featureInfo, std::string_view feature)
         {
+            if (feature == "timestamp-query")
+            {
+                return featureInfo.timestamp_query != 0;
+            }
             if (feature == "bgra8unorm-storage")
             {
                 return featureInfo.bgra8unorm_storage != 0;
@@ -2182,6 +2210,10 @@ namespace Babylon::Plugins::NativeWebGPU
             BabylonWgpuFeatureInfo featureInfo{};
             if (babylon_wgpu_get_feature_info(&featureInfo))
             {
+                if (featureInfo.timestamp_query)
+                {
+                    AddSetValue(env, set, "timestamp-query");
+                }
                 if (featureInfo.bgra8unorm_storage)
                 {
                     AddSetValue(env, set, "bgra8unorm-storage");
@@ -2226,7 +2258,7 @@ namespace Babylon::Plugins::NativeWebGPU
             return set;
         }
 
-        std::optional<std::string> FindUnsupportedRequiredFeature(const Napi::CallbackInfo& info)
+        std::optional<std::string> FindUnsupportedRequiredFeature(const Napi::CallbackInfo& info, Napi::Object enabled, bool& timestamps)
         {
             if (info.Length() == 0 || info[0].IsUndefined() || info[0].IsNull())
             {
@@ -2270,6 +2302,8 @@ namespace Babylon::Plugins::NativeWebGPU
                 {
                     return feature;
                 }
+                AddSetValue(info.Env(), enabled, feature.c_str());
+                timestamps |= feature == "timestamp-query";
             }
 
             return std::nullopt;
@@ -2284,6 +2318,10 @@ namespace Babylon::Plugins::NativeWebGPU
                 if (featureInfo.multi_draw_indirect_count)
                 {
                     AddSetValue(env, set, "multi-draw-indirect-count");
+                }
+                if (featureInfo.xr_stereo_multiview)
+                {
+                    AddSetValue(env, set, "xr-stereo-multiview");
                 }
                 if (featureInfo.subgroup_barrier)
                 {
@@ -2337,6 +2375,45 @@ namespace Babylon::Plugins::NativeWebGPU
             }
 
             return limits;
+        }
+
+        template<typename Visitor>
+        void VisitSequence(const Napi::Value& sequence, const char* member, Visitor&& visit)
+        {
+            auto env = sequence.Env();
+            if (!sequence.IsObject())
+            {
+                throw Napi::TypeError::New(env, std::string{member} + " must be iterable.");
+            }
+            auto method = sequence.As<Napi::Object>().Get(Napi::Symbol::WellKnown(env, "iterator"));
+            if (!method.IsFunction())
+            {
+                throw Napi::TypeError::New(env, std::string{member} + " must be iterable.");
+            }
+            auto iterator = method.As<Napi::Function>().Call(sequence, {});
+            if (!iterator.IsObject())
+            {
+                throw Napi::TypeError::New(env, std::string{member} + " iterator must return an object.");
+            }
+            auto next = iterator.As<Napi::Object>().Get("next");
+            if (!next.IsFunction())
+            {
+                throw Napi::TypeError::New(env, std::string{member} + " iterator has no next method.");
+            }
+            for (;;)
+            {
+                auto step = next.As<Napi::Function>().Call(iterator, {});
+                if (!step.IsObject())
+                {
+                    throw Napi::TypeError::New(env, std::string{member} + " iterator result must be an object.");
+                }
+                auto item = step.As<Napi::Object>();
+                if (item.Get("done").ToBoolean().Value())
+                {
+                    break;
+                }
+                visit(item.Get("value"));
+            }
         }
 
         TextureDescriptorData ParseTextureDescriptor(const Napi::CallbackInfo& info, uint32_t fallbackWidth = 1, uint32_t fallbackHeight = 1, const std::string& fallbackFormat = "bgra8unorm")
@@ -2532,7 +2609,32 @@ namespace Babylon::Plugins::NativeWebGPU
         Napi::Object CreateGpuTexture(const Napi::CallbackInfo& info, const TextureDescriptorData& descriptor)
         {
             auto env = info.Env();
-            const auto descriptorJson = (info.Length() > 0 && info[0].IsObject()) ? ToJson(info[0]) : std::string{"{}"};
+            auto fields = Napi::Object::New(env);
+            fields.Set("label", descriptor.Label);
+            fields.Set("dimension", descriptor.Dimension);
+            fields.Set("format", descriptor.Format);
+            fields.Set("mipLevelCount", descriptor.MipLevelCount);
+            fields.Set("sampleCount", descriptor.SampleCount);
+            auto size = Napi::Array::New(env, 3);
+            size.Set(uint32_t{0}, descriptor.Width);
+            size.Set(uint32_t{1}, descriptor.Height);
+            size.Set(uint32_t{2}, descriptor.DepthOrArrayLayers);
+            fields.Set("size", size);
+            fields.Set("usage", descriptor.Usage);
+            if (info.Length() && info[0].IsObject())
+            {
+                auto formats = info[0].As<Napi::Object>().Get("viewFormats");
+                if (!formats.IsUndefined())
+                {
+                    auto values = Napi::Array::New(env);
+                    uint32_t index{};
+                    VisitSequence(formats, "GPUTextureDescriptor.viewFormats", [&](Napi::Value format) {
+                        values.Set(index++, format.ToString());
+                    });
+                    fields.Set("viewFormats", values);
+                }
+            }
+            const auto descriptorJson = ToJson(fields);
             if (IsWebGpuTraceEnabled())
             {
                 std::fprintf(stderr, "NativeWebGPU trace createTexture: %s\n", descriptorJson.c_str());
@@ -3036,6 +3138,23 @@ namespace Babylon::Plugins::NativeWebGPU
                 return CreateGpuComputePassEncoder(info.Env(), passId);
             }));
 
+            encoder.Set("resolveQuerySet", MakeGpuFunction(env, [](const Napi::CallbackInfo& info) {
+                if (info.Length() < 5)
+                {
+                    throw Napi::TypeError::New(info.Env(), "GPUCommandEncoder.resolveQuerySet requires five arguments.");
+                }
+                auto first = ReadGpuSizeArgument(info, 1, 0, "firstQuery", "GPUCommandEncoder.resolveQuerySet");
+                auto count = ReadGpuSizeArgument(info, 2, 0, "queryCount", "GPUCommandEncoder.resolveQuerySet");
+                auto offset = ReadGpuSizeArgument(info, 4, 0, "destinationOffset", "GPUCommandEncoder.resolveQuerySet");
+                if (!first || !count || !offset) return;
+                if (*first > UINT32_MAX || *count > UINT32_MAX)
+                {
+                    throw Napi::TypeError::New(info.Env(), "Query range exceeds GPUSize32.");
+                }
+                babylon_wgpu_native_resolve_query_set(GetNativeHandleId(info.This(), NativeResourceKind::CommandEncoder),
+                    GetNativeHandleId(info[0], NativeResourceKind::QuerySet), static_cast<uint32_t>(*first), static_cast<uint32_t>(*count),
+                    GetNativeHandleId(info[3], NativeResourceKind::Buffer), *offset);
+            }));
             encoder.Set("copyBufferToBuffer", MakeGpuFunction(env, [](const Napi::CallbackInfo& info) {
                 const auto encoderId = GetNativeHandleId(info.This(), NativeResourceKind::CommandEncoder);
                 const auto sourceId = info.Length() > 0 ? GetNativeHandleId(info[0], NativeResourceKind::Buffer) : 0;
@@ -3123,20 +3242,16 @@ namespace Babylon::Plugins::NativeWebGPU
             return shaderModule;
         }
 
-        Napi::Object CreateGpuRenderPipeline(Napi::Env env, const Napi::Value& descriptor)
+        Napi::Object WrapPipeline(Napi::Env env, NativeResourceKind kind, uint64_t nativeId)
         {
             auto pipeline = Napi::Object::New(env);
-            const auto descriptorJson = descriptor.IsObject() ? ToJson(descriptor) : std::string{"{}"};
-            const auto nativeId = babylon_wgpu_native_create_render_pipeline(descriptorJson.c_str());
-            if (nativeId == 0)
-            {
-                ThrowNativeWebGpuError(env, "NativeWebGPU failed to create GPURenderPipeline.", "GPUDevice.createRenderPipeline");
-            }
-            AttachNativeHandle(pipeline, NativeResourceKind::RenderPipeline, nativeId);
-            pipeline.Set("getBindGroupLayout", MakeGpuFunction(env, [](const Napi::CallbackInfo& info) -> Napi::Value {
-                const auto pipelineId = GetNativeHandleId(info.This(), NativeResourceKind::RenderPipeline);
+            AttachNativeHandle(pipeline, kind, nativeId);
+            pipeline.Set("getBindGroupLayout", MakeGpuFunction(env, [kind](const Napi::CallbackInfo& info) -> Napi::Value {
+                const auto id = GetNativeHandleId(info.This(), kind);
                 const auto index = info.Length() > 0 ? ToUint32(info[0], 0) : 0;
-                const auto layoutId = babylon_wgpu_native_render_pipeline_get_bind_group_layout(pipelineId, index);
+                const auto layoutId = kind == NativeResourceKind::RenderPipeline
+                    ? babylon_wgpu_native_render_pipeline_get_bind_group_layout(id, index)
+                    : babylon_wgpu_native_compute_pipeline_get_bind_group_layout(id, index);
                 auto layout = Napi::Object::New(info.Env());
                 AttachNativeHandle(layout, NativeResourceKind::BindGroupLayout, layoutId);
                 return layout;
@@ -3144,25 +3259,83 @@ namespace Babylon::Plugins::NativeWebGPU
             return pipeline;
         }
 
+        Napi::Object CreateGpuRenderPipeline(Napi::Env env, const Napi::Value& descriptor)
+        {
+            const auto json = descriptor.IsObject() ? ToJson(descriptor) : std::string{"{}"};
+            const auto id = babylon_wgpu_native_create_render_pipeline(json.c_str());
+            if (!id) ThrowNativeWebGpuError(env, "NativeWebGPU failed to create GPURenderPipeline.", "GPUDevice.createRenderPipeline");
+            return WrapPipeline(env, NativeResourceKind::RenderPipeline, id);
+        }
+
         Napi::Object CreateGpuComputePipeline(Napi::Env env, const Napi::Value& descriptor)
         {
-            auto pipeline = Napi::Object::New(env);
-            const auto descriptorJson = descriptor.IsObject() ? ToJson(descriptor) : std::string{"{}"};
-            const auto nativeId = babylon_wgpu_native_create_compute_pipeline(descriptorJson.c_str());
-            if (nativeId == 0)
-            {
-                ThrowNativeWebGpuError(env, "NativeWebGPU failed to create GPUComputePipeline.", "GPUDevice.createComputePipeline");
+            const auto json = descriptor.IsObject() ? ToJson(descriptor) : std::string{"{}"};
+            const auto id = babylon_wgpu_native_create_compute_pipeline(json.c_str());
+            if (!id) ThrowNativeWebGpuError(env, "NativeWebGPU failed to create GPUComputePipeline.", "GPUDevice.createComputePipeline");
+            return WrapPipeline(env, NativeResourceKind::ComputePipeline, id);
+        }
+
+        Napi::Promise CompilePipelineAsync(const Napi::CallbackInfo& info, NativeResourceKind kind)
+        {
+            struct Job {
+                const void* Handle{};
+                std::string StartError;
+                ~Job() { babylon_wgpu_native_drop_pipeline_job(Handle); }
+            };
+            auto env = info.Env();
+            auto device = g_activeDevice;
+            auto registry = device->Registry.lock();
+            auto deferred = Napi::Promise::Deferred::New(env);
+            auto reject = [deferred](Napi::Env js, const std::string& message, bool internal) {
+                auto options = Napi::Object::New(js);
+                options.Set("reason", internal ? "internal" : "validation");
+                deferred.Reject(js.Global().Get("GPUPipelineError").As<Napi::Function>().New({
+                    Napi::String::New(js, message), options}));
+            };
+            auto promise = deferred.Promise();
+            if (!info.Length() || !info[0].IsObject()) {
+                reject(env, "Async pipeline creation requires a descriptor object.", false);
+                return promise;
             }
-            AttachNativeHandle(pipeline, NativeResourceKind::ComputePipeline, nativeId);
-            pipeline.Set("getBindGroupLayout", MakeGpuFunction(env, [](const Napi::CallbackInfo& info) -> Napi::Value {
-                const auto pipelineId = GetNativeHandleId(info.This(), NativeResourceKind::ComputePipeline);
-                const auto index = info.Length() > 0 ? ToUint32(info[0], 0) : 0;
-                const auto layoutId = babylon_wgpu_native_compute_pipeline_get_bind_group_layout(pipelineId, index);
-                auto layout = Napi::Object::New(info.Env());
-                AttachNativeHandle(layout, NativeResourceKind::BindGroupLayout, layoutId);
-                return layout;
-            }));
-            return pipeline;
+            auto validation = std::make_shared<ErrorScope>();
+            validation->Filter = 1;
+            ErrorScopeList scopes{validation};
+            DeviceCall snapshot{device, &scopes};
+            const auto json = ToJson(info[0]);
+            if (validation->Error) {
+                reject(env, validation->Error->Message, false);
+                return promise;
+            }
+            if (!registry || device->Destroyed) {
+                deferred.Resolve(WrapPipeline(env, kind, 0));
+                return promise;
+            }
+            auto job = std::make_shared<Job>();
+            const auto token = registry->AddCompletion([job, device, kind, deferred, reject](Napi::Env js, bool started) {
+                DeviceCall settle{device};
+                if (device->Destroyed) {
+                    deferred.Resolve(WrapPipeline(js, kind, 0));
+                    return;
+                }
+                if (!started) {
+                    reject(js, job->StartError, true);
+                    return;
+                }
+                bool internal{};
+                if (const char* message = babylon_wgpu_native_pipeline_failure(job->Handle, &internal)) {
+                    reject(js, message, internal);
+                    return;
+                }
+                const auto id = babylon_wgpu_native_adopt_pipeline(job->Handle);
+                if (!id) reject(js, NativeWebGpuErrorMessage("WebGPU pipeline no longer belongs to the active renderer"), true);
+                else deferred.Resolve(WrapPipeline(js, kind, id));
+            });
+            job->Handle = babylon_wgpu_native_start_pipeline(json.c_str(), kind == NativeResourceKind::ComputePipeline, DeviceRegistry::Completed, token);
+            if (!job->Handle) {
+                job->StartError = NativeWebGpuErrorMessage("WebGPU pipeline compiler unavailable");
+                DeviceRegistry::Completed(token, false);
+            }
+            return promise;
         }
 
         Napi::Object CreateGpuBuffer(Napi::Env env, size_t size, uint32_t usage, bool mappedAtCreation)
@@ -3182,10 +3355,33 @@ namespace Babylon::Plugins::NativeWebGPU
 
             auto handle = *buffer.Get(JS_NATIVE_HANDLE_NAME).As<Napi::External<std::shared_ptr<NativeHandleState>>>().Data();
             handle->Object = Napi::Reference<Napi::Object>::New(buffer, 0);
-            buffer.Set("mapAsync", MakeGpuFunction(env, [handle](const Napi::CallbackInfo& info) -> Napi::Value {
+            return buffer;
+        }
+
+        std::shared_ptr<NativeHandleState> GetBufferReceiver(const Napi::Value& receiver)
+        {
+            if (!receiver.IsObject()) return {};
+            auto value = receiver.As<Napi::Object>().Get(JS_NATIVE_HANDLE_NAME);
+            if (!value.IsExternal()) return {};
+            auto handle = *value.As<Napi::External<std::shared_ptr<NativeHandleState>>>().Data();
+            if (!handle || handle->Kind != NativeResourceKind::Buffer || handle->Object.IsEmpty() ||
+                !receiver.StrictEquals(handle->Object.Value())) return {};
+            return handle;
+        }
+
+        void InstallBufferPrototype(Napi::Env env)
+        {
+            auto prototype = env.Global().Get("GPUBuffer").As<Napi::Object>().Get("prototype").As<Napi::Object>();
+            prototype.Set("mapAsync", MakeGpuFunction<true>(env, [](const Napi::CallbackInfo& info) -> Napi::Value {
                 auto env = info.Env();
                 auto deferred = std::make_shared<Napi::Promise::Deferred>(Napi::Promise::Deferred::New(env));
                 auto promise = deferred->Promise();
+                auto handle = GetBufferReceiver(info.This());
+                if (!handle)
+                {
+                    deferred->Reject(Napi::TypeError::New(env, "GPUBuffer.mapAsync requires a GPUBuffer receiver.").Value());
+                    return promise;
+                }
                 const auto mode = info.Length() > 0 ? ToUint32(info[0], 0) : 0;
                 const auto callSiteStack = CaptureCallSiteStack(env, "GPUBuffer.mapAsync");
                 const auto offset = ReadGpuSizeArgument(info, 1, 0, "offset", "GPUBuffer.mapAsync");
@@ -3206,8 +3402,9 @@ namespace Babylon::Plugins::NativeWebGPU
                 const auto generation = ++handle->MapGeneration;
                 handle->MapPending = true;
                 info.This().As<Napi::Object>().Set("mapState", "pending");
-                JsRuntime::GetFromJavaScript(env).Dispatch([handle, deferred, device, scopes = std::move(scopes),
-                    callSiteStack, valid, generation, mode, offset = *offset, size = *size](Napi::Env callbackEnv) {
+                auto registry = GetDeviceRegistry(env);
+                const auto ticket = registry->AddCompletion([handle, deferred, device, scopes = std::move(scopes),
+                    callSiteStack, valid, generation, mode, offset = *offset, size = *size](Napi::Env callbackEnv, bool success) {
                     DeviceCall call{device, &scopes};
                     auto object = handle->Object.Value();
                     auto reject = [&](const char* name, const std::string& message) {
@@ -3228,15 +3425,16 @@ namespace Babylon::Plugins::NativeWebGPU
                     else
                     {
                         handle->MapPending = false;
+                        handle->BackendMapPending = false;
                         if (!valid)
                         {
                             if (!object.IsEmpty()) object.Set("mapState", "unmapped");
                             reject("OperationError", "GPUBuffer mapping validation failed.");
                         }
-                        else if (!babylon_wgpu_native_map_buffer(handle->Id, mode, offset, size))
+                        else if (!success || !babylon_wgpu_native_finish_map(handle->Id))
                         {
                             if (!object.IsEmpty()) object.Set("mapState", "unmapped");
-                            reject("OperationError", NativeWebGpuErrorMessage("GPUBuffer mapping failed."));
+                            reject("OperationError", "GPUBuffer mapping failed.");
                         }
                         else
                         {
@@ -3251,13 +3449,20 @@ namespace Babylon::Plugins::NativeWebGPU
                     if (auto registry = device->Registry.lock()) registry->Drain(callbackEnv);
                     for (auto& scope : scopes) { --scope->Pending; SettleErrorScope(callbackEnv, scope); }
                 });
+                handle->BackendMapPending = valid && !device->Destroyed;
+                if (!handle->BackendMapPending || !babylon_wgpu_native_begin_map(handle->Id, mode, *offset, *size, &DeviceRegistry::Completed, ticket))
+                {
+                    handle->BackendMapPending = false;
+                    DeviceRegistry::Completed(ticket, false);
+                }
                 return promise;
             }));
 
-            buffer.Set("getMappedRange", MakeGpuFunction(env, [](const Napi::CallbackInfo& info) -> Napi::Value {
+            prototype.Set("getMappedRange", MakeGpuFunction<true>(env, [](const Napi::CallbackInfo& info) -> Napi::Value {
                 constexpr auto operationName = "GPUBuffer.getMappedRange";
-                auto* state = GetNativeHandleState(info.This());
-                if (state == nullptr || (state->Id == 0 && !state->Mapped))
+                const auto state = GetBufferReceiver(info.This());
+                if (!state) throw Napi::TypeError::New(info.Env(), "GPUBuffer.getMappedRange requires a GPUBuffer receiver.");
+                if (state->Id == 0 && !state->Mapped)
                 {
                     ThrowNativeOperationError(info.Env(), operationName, "GPUBuffer is destroyed or invalid.");
                     return info.Env().Undefined();
@@ -3328,7 +3533,14 @@ namespace Babylon::Plugins::NativeWebGPU
                     // JSC pins ArrayBuffers exposed through its C byte-pointer API.
                     // Transfer only after filling the temporary; never expose the
                     // returned mapping's pointer until unmap has detached it.
-                    mappedRange = TransferMappedArrayBuffer(info.Env(), nativeBackedRange, operationName);
+                    auto bridge = GetMappedArrayBufferBridge(info.Env(), operationName);
+                    if (bridge.IsEmpty())
+                    {
+                        return info.Env().Undefined();
+                    }
+                    mappedRange = bridge.Get("canTransfer").ToBoolean().Value()
+                        ? TransferMappedArrayBuffer(info.Env(), nativeBackedRange, operationName)
+                        : bridge.Get("copy").As<Napi::Function>().Call(bridge, {nativeBackedRange}).As<Napi::ArrayBuffer>();
                 }
                 if (mappedRange.IsEmpty())
                 {
@@ -3348,25 +3560,29 @@ namespace Babylon::Plugins::NativeWebGPU
                 return mappedRange;
             }));
 
-            buffer.Set("unmap", MakeGpuFunction(env, [](const Napi::CallbackInfo& info) {
+            prototype.Set("unmap", MakeGpuFunction<true>(env, [](const Napi::CallbackInfo& info) {
                 auto bufferObject = info.This().As<Napi::Object>();
-                auto* state = GetNativeHandleState(bufferObject);
-                if (state && state->MapPending)
+                const auto state = GetBufferReceiver(bufferObject);
+                if (!state) throw Napi::TypeError::New(info.Env(), "GPUBuffer.unmap requires a GPUBuffer receiver.");
+                if (state->MapPending)
                 {
+                    if (state->BackendMapPending) babylon_wgpu_native_unmap_buffer(state->Id);
+                    state->BackendMapPending = false;
                     ++state->MapGeneration;
                     state->MapPending = false;
                     bufferObject.Set("mapState", "unmapped");
                 }
-                if (state == nullptr || !state->Mapped)
+                if (!state->Mapped)
                 {
                     return;
                 }
                 FinishMappedBuffer(info.Env(), *state, true, "GPUBuffer.unmap");
                 bufferObject.Set("mapState", Napi::String::New(info.Env(), "unmapped"));
             }));
-            buffer.Set("destroy", MakeGpuFunction(env, [](const Napi::CallbackInfo& info) {
+            prototype.Set("destroy", MakeGpuFunction<true>(env, [](const Napi::CallbackInfo& info) {
                 auto bufferObject = info.This().As<Napi::Object>();
-                if (auto* state = GetNativeHandleState(bufferObject))
+                const auto state = GetBufferReceiver(bufferObject);
+                if (!state) throw Napi::TypeError::New(info.Env(), "GPUBuffer.destroy requires a GPUBuffer receiver.");
                 {
                     ++state->MapGeneration;
                     state->MapPending = false;
@@ -3376,11 +3592,9 @@ namespace Babylon::Plugins::NativeWebGPU
                     }
                     bufferObject.Set("mapState", Napi::String::New(info.Env(), "unmapped"));
                     babylon_wgpu_native_invalidate_resource(static_cast<uint32_t>(state->Kind), state->Id);
-                    DestroyNativeHandleState(state);
+                    DestroyNativeHandleState(state.get());
                 }
             }));
-
-            return buffer;
         }
 
         void DestroyDevice(Napi::Env env, const std::shared_ptr<NativeDeviceState>& device,
@@ -3579,11 +3793,16 @@ namespace Babylon::Plugins::NativeWebGPU
                 const uint32_t width = payload->Has("width") ? ToUint32(payload->Get("width"), 1) : 1;
                 const uint32_t height = payload->Has("height") ? ToUint32(payload->Get("height"), 1) : 1;
 
+                const auto descriptor = info[0].As<Napi::Object>();
+                const auto origin = descriptor.Get("origin");
                 if (nativeTexture != nullptr &&
                     babylon_wgpu_native_queue_copy_external_image_to_texture(
                         nativeTexture,
                         width,
                         height,
+                        GetOriginCoordinate(origin, "x", 0),
+                        GetOriginCoordinate(origin, "y", 1),
+                        GetBool(descriptor, "flipY", false) ? 1u : 0u,
                         destinationJson.c_str(),
                         sizeJson.c_str()))
                 {
@@ -3593,23 +3812,26 @@ namespace Babylon::Plugins::NativeWebGPU
                 ThrowNativeWebGpuError(info.Env(), "NativeWebGPU failed to copy external native image to GPUTexture", "GPUQueue.copyExternalImageToTexture");
             }));
             queue.Set("onSubmittedWorkDone", MakeGpuFunction(env, [](const Napi::CallbackInfo& info) -> Napi::Value {
-                return ResolvePromiseAsync(info.Env(), [](Napi::Env callbackEnv) -> Napi::Value {
-                    if (g_activeDevice && g_activeDevice->Destroyed) return callbackEnv.Undefined();
-                    if (!babylon_wgpu_native_queue_wait_submitted_work())
-                    {
-                        throw std::runtime_error{"NativeWebGPU failed while waiting for submitted GPU work."};
-                    }
-                    return callbackEnv.Undefined();
-                }, "GPUQueue.onSubmittedWorkDone");
+                auto env = info.Env();
+                auto deferred = std::make_shared<Napi::Promise::Deferred>(Napi::Promise::Deferred::New(env));
+                auto device = g_activeDevice;
+                const auto ticket = GetDeviceRegistry(env)->AddCompletion([deferred, device](Napi::Env callbackEnv, bool success) {
+                    if (success || device->Destroyed) deferred->Resolve(callbackEnv.Undefined());
+                    else deferred->Reject(CreateDomException(callbackEnv, "OperationError", "GPUQueue.onSubmittedWorkDone failed."));
+                });
+                if (device->Destroyed || !babylon_wgpu_native_work_done(&DeviceRegistry::Completed, ticket))
+                    DeviceRegistry::Completed(ticket, device->Destroyed);
+                return deferred->Promise();
             }));
 
             return queue;
         }
 
-        Napi::Object CreateGpuDevice(Napi::Env env)
+        Napi::Object CreateGpuDevice(Napi::Env env, Napi::Object enabledFeatures, bool timestamps)
         {
             auto state = std::make_shared<NativeDeviceState>();
             state->Id = g_nextDeviceId.fetch_add(1, std::memory_order_relaxed);
+            state->TimestampQueryEnabled = timestamps;
             auto registry = GetDeviceRegistry(env);
             state->Registry = registry;
             registry->Devices.emplace(state->Id, state);
@@ -3620,7 +3842,7 @@ namespace Babylon::Plugins::NativeWebGPU
             device.Set(JS_DEVICE_STATE_NAME, Napi::External<std::shared_ptr<NativeDeviceState>>::New(env,
                 new std::shared_ptr<NativeDeviceState>{state}, [](Napi::Env, std::shared_ptr<NativeDeviceState>* holder) { delete holder; }));
 
-            device.Set("features", CreateFeatureSet(env));
+            device.Set("features", enabledFeatures);
             device.Set("_nativeFeatures", CreateNativeFeatureSet(env));
             device.Set("limits", CreateLimits(env));
             device.Set("queue", CreateGpuQueue(env));
@@ -3754,12 +3976,47 @@ namespace Babylon::Plugins::NativeWebGPU
             device.Set("createBindGroup", MakeGpuFunction(env, [](const Napi::CallbackInfo& info) -> Napi::Value {
                 g_bindGroupCreateCount.fetch_add(1, std::memory_order_relaxed);
                 auto bindGroup = Napi::Object::New(info.Env());
-                const auto descriptorJson = info.Length() > 0 && info[0].IsObject() ? ToJson(info[0]) : std::string{"{}"};
-                if (IsWebGpuTraceEnabled())
+                auto env = info.Env();
+                if (!info.Length() || !info[0].IsObject())
                 {
-                    std::fprintf(stderr, "NativeWebGPU trace createBindGroup: %s\n", descriptorJson.c_str());
+                    throw Napi::TypeError::New(env, "GPUDevice.createBindGroup requires a descriptor.");
                 }
-                const auto nativeId = babylon_wgpu_native_create_bind_group(descriptorJson.c_str());
+                auto descriptor = info[0].As<Napi::Object>();
+                auto labelValue = descriptor.Get("label");
+                auto label = labelValue.IsUndefined() ? std::string{} : labelValue.ToString().Utf8Value();
+                std::vector<BabylonWgpuBindGroupEntry> bindings;
+                const auto integer = [env](Napi::Value value, double limit) -> uint64_t {
+                    const double n = std::trunc(value.ToNumber().DoubleValue());
+                    if (!std::isfinite(n) || n < 0 || n >= limit)
+                    {
+                        throw Napi::TypeError::New(env, "GPU bind group binding, offset or size is out of range.");
+                    }
+                    return static_cast<uint64_t>(n);
+                };
+                VisitSequence(descriptor.Get("entries"), "GPUBindGroupDescriptor.entries", [&](Napi::Value value) {
+                    auto entry = value.ToObject();
+                    auto& binding = bindings.emplace_back();
+                    binding.binding = static_cast<uint32_t>(integer(entry.Get("binding"), 0x1p32));
+                    binding.size = UINT64_MAX;
+                    auto resource = entry.Get("resource");
+                    if (auto* state = GetNativeHandleState(resource))
+                    {
+                        binding.kind = static_cast<uint32_t>(state->Kind);
+                        binding.resource = ValidateHandleOwner(env, *state) ? state->Id : 0;
+                    }
+                    else
+                    {
+                        auto bufferBinding = resource.ToObject();
+                        binding.kind = static_cast<uint32_t>(NativeResourceKind::Buffer);
+                        binding.resource = GetNativeHandleId(bufferBinding.Get("buffer"), NativeResourceKind::Buffer);
+                        auto offset = bufferBinding.Get("offset");
+                        binding.offset = offset.IsUndefined() ? 0 : integer(offset, 0x1p64);
+                        auto size = bufferBinding.Get("size");
+                        binding.size = size.IsUndefined() ? UINT64_MAX : integer(size, 0x1p64);
+                    }
+                });
+                auto layoutId = GetNativeHandleId(descriptor.Get("layout"), NativeResourceKind::BindGroupLayout);
+                const auto nativeId = babylon_wgpu_native_create_bind_group(layoutId, label.c_str(), bindings.data(), bindings.size());
                 if (nativeId == 0)
                 {
                     ThrowNativeWebGpuError(info.Env(), "NativeWebGPU failed to create GPUBindGroup.", "GPUDevice.createBindGroup");
@@ -3780,31 +4037,8 @@ namespace Babylon::Plugins::NativeWebGPU
 
             device.Set("createRenderPipelineAsync", MakeGpuFunction(env, [](const Napi::CallbackInfo& info) -> Napi::Value {
                 g_renderPipelineCreateCount.fetch_add(1, std::memory_order_relaxed);
-                const auto descriptorJson = info.Length() > 0 && info[0].IsObject() ? ToJson(info[0]) : std::string{};
-                return ResolvePromiseAsync(info.Env(), [descriptorJson](Napi::Env callbackEnv) -> Napi::Value {
-                    if (descriptorJson.empty())
-                    {
-                        throw std::runtime_error{"createRenderPipelineAsync requires a descriptor object."};
-                    }
-                    auto descriptorValue = Napi::String::New(callbackEnv, descriptorJson);
-                    const auto nativeId = babylon_wgpu_native_create_render_pipeline(descriptorJson.c_str());
-                    if (nativeId == 0 && (!g_activeDevice || !g_activeDevice->Destroyed))
-                    {
-                        throw std::runtime_error{NativeWebGpuErrorMessage("NativeWebGPU failed to create GPURenderPipeline.")};
-                    }
-                    auto pipeline = Napi::Object::New(callbackEnv);
-                    AttachNativeHandle(pipeline, NativeResourceKind::RenderPipeline, nativeId);
-                    pipeline.Set("getBindGroupLayout", MakeGpuFunction(callbackEnv, [](const Napi::CallbackInfo& nestedInfo) -> Napi::Value {
-                        const auto pipelineId = GetNativeHandleId(nestedInfo.This(), NativeResourceKind::RenderPipeline);
-                        const auto index = nestedInfo.Length() > 0 ? ToUint32(nestedInfo[0], 0) : 0;
-                        const auto layoutId = babylon_wgpu_native_render_pipeline_get_bind_group_layout(pipelineId, index);
-                        auto layout = Napi::Object::New(nestedInfo.Env());
-                        AttachNativeHandle(layout, NativeResourceKind::BindGroupLayout, layoutId);
-                        return layout;
-                    }));
-                    (void)descriptorValue;
-                    return pipeline;
-                }, "GPUDevice.createRenderPipelineAsync");
+                g_asyncRenderPipelineCreateCount.fetch_add(1, std::memory_order_relaxed);
+                return CompilePipelineAsync(info, NativeResourceKind::RenderPipeline);
             }));
 
             device.Set("createRenderBundleEncoder", MakeGpuFunction(env, [](const Napi::CallbackInfo& info) -> Napi::Value {
@@ -3822,35 +4056,33 @@ namespace Babylon::Plugins::NativeWebGPU
             }));
 
             device.Set("createComputePipelineAsync", MakeGpuFunction(env, [](const Napi::CallbackInfo& info) -> Napi::Value {
-                const auto descriptorJson = info.Length() > 0 && info[0].IsObject() ? ToJson(info[0]) : std::string{};
-                return ResolvePromiseAsync(info.Env(), [descriptorJson](Napi::Env callbackEnv) -> Napi::Value {
-                    if (descriptorJson.empty())
-                    {
-                        throw std::runtime_error{"createComputePipelineAsync requires a descriptor object."};
-                    }
-                    const auto nativeId = babylon_wgpu_native_create_compute_pipeline(descriptorJson.c_str());
-                    if (nativeId == 0 && (!g_activeDevice || !g_activeDevice->Destroyed))
-                    {
-                        throw std::runtime_error{NativeWebGpuErrorMessage("NativeWebGPU failed to create GPUComputePipeline.")};
-                    }
-                    auto pipeline = Napi::Object::New(callbackEnv);
-                    AttachNativeHandle(pipeline, NativeResourceKind::ComputePipeline, nativeId);
-                    pipeline.Set("getBindGroupLayout", MakeGpuFunction(callbackEnv, [](const Napi::CallbackInfo& nestedInfo) -> Napi::Value {
-                        const auto pipelineId = GetNativeHandleId(nestedInfo.This(), NativeResourceKind::ComputePipeline);
-                        const auto index = nestedInfo.Length() > 0 ? ToUint32(nestedInfo[0], 0) : 0;
-                        const auto layoutId = babylon_wgpu_native_compute_pipeline_get_bind_group_layout(pipelineId, index);
-                        auto layout = Napi::Object::New(nestedInfo.Env());
-                        AttachNativeHandle(layout, NativeResourceKind::BindGroupLayout, layoutId);
-                        return layout;
-                    }));
-                    return pipeline;
-                }, "GPUDevice.createComputePipelineAsync");
+                return CompilePipelineAsync(info, NativeResourceKind::ComputePipeline);
             }));
 
             device.Set("createQuerySet", MakeGpuFunction(env, [](const Napi::CallbackInfo& info) -> Napi::Value {
+                if (!info.Length() || !info[0].IsObject())
+                    throw Napi::TypeError::New(info.Env(), "GPUDevice.createQuerySet requires a descriptor.");
+                auto descriptor = info[0].As<Napi::Object>();
+                auto type = descriptor.Get("type").ToString().Utf8Value();
+                if (type != "timestamp" && type != "occlusion")
+                    throw Napi::TypeError::New(info.Env(), "GPUQuerySet.type must be timestamp or occlusion.");
+                if (type == "timestamp" && !g_activeDevice->TimestampQueryEnabled)
+                    throw Napi::TypeError::New(info.Env(), "GPUDevice.createQuerySet requires the timestamp-query feature.");
+                auto size = descriptor.Get("count").ToNumber().DoubleValue();
+                if (!std::isfinite(size) || std::trunc(size) < 0 || std::trunc(size) > UINT32_MAX)
+                    throw Napi::TypeError::New(info.Env(), "GPUQuerySet.count must be a GPUSize32.");
+                auto count = static_cast<uint32_t>(size);
+                auto label = descriptor.Has("label") ? descriptor.Get("label").ToString().Utf8Value() : std::string{};
+                auto id = babylon_wgpu_native_create_query_set(type == "timestamp", count, label.c_str());
                 auto querySet = Napi::Object::New(info.Env());
+                AttachNativeHandle(querySet, NativeResourceKind::QuerySet, id);
+                querySet.DefineProperties({
+                    Napi::PropertyDescriptor::Value("type", Napi::String::New(info.Env(), type), napi_enumerable),
+                    Napi::PropertyDescriptor::Value("count", Napi::Number::New(info.Env(), count), napi_enumerable)});
+                querySet.Set("label", label);
                 querySet.Set("destroy", MakeGpuFunction(info.Env(), [](const Napi::CallbackInfo& nestedInfo) {
-                    (void)nestedInfo;
+                    auto id = GetNativeHandleId(nestedInfo.This(), NativeResourceKind::QuerySet);
+                    if (id) babylon_wgpu_native_invalidate_resource(static_cast<uint32_t>(NativeResourceKind::QuerySet), id);
                 }));
                 return querySet;
             }));
@@ -4035,7 +4267,9 @@ namespace Babylon::Plugins::NativeWebGPU
                 auto deferred = Napi::Promise::Deferred::New(info.Env());
                 try
                 {
-                    if (auto unsupportedFeature = FindUnsupportedRequiredFeature(info))
+                    auto enabledFeatures = CreateSet(info.Env());
+                    bool timestamps{};
+                    if (auto unsupportedFeature = FindUnsupportedRequiredFeature(info, enabledFeatures, timestamps))
                     {
                         deferred.Reject(Napi::TypeError::New(
                             info.Env(),
@@ -4043,7 +4277,7 @@ namespace Babylon::Plugins::NativeWebGPU
                                 .Value());
                         return deferred.Promise();
                     }
-                    deferred.Resolve(CreateGpuDevice(info.Env()));
+                    deferred.Resolve(CreateGpuDevice(info.Env(), enabledFeatures, timestamps));
                 }
                 catch (const Napi::Error& error)
                 {
@@ -4134,6 +4368,7 @@ namespace Babylon::Plugins::NativeWebGPU
                 auto env = info.Env();
                 auto stats = Napi::Object::New(env);
                 stats.Set("renderPipelineCreateCount", Napi::Number::From(env, static_cast<double>(g_renderPipelineCreateCount.load(std::memory_order_relaxed))));
+                stats.Set("asyncRenderPipelineCreateCount", Napi::Number::From(env, static_cast<double>(g_asyncRenderPipelineCreateCount.load(std::memory_order_relaxed))));
                 stats.Set("commandEncoderCreateCount", Napi::Number::From(env, static_cast<double>(g_commandEncoderCreateCount.load(std::memory_order_relaxed))));
                 stats.Set("renderPassBeginCount", Napi::Number::From(env, static_cast<double>(g_renderPassBeginCount.load(std::memory_order_relaxed))));
                 stats.Set("queueSubmitCount", Napi::Number::From(env, static_cast<double>(g_queueSubmitCount.load(std::memory_order_relaxed))));
@@ -4162,6 +4397,8 @@ namespace Babylon::Plugins::NativeWebGPU
                 stats.Set("externalImageUploadBorrowedCount", Napi::Number::From(env, static_cast<double>(babylon_wgpu_native_get_external_image_upload_borrowed_count())));
                 stats.Set("externalImageUploadBorrowedBytes", Napi::Number::From(env, static_cast<double>(babylon_wgpu_native_get_external_image_upload_borrowed_bytes())));
                 stats.Set("externalImageUploadOwnedCount", Napi::Number::From(env, static_cast<double>(babylon_wgpu_native_get_external_image_upload_owned_count())));
+                stats.Set("canvasGpuSnapshotCount", Napi::Number::From(env, static_cast<double>(babylon_wgpu_native_get_canvas_snapshot_count(false))));
+                stats.Set("canvasCpuSnapshotCount", Napi::Number::From(env, static_cast<double>(babylon_wgpu_native_get_canvas_snapshot_count(true))));
                 stats.Set("externalImageUploadOwnedBytes", Napi::Number::From(env, static_cast<double>(babylon_wgpu_native_get_external_image_upload_owned_bytes())));
                 stats.Set("backendMode", Napi::String::New(env, kBackendMode));
                 stats.Set("presentationPath", Napi::String::New(env, "webgpu-offscreen-present"));
@@ -4202,9 +4439,29 @@ namespace Babylon::Plugins::NativeWebGPU
 
             gpu.Set("wgslLanguageFeatures", CreateSet(env));
             gpu.Set("requestAdapter", Napi::Function::New(env, [](const Napi::CallbackInfo& info) -> Napi::Value {
-                auto deferred = Napi::Promise::Deferred::New(info.Env());
-                deferred.Resolve(CreateGpuAdapter(info.Env()));
-                return deferred.Promise();
+                auto env = info.Env();
+                auto deferred = std::make_shared<Napi::Promise::Deferred>(Napi::Promise::Deferred::New(env));
+                if (babylon_wgpu_has_active_context())
+                {
+                    deferred->Resolve(CreateGpuAdapter(env));
+                }
+                else if (auto ready = Graphics::DeviceContext::TryGetInitializationTask(env))
+                {
+                    Babylon::JsRuntimeScheduler js{Babylon::JsRuntime::GetFromJavaScript(env)};
+                    ready->then(arcana::inline_scheduler, arcana::cancellation::none(), [js, deferred](bool success) {
+                        js([deferred, success](Napi::Env callbackEnv) {
+                            if (success && babylon_wgpu_has_active_context())
+                                deferred->Resolve(CreateGpuAdapter(callbackEnv));
+                            else
+                                deferred->Resolve(callbackEnv.Null());
+                        });
+                    });
+                }
+                else
+                {
+                    deferred->Resolve(env.Null());
+                }
+                return deferred->Promise();
             }));
 
             gpu.Set("getPreferredCanvasFormat", Napi::Function::New(env, [](const Napi::CallbackInfo& info) -> Napi::Value {
@@ -4292,6 +4549,7 @@ namespace Babylon::Plugins::NativeWebGPU
                 (void)info;
                 g_sawWebGpuDrawCall.store(false, std::memory_order_release);
                 g_renderPipelineCreateCount.store(0, std::memory_order_relaxed);
+                g_asyncRenderPipelineCreateCount.store(0, std::memory_order_relaxed);
                 g_commandEncoderCreateCount.store(0, std::memory_order_relaxed);
                 g_renderPassBeginCount.store(0, std::memory_order_relaxed);
                 g_queueSubmitCount.store(0, std::memory_order_relaxed);
@@ -4542,6 +4800,7 @@ namespace Babylon::Plugins::NativeWebGPU
         const bool developerFeaturesEnabled = IsWebGpuDeveloperFeaturesEnabled(env);
         const bool unsafeWebGpuEnabled = developerFeaturesEnabled || IsUnsafeWebGpuEnabled(env);
         InstallGpuInterfaces(env);
+        InstallBufferPrototype(env);
         InstallRenderPassPrototype(env);
         InstallWebGpuConstants(env);
         auto gpu = CreateGpu(env, developerFeaturesEnabled, unsafeWebGpuEnabled);

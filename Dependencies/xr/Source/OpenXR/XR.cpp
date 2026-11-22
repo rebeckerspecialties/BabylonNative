@@ -1,4 +1,5 @@
 #include <XR.h>
+#include "ProjectionExtent.h"
 
 #include <AndroidExtensions/Globals.h>
 
@@ -105,21 +106,34 @@ namespace xr
             switch (format)
             {
             case VK_FORMAT_R8G8B8A8_UNORM:
+            case VK_FORMAT_R8G8B8A8_SRGB:
+            case VK_FORMAT_R16G16B16A16_SFLOAT: // The application draws into an RGBA8 intermediate.
                 return TextureFormat::RGBA8_SRGB;
             case VK_FORMAT_B8G8R8A8_UNORM:
+            case VK_FORMAT_B8G8R8A8_SRGB:
                 return TextureFormat::BGRA8_SRGB;
             default:
                 throw std::runtime_error{"The OpenXR runtime did not expose a WebGPU-compatible UNORM color swapchain format."};
             }
         }
 
-        int64_t SelectColorFormat(const std::vector<int64_t>& formats)
+        int64_t SelectColorFormat(const std::vector<int64_t>& formats, bool allowSrgb = true, bool preferFloat = false)
         {
-            constexpr std::array<int64_t, 2> preferredFormats{
+            if (preferFloat && std::find(formats.begin(), formats.end(), VK_FORMAT_R16G16B16A16_SFLOAT) != formats.end())
+            {
+                return VK_FORMAT_R16G16B16A16_SFLOAT;
+            }
+            constexpr std::array<int64_t, 4> preferredFormats{
+                VK_FORMAT_R8G8B8A8_SRGB,
+                VK_FORMAT_B8G8R8A8_SRGB,
                 VK_FORMAT_R8G8B8A8_UNORM,
                 VK_FORMAT_B8G8R8A8_UNORM};
             for (const auto preferred : preferredFormats)
             {
+                if (!allowSrgb && (preferred == VK_FORMAT_R8G8B8A8_SRGB || preferred == VK_FORMAT_B8G8R8A8_SRGB))
+                {
+                    continue;
+                }
                 if (std::find(formats.begin(), formats.end(), preferred) != formats.end())
                 {
                     return preferred;
@@ -187,8 +201,15 @@ namespace xr
             CheckXr(
                 xrEnumerateInstanceExtensionProperties(nullptr, extensionCount, &extensionCount, extensions.data()),
                 "xrEnumerateInstanceExtensionProperties");
+            __android_log_print(ANDROID_LOG_INFO, "BabylonNative",
+                "OpenXR advertised graphics extensions: visibilityMask=%d foveation=%d foveationVulkan=%d swapchainUpdateState=%d",
+                HasExtension(extensions, XR_KHR_VISIBILITY_MASK_EXTENSION_NAME),
+                HasExtension(extensions, XR_FB_FOVEATION_EXTENSION_NAME),
+                HasExtension(extensions, XR_FB_FOVEATION_VULKAN_EXTENSION_NAME),
+                HasExtension(extensions, XR_FB_SWAPCHAIN_UPDATE_STATE_EXTENSION_NAME));
+            AppOwnedVulkan = HasExtension(extensions, XR_KHR_VULKAN_ENABLE_EXTENSION_NAME);
             if (!HasExtension(extensions, XR_KHR_ANDROID_CREATE_INSTANCE_EXTENSION_NAME) ||
-                !HasExtension(extensions, XR_KHR_VULKAN_ENABLE2_EXTENSION_NAME))
+                (!AppOwnedVulkan && !HasExtension(extensions, XR_KHR_VULKAN_ENABLE2_EXTENSION_NAME)))
             {
                 return false;
             }
@@ -197,9 +218,14 @@ namespace xr
             androidCreateInfo.applicationVM = javaVm;
             androidCreateInfo.applicationActivity = static_cast<jobject>(*currentActivity);
 
-            const std::array<const char*, 2> enabledExtensions{
+            std::vector<const char*> enabledExtensions{
                 XR_KHR_ANDROID_CREATE_INSTANCE_EXTENSION_NAME,
-                XR_KHR_VULKAN_ENABLE2_EXTENSION_NAME};
+                AppOwnedVulkan ? XR_KHR_VULKAN_ENABLE_EXTENSION_NAME : XR_KHR_VULKAN_ENABLE2_EXTENSION_NAME};
+            DisplayRefreshRateSupported = HasExtension(extensions, XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME);
+            if (DisplayRefreshRateSupported)
+            {
+                enabledExtensions.push_back(XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME);
+            }
             auto createInfo = MakeXr<XrInstanceCreateInfo>(XR_TYPE_INSTANCE_CREATE_INFO);
             createInfo.next = &androidCreateInfo;
             std::strncpy(createInfo.applicationInfo.applicationName, AppName.c_str(), XR_MAX_APPLICATION_NAME_SIZE - 1);
@@ -209,7 +235,13 @@ namespace xr
             createInfo.applicationInfo.apiVersion = XR_CURRENT_API_VERSION;
             createInfo.enabledExtensionCount = static_cast<uint32_t>(enabledExtensions.size());
             createInfo.enabledExtensionNames = enabledExtensions.data();
-            CheckXr(xrCreateInstance(&createInfo, &Instance), "xrCreateInstance");
+            auto instanceResult = xrCreateInstance(&createInfo, &Instance);
+            if (instanceResult == XR_ERROR_API_VERSION_UNSUPPORTED)
+            {
+                createInfo.applicationInfo.apiVersion = XR_API_VERSION_1_0;
+                instanceResult = xrCreateInstance(&createInfo, &Instance);
+            }
+            CheckXr(instanceResult, "xrCreateInstance");
 
             auto systemInfo = MakeXr<XrSystemGetInfo>(XR_TYPE_SYSTEM_GET_INFO);
             systemInfo.formFactor = XR_FORM_FACTOR_HEAD_MOUNTED_DISPLAY;
@@ -218,15 +250,33 @@ namespace xr
             CheckXr(
                 xrGetInstanceProcAddr(
                     Instance,
-                    "xrGetVulkanGraphicsRequirements2KHR",
+                    AppOwnedVulkan ? "xrGetVulkanGraphicsRequirementsKHR" : "xrGetVulkanGraphicsRequirements2KHR",
                     reinterpret_cast<PFN_xrVoidFunction*>(&GetVulkanGraphicsRequirements)),
                 "xrGetInstanceProcAddr(xrGetVulkanGraphicsRequirements2KHR)");
-            CheckXr(
+            if (AppOwnedVulkan)
+            {
+                CheckXr(xrGetInstanceProcAddr(Instance, "xrGetVulkanGraphicsDeviceKHR",
+                    reinterpret_cast<PFN_xrVoidFunction*>(&GetAppVulkanGraphicsDevice)), "xrGetVulkanGraphicsDeviceKHR");
+                for (const auto name : {"xrGetVulkanInstanceExtensionsKHR", "xrGetVulkanDeviceExtensionsKHR"})
+                {
+                    PFN_xrGetVulkanInstanceExtensionsKHR getExtensions{};
+                    CheckXr(xrGetInstanceProcAddr(Instance, name, reinterpret_cast<PFN_xrVoidFunction*>(&getExtensions)), name);
+                    uint32_t size{};
+                    CheckXr(getExtensions(Instance, SystemId, 0, &size, nullptr), name);
+                    std::vector<char> list(size + 1);
+                    CheckXr(getExtensions(Instance, SystemId, size, &size, list.data()), name);
+                    __android_log_print(ANDROID_LOG_INFO, "BabylonNative", "%s: %s", name, list.data());
+                }
+            }
+            else
+            {
+                CheckXr(
                 xrGetInstanceProcAddr(
                     Instance,
                     "xrGetVulkanGraphicsDevice2KHR",
                     reinterpret_cast<PFN_xrVoidFunction*>(&GetVulkanGraphicsDevice)),
                 "xrGetInstanceProcAddr(xrGetVulkanGraphicsDevice2KHR)");
+            }
 
             uint32_t blendModeCount{};
             CheckXr(
@@ -266,6 +316,9 @@ namespace xr
         XrEnvironmentBlendMode BlendMode{XR_ENVIRONMENT_BLEND_MODE_OPAQUE};
         PFN_xrGetVulkanGraphicsRequirements2KHR GetVulkanGraphicsRequirements{};
         PFN_xrGetVulkanGraphicsDevice2KHR GetVulkanGraphicsDevice{};
+        PFN_xrGetVulkanGraphicsDeviceKHR GetAppVulkanGraphicsDevice{};
+        bool AppOwnedVulkan{};
+        bool DisplayRefreshRateSupported{};
     };
 
     struct System::Session::Impl
@@ -278,6 +331,7 @@ namespace xr
             uint32_t Height{};
             uint32_t ImageIndex{};
             bool ImageAcquired{};
+            ProjectionExtent MaxApplicationExtent{};
         };
 
         Impl(System::Impl& system, const VulkanGraphicsBinding& graphicsBinding)
@@ -287,7 +341,8 @@ namespace xr
                 graphicsBinding.PhysicalDevice == 0 ||
                 graphicsBinding.Device == 0 ||
                 graphicsBinding.Queue == 0 ||
-                graphicsBinding.ApiVersion == 0)
+                graphicsBinding.ApiVersion == 0 ||
+                graphicsBinding.MaxTextureDimension2D == 0)
             {
                 throw std::runtime_error{"NativeXR received an incomplete Vulkan graphics binding."};
             }
@@ -303,22 +358,27 @@ namespace xr
             const auto xrApiVersion = XR_MAKE_VERSION(
                 VK_API_VERSION_MAJOR(graphicsBinding.ApiVersion),
                 VK_API_VERSION_MINOR(graphicsBinding.ApiVersion),
-                VK_API_VERSION_PATCH(graphicsBinding.ApiVersion));
-            if (xrApiVersion < graphicsRequirements.minApiVersionSupported ||
-                xrApiVersion > graphicsRequirements.maxApiVersionSupported)
+                0);
+            const auto majorMinor = [](XrVersion version) { return XR_MAKE_VERSION(XR_VERSION_MAJOR(version), XR_VERSION_MINOR(version), 0); };
+            if (xrApiVersion < majorMinor(graphicsRequirements.minApiVersionSupported))
             {
                 throw std::runtime_error{
                     "NativeWebGPU Vulkan API version " +
                     std::to_string(VK_API_VERSION_MAJOR(graphicsBinding.ApiVersion)) + "." +
                     std::to_string(VK_API_VERSION_MINOR(graphicsBinding.ApiVersion)) + "." +
                     std::to_string(VK_API_VERSION_PATCH(graphicsBinding.ApiVersion)) +
-                    " is outside the OpenXR runtime range [" +
+                    " is below the OpenXR runtime minimum " +
                     std::to_string(XR_VERSION_MAJOR(graphicsRequirements.minApiVersionSupported)) + "." +
-                    std::to_string(XR_VERSION_MINOR(graphicsRequirements.minApiVersionSupported)) + "." +
-                    std::to_string(XR_VERSION_PATCH(graphicsRequirements.minApiVersionSupported)) + ", " +
-                    std::to_string(XR_VERSION_MAJOR(graphicsRequirements.maxApiVersionSupported)) + "." +
-                    std::to_string(XR_VERSION_MINOR(graphicsRequirements.maxApiVersionSupported)) + "." +
-                    std::to_string(XR_VERSION_PATCH(graphicsRequirements.maxApiVersionSupported)) + "]."};
+                    std::to_string(XR_VERSION_MINOR(graphicsRequirements.minApiVersionSupported)) + "."};
+            }
+            if (xrApiVersion > majorMinor(graphicsRequirements.maxApiVersionSupported))
+            {
+                // The upper bound is the newest version tested, not a compatibility ceiling.
+                __android_log_print(ANDROID_LOG_WARN, "BabylonNative",
+                    "Vulkan %u.%u exceeds the OpenXR runtime's tested %u.%u; attempting session creation",
+                    VK_API_VERSION_MAJOR(graphicsBinding.ApiVersion), VK_API_VERSION_MINOR(graphicsBinding.ApiVersion),
+                    static_cast<unsigned>(XR_VERSION_MAJOR(graphicsRequirements.maxApiVersionSupported)),
+                    static_cast<unsigned>(XR_VERSION_MINOR(graphicsRequirements.maxApiVersionSupported)));
             }
 
             auto deviceGetInfo =
@@ -327,8 +387,9 @@ namespace xr
             deviceGetInfo.vulkanInstance = vulkanInstance;
             VkPhysicalDevice runtimePhysicalDevice{VK_NULL_HANDLE};
             CheckXr(
-                System.GetVulkanGraphicsDevice(System.Instance, &deviceGetInfo, &runtimePhysicalDevice),
-                "xrGetVulkanGraphicsDevice2KHR");
+                System.AppOwnedVulkan ? System.GetAppVulkanGraphicsDevice(System.Instance, System.SystemId, vulkanInstance, &runtimePhysicalDevice)
+                                      : System.GetVulkanGraphicsDevice(System.Instance, &deviceGetInfo, &runtimePhysicalDevice),
+                "OpenXR Vulkan physical device selection");
             if (runtimePhysicalDevice != vulkanPhysicalDevice)
             {
                 throw std::runtime_error{"NativeWebGPU selected a Vulkan physical device that does not match the OpenXR runtime."};
@@ -346,6 +407,36 @@ namespace xr
             sessionCreateInfo.next = &xrGraphicsBinding;
             sessionCreateInfo.systemId = System.SystemId;
             CheckXr(xrCreateSession(System.Instance, &sessionCreateInfo, &Session), "xrCreateSession");
+            if (System.DisplayRefreshRateSupported)
+            {
+                PFN_xrEnumerateDisplayRefreshRatesFB enumerateRates{};
+                PFN_xrGetDisplayRefreshRateFB getRate{};
+                PFN_xrRequestDisplayRefreshRateFB requestRate{};
+                uint32_t count{};
+                float current{};
+                if (XR_SUCCEEDED(xrGetInstanceProcAddr(System.Instance, "xrEnumerateDisplayRefreshRatesFB", reinterpret_cast<PFN_xrVoidFunction*>(&enumerateRates))) &&
+                    XR_SUCCEEDED(xrGetInstanceProcAddr(System.Instance, "xrGetDisplayRefreshRateFB", reinterpret_cast<PFN_xrVoidFunction*>(&getRate))) &&
+                    XR_SUCCEEDED(xrGetInstanceProcAddr(System.Instance, "xrRequestDisplayRefreshRateFB", reinterpret_cast<PFN_xrVoidFunction*>(&requestRate))) &&
+                    enumerateRates && getRate && requestRate && XR_SUCCEEDED(getRate(Session, &current)) && current > 0 &&
+                    XR_SUCCEEDED(enumerateRates(Session, 0, &count, nullptr)) && count)
+                {
+                    std::vector<float> rates(count);
+                    if (XR_SUCCEEDED(enumerateRates(Session, count, &count, rates.data())))
+                    {
+                        rates.resize(count);
+                        DisplayRates = std::make_shared<DisplayRateControl>();
+                        DisplayRates->Supported = std::move(rates);
+                        DisplayRates->Nominal.store(current);
+                        DisplayRates->Request = [requestRate, session = Session](float rate) {
+                            return XR_SUCCEEDED(requestRate(session, rate));
+                        };
+                    }
+                }
+            }
+            else
+            {
+                __android_log_print(ANDROID_LOG_INFO, "BabylonNative", "OpenXR display refresh rate selection unavailable");
+            }
 
             auto spaceCreateInfo = MakeXr<XrReferenceSpaceCreateInfo>(XR_TYPE_REFERENCE_SPACE_CREATE_INFO);
             spaceCreateInfo.referenceSpaceType = REFERENCE_SPACE_TYPE;
@@ -385,16 +476,28 @@ namespace xr
             CheckXr(
                 xrEnumerateSwapchainFormats(Session, formatCount, &formatCount, formats.data()),
                 "xrEnumerateSwapchainFormats");
+#ifdef BABYLON_NATIVE_OPENXR_PREFER_LINEAR_SWAPCHAIN
+            ColorFormat = SelectColorFormat(formats, true, true);
+#else
             ColorFormat = SelectColorFormat(formats);
+#endif
             ColorTextureFormat = ToTextureFormat(ColorFormat);
 
-            ViewSwapchains.resize(viewCount);
-            for (uint32_t viewIndex = 0; viewIndex < viewCount; ++viewIndex)
+            // The projection layer exposes one array image per frame, not one
+            // independently acquired image per view.
+            ViewSwapchains.resize(1);
             {
-                const auto& viewConfiguration = ViewConfigurationViews[viewIndex];
-                auto& viewSwapchain = ViewSwapchains[viewIndex];
-                viewSwapchain.Width = viewConfiguration.recommendedImageRectWidth;
-                viewSwapchain.Height = viewConfiguration.recommendedImageRectHeight;
+                auto& viewSwapchain = ViewSwapchains.front();
+                viewSwapchain.MaxApplicationExtent = {graphicsBinding.MaxTextureDimension2D, graphicsBinding.MaxTextureDimension2D};
+                for (const auto& config : ViewConfigurationViews)
+                {
+                    viewSwapchain.Width = std::max(viewSwapchain.Width, config.recommendedImageRectWidth);
+                    viewSwapchain.Height = std::max(viewSwapchain.Height, config.recommendedImageRectHeight);
+                    viewSwapchain.MaxApplicationExtent.Width = std::min(viewSwapchain.MaxApplicationExtent.Width, config.maxImageRectWidth);
+                    viewSwapchain.MaxApplicationExtent.Height = std::min(viewSwapchain.MaxApplicationExtent.Height, config.maxImageRectHeight);
+                }
+                viewSwapchain.Width = std::min(viewSwapchain.Width, viewSwapchain.MaxApplicationExtent.Width);
+                viewSwapchain.Height = std::min(viewSwapchain.Height, viewSwapchain.MaxApplicationExtent.Height);
 
                 auto swapchainCreateInfo = MakeXr<XrSwapchainCreateInfo>(XR_TYPE_SWAPCHAIN_CREATE_INFO);
                 swapchainCreateInfo.usageFlags =
@@ -405,11 +508,35 @@ namespace xr
                 swapchainCreateInfo.width = viewSwapchain.Width;
                 swapchainCreateInfo.height = viewSwapchain.Height;
                 swapchainCreateInfo.faceCount = 1;
-                swapchainCreateInfo.arraySize = 1;
+                swapchainCreateInfo.arraySize = viewCount;
                 swapchainCreateInfo.mipCount = 1;
-                CheckXr(
-                    xrCreateSwapchain(Session, &swapchainCreateInfo, &viewSwapchain.Handle),
-                    "xrCreateSwapchain");
+                // Babylon writes display-encoded color to its UNORM WebGPU
+                // view. Tell OpenXR to decode those bytes as sRGB at composition.
+                const bool srgb = ColorFormat == VK_FORMAT_R8G8B8A8_SRGB || ColorFormat == VK_FORMAT_B8G8R8A8_SRGB;
+                if (srgb) swapchainCreateInfo.usageFlags |= XR_SWAPCHAIN_USAGE_MUTABLE_FORMAT_BIT;
+                auto result = xrCreateSwapchain(Session, &swapchainCreateInfo, &viewSwapchain.Handle);
+                if (ColorFormat == VK_FORMAT_R16G16B16A16_SFLOAT &&
+                    (result == XR_ERROR_FEATURE_UNSUPPORTED || result == XR_ERROR_SWAPCHAIN_FORMAT_UNSUPPORTED))
+                {
+                    ColorFormat = SelectColorFormat(formats);
+                    ColorTextureFormat = ToTextureFormat(ColorFormat);
+                    swapchainCreateInfo.format = ColorFormat;
+                    if (ColorFormat == VK_FORMAT_R8G8B8A8_SRGB || ColorFormat == VK_FORMAT_B8G8R8A8_SRGB)
+                        swapchainCreateInfo.usageFlags |= XR_SWAPCHAIN_USAGE_MUTABLE_FORMAT_BIT;
+                    result = xrCreateSwapchain(Session, &swapchainCreateInfo, &viewSwapchain.Handle);
+                }
+                if ((swapchainCreateInfo.usageFlags & XR_SWAPCHAIN_USAGE_MUTABLE_FORMAT_BIT) && (result == XR_ERROR_FEATURE_UNSUPPORTED || result == XR_ERROR_SWAPCHAIN_FORMAT_UNSUPPORTED))
+                {
+                    ColorFormat = SelectColorFormat(formats, false);
+                    ColorTextureFormat = ToTextureFormat(ColorFormat);
+                    swapchainCreateInfo.format = ColorFormat;
+                    swapchainCreateInfo.usageFlags &= ~XR_SWAPCHAIN_USAGE_MUTABLE_FORMAT_BIT;
+                    result = xrCreateSwapchain(Session, &swapchainCreateInfo, &viewSwapchain.Handle);
+                }
+                CheckXr(result, "xrCreateSwapchain");
+                __android_log_print(ANDROID_LOG_INFO, "BabylonNative",
+                    "OpenXR Vulkan projection: %ux%u, %u slices, %u sample(s), format %d",
+                    swapchainCreateInfo.width, swapchainCreateInfo.height, viewCount, swapchainCreateInfo.sampleCount, static_cast<int>(ColorFormat));
 
                 uint32_t imageCount{};
                 CheckXr(
@@ -429,6 +556,144 @@ namespace xr
 
             LocatedViews.assign(viewCount, MakeXr<XrView>(XR_TYPE_VIEW));
             ActiveFrameViews.resize(viewCount);
+            InitializeControllers();
+        }
+
+        XrPath Path(const std::string& name) const
+        {
+            XrPath path{};
+            CheckXr(xrStringToPath(System.Instance, name.c_str(), &path), "xrStringToPath");
+            return path;
+        }
+
+        void InitializeControllers()
+        {
+            const std::array<std::string, 2> hands{"/user/hand/left", "/user/hand/right"};
+            HandPaths = {Path(hands[0]), Path(hands[1])};
+            auto setInfo = MakeXr<XrActionSetCreateInfo>(XR_TYPE_ACTION_SET_CREATE_INFO);
+            std::strcpy(setInfo.actionSetName, "controllers");
+            std::strcpy(setInfo.localizedActionSetName, "Controllers");
+            CheckXr(xrCreateActionSet(System.Instance, &setInfo, &ControllerActions), "xrCreateActionSet");
+            const auto action = [&](XrActionType type, const char* name) {
+                auto info = MakeXr<XrActionCreateInfo>(XR_TYPE_ACTION_CREATE_INFO);
+                info.actionType = type;
+                std::strncpy(info.actionName, name, sizeof(info.actionName) - 1);
+                std::strncpy(info.localizedActionName, name, sizeof(info.localizedActionName) - 1);
+                info.countSubactionPaths = static_cast<uint32_t>(HandPaths.size());
+                info.subactionPaths = HandPaths.data();
+                XrAction result{};
+                CheckXr(xrCreateAction(ControllerActions, &info, &result), "xrCreateAction");
+                return result;
+            };
+            Grip = action(XR_ACTION_TYPE_POSE_INPUT, "grip");
+            Aim = action(XR_ACTION_TYPE_POSE_INPUT, "aim");
+            Trigger = action(XR_ACTION_TYPE_FLOAT_INPUT, "trigger");
+            Squeeze = action(XR_ACTION_TYPE_FLOAT_INPUT, "squeeze");
+            Stick = action(XR_ACTION_TYPE_VECTOR2F_INPUT, "thumbstick");
+            StickClick = action(XR_ACTION_TYPE_BOOLEAN_INPUT, "thumbstick_click");
+            Primary = action(XR_ACTION_TYPE_BOOLEAN_INPUT, "primary");
+            Secondary = action(XR_ACTION_TYPE_BOOLEAN_INPUT, "secondary");
+            TouchProfile = Path("/interaction_profiles/oculus/touch_controller");
+            std::vector<XrActionSuggestedBinding> bindings;
+            for (size_t i = 0; i < hands.size(); ++i)
+            {
+                const auto bind = [&](XrAction a, const char* suffix) { bindings.push_back({a, Path(hands[i] + "/input/" + suffix)}); };
+                bind(Grip, "grip/pose");
+                bind(Aim, "aim/pose");
+                bind(Trigger, "trigger/value");
+                bind(Squeeze, "squeeze/value");
+                bind(Stick, "thumbstick");
+                bind(StickClick, "thumbstick/click");
+                bind(Primary, i ? "a/click" : "x/click");
+                bind(Secondary, i ? "b/click" : "y/click");
+            }
+            auto suggestions = MakeXr<XrInteractionProfileSuggestedBinding>(XR_TYPE_INTERACTION_PROFILE_SUGGESTED_BINDING);
+            suggestions.interactionProfile = TouchProfile;
+            suggestions.countSuggestedBindings = static_cast<uint32_t>(bindings.size());
+            suggestions.suggestedBindings = bindings.data();
+            auto result = xrSuggestInteractionProfileBindings(System.Instance, &suggestions);
+            if (result == XR_ERROR_PATH_UNSUPPORTED) return;
+            CheckXr(result, "xrSuggestInteractionProfileBindings");
+            auto attach = MakeXr<XrSessionActionSetsAttachInfo>(XR_TYPE_SESSION_ACTION_SETS_ATTACH_INFO);
+            attach.countActionSets = 1;
+            attach.actionSets = &ControllerActions;
+            CheckXr(xrAttachSessionActionSets(Session, &attach), "xrAttachSessionActionSets");
+            InputSources.resize(2);
+            for (size_t i = 0; i < InputSources.size(); ++i)
+            {
+                auto space = MakeXr<XrActionSpaceCreateInfo>(XR_TYPE_ACTION_SPACE_CREATE_INFO);
+                space.poseInActionSpace.orientation.w = 1.f;
+                space.subactionPath = HandPaths[i];
+                space.action = Grip;
+                CheckXr(xrCreateActionSpace(Session, &space, &GripSpaces[i]), "xrCreateActionSpace(grip)");
+                space.action = Aim;
+                CheckXr(xrCreateActionSpace(Session, &space, &AimSpaces[i]), "xrCreateActionSpace(aim)");
+                auto& src = InputSources[i];
+                src.Handedness = i ? Session::Frame::InputSource::HandednessEnum::Right : Session::Frame::InputSource::HandednessEnum::Left;
+                src.GamepadObject.Buttons.resize(6);
+                src.GamepadObject.Axes.resize(4);
+            }
+        }
+
+        void UpdateControllers()
+        {
+            if (InputSources.empty()) return;
+            XrActiveActionSet active{ControllerActions, XR_NULL_PATH};
+            auto sync = MakeXr<XrActionsSyncInfo>(XR_TYPE_ACTIONS_SYNC_INFO);
+            sync.countActiveActionSets = 1;
+            sync.activeActionSets = &active;
+            const auto synced = xrSyncActions(Session, &sync);
+            CheckXr(synced, "xrSyncActions");
+            for (size_t i = 0; i < InputSources.size(); ++i)
+            {
+                auto& src = InputSources[i];
+                src.TrackedThisFrame = src.GamepadTrackedThisFrame = false;
+                if (synced == XR_SESSION_NOT_FOCUSED) continue;
+                auto get = MakeXr<XrActionStateGetInfo>(XR_TYPE_ACTION_STATE_GET_INFO);
+                get.subactionPath = HandPaths[i];
+                const auto locate = [&](XrAction action, XrSpace space, Space& target) {
+                    get.action = action;
+                    auto state = MakeXr<XrActionStatePose>(XR_TYPE_ACTION_STATE_POSE);
+                    CheckXr(xrGetActionStatePose(Session, &get, &state), "xrGetActionStatePose");
+                    if (!state.isActive) return false;
+                    auto location = MakeXr<XrSpaceLocation>(XR_TYPE_SPACE_LOCATION);
+                    CheckXr(xrLocateSpace(space, AppSpace, FrameState.predictedDisplayTime, &location), "xrLocateSpace(controller)");
+                    constexpr auto valid = XR_SPACE_LOCATION_POSITION_VALID_BIT | XR_SPACE_LOCATION_ORIENTATION_VALID_BIT;
+                    if ((location.locationFlags & valid) != valid) return false;
+                    target.Pose = ToPose(location.pose);
+                    return true;
+                };
+                if (!locate(Grip, GripSpaces[i], src.GripSpace) || !locate(Aim, AimSpaces[i], src.AimSpace)) continue;
+                src.TrackedThisFrame = src.GamepadTrackedThisFrame = true;
+                if (src.InteractionProfileName.empty()) {
+                    auto profile = MakeXr<XrInteractionProfileState>(XR_TYPE_INTERACTION_PROFILE_STATE);
+                    CheckXr(xrGetCurrentInteractionProfile(Session, HandPaths[i], &profile), "xrGetCurrentInteractionProfile");
+                    if (profile.interactionProfile == TouchProfile) src.InteractionProfileName = "oculus-touch-v2";
+                }
+                const auto axis = [&](XrAction action) {
+                    get.action = action;
+                    auto state = MakeXr<XrActionStateFloat>(XR_TYPE_ACTION_STATE_FLOAT);
+                    CheckXr(xrGetActionStateFloat(Session, &get, &state), "xrGetActionStateFloat");
+                    return state.isActive ? state.currentState : 0.f;
+                };
+                const auto button = [&](XrAction action) {
+                    get.action = action;
+                    auto state = MakeXr<XrActionStateBoolean>(XR_TYPE_ACTION_STATE_BOOLEAN);
+                    CheckXr(xrGetActionStateBoolean(Session, &get, &state), "xrGetActionStateBoolean");
+                    return state.isActive && state.currentState;
+                };
+                auto& pad = src.GamepadObject;
+                const auto trigger = axis(Trigger), squeeze = axis(Squeeze);
+                pad.Buttons[0] = {trigger >= .5f, trigger > 0.f, trigger};
+                pad.Buttons[1] = {squeeze >= .5f, squeeze > 0.f, squeeze};
+                const std::array<bool, 3> clicks{button(StickClick), button(Primary), button(Secondary)};
+                for (size_t n = 0; n < clicks.size(); ++n) pad.Buttons[n + 3] = {clicks[n], clicks[n], clicks[n] ? 1.f : 0.f};
+                get.action = Stick;
+                auto stick = MakeXr<XrActionStateVector2f>(XR_TYPE_ACTION_STATE_VECTOR2F);
+                CheckXr(xrGetActionStateVector2f(Session, &get, &stick), "xrGetActionStateVector2f");
+                pad.Axes[2] = stick.isActive ? stick.currentState.x : 0.f;
+                pad.Axes[3] = stick.isActive ? -stick.currentState.y : 0.f;
+            }
         }
 
         ~Impl()
@@ -458,6 +723,7 @@ namespace xr
             {
                 xrDestroySession(Session);
             }
+            if (ControllerActions != XR_NULL_HANDLE) xrDestroyActionSet(ControllerActions);
         }
 
         void PollEvents()
@@ -489,6 +755,11 @@ namespace xr
                         SessionEnded = true;
                     }
                 }
+                else if (event.type == XR_TYPE_EVENT_DATA_DISPLAY_REFRESH_RATE_CHANGED_FB && DisplayRates)
+                {
+                    const auto& changed = reinterpret_cast<const XrEventDataDisplayRefreshRateChangedFB&>(event);
+                    DisplayRates->Nominal.store(changed.toDisplayRefreshRate);
+                }
                 else if (event.type == XR_TYPE_EVENT_DATA_INSTANCE_LOSS_PENDING)
                 {
                     SessionRunning = false;
@@ -518,6 +789,8 @@ namespace xr
             }
             LogOpenXrInfo("READY wait completed", SessionState);
         }
+
+        std::shared_ptr<DisplayRateControl> DisplayRates{};
 
         std::unique_ptr<Session::Frame> GetNextFrame(
             bool& shouldEndSession,
@@ -565,6 +838,7 @@ namespace xr
             CheckXr(xrBeginFrame(Session, &beginInfo), "xrBeginFrame");
             FrameBegun = true;
             FrameShouldRender = FrameState.shouldRender == XR_TRUE;
+            UpdateControllers();
 
             auto locateInfo = MakeXr<XrViewLocateInfo>(XR_TYPE_VIEW_LOCATE_INFO);
             locateInfo.viewConfigurationType = VIEW_CONFIGURATION_TYPE;
@@ -609,18 +883,24 @@ namespace xr
             }
 
             ActiveFrameViews.resize(locatedViewCount);
+            const double projectionScale = ProjectionScale.load();
             for (uint32_t viewIndex = 0; viewIndex < locatedViewCount; ++viewIndex)
             {
                 auto& activeView = ActiveFrameViews[viewIndex];
                 const auto& locatedView = LocatedViews[viewIndex];
-                const auto& viewSwapchain = ViewSwapchains[viewIndex];
+                const auto& viewSwapchain = ViewSwapchains.front();
                 activeView.Space.Pose = ToPose(locatedView.pose);
                 activeView.ProjectionMatrix = CreateProjectionMatrix(locatedView.fov, DepthNearZ, DepthFarZ);
                 activeView.ColorTextureFormat = ColorTextureFormat;
                 activeView.ColorTexturePointer = FrameShouldRender
                     ? reinterpret_cast<void*>(viewSwapchain.Images[viewSwapchain.ImageIndex].image)
                     : nullptr;
-                activeView.ColorTextureSize = {viewSwapchain.Width, viewSwapchain.Height, 1};
+                const auto extent = ScaleProjectionExtent({viewSwapchain.Width, viewSwapchain.Height},
+                    viewSwapchain.MaxApplicationExtent, projectionScale);
+                activeView.ColorTextureSize = {extent.Width, extent.Height, static_cast<uint32_t>(ViewConfigurationViews.size())};
+                activeView.SwapchainWidth = viewSwapchain.Width;
+                activeView.SwapchainHeight = viewSwapchain.Height;
+                activeView.SwapchainFormat = ColorFormat;
                 activeView.DepthTextureFormat = TextureFormat::D24S8;
                 activeView.DepthTexturePointer = nullptr;
                 activeView.DepthTextureSize = activeView.ColorTextureSize;
@@ -651,7 +931,7 @@ namespace xr
                 for (uint32_t viewIndex = 0; viewIndex < projectionViews.size(); ++viewIndex)
                 {
                     auto& projectionView = projectionViews[viewIndex];
-                    const auto& viewSwapchain = ViewSwapchains[viewIndex];
+                    const auto& viewSwapchain = ViewSwapchains.front();
                     projectionView.pose = LocatedViews[viewIndex].pose;
                     projectionView.fov = LocatedViews[viewIndex].fov;
                     projectionView.subImage.swapchain = viewSwapchain.Handle;
@@ -661,7 +941,7 @@ namespace xr
                             static_cast<int32_t>(viewSwapchain.Width),
                             static_cast<int32_t>(viewSwapchain.Height),
                         }};
-                    projectionView.subImage.imageArrayIndex = 0;
+                    projectionView.subImage.imageArrayIndex = viewIndex;
                 }
                 projectionLayer.space = AppSpace;
                 projectionLayer.viewCount = static_cast<uint32_t>(projectionViews.size());
@@ -688,6 +968,16 @@ namespace xr
             endInfo.layerCount = layerHeader == nullptr ? 0 : 1;
             endInfo.layers = layerHeader == nullptr ? nullptr : &layerHeader;
             CheckXr(xrEndFrame(Session, &endInfo), "xrEndFrame");
+#ifndef NDEBUG
+            if (projectionViews.size() == 2 && ++StereoFrames % 240 == 1)
+            {
+                const auto& left = projectionViews[0].pose;
+                const auto& right = projectionViews[1].pose;
+                __android_log_print(ANDROID_LOG_DEBUG, "BabylonNative", "Submitted stereo frame %u L=(%.3f,%.3f,%.3f) R=(%.3f,%.3f,%.3f) q=(%.3f,%.3f,%.3f,%.3f)",
+                    StereoFrames, left.position.x, left.position.y, left.position.z, right.position.x, right.position.y, right.position.z,
+                    left.orientation.x, left.orientation.y, left.orientation.z, left.orientation.w);
+            }
+#endif
             FrameBegun = false;
         }
 
@@ -697,15 +987,24 @@ namespace xr
         }
 
         System::Impl& System;
+#ifndef NDEBUG
+        uint32_t StereoFrames{};
+#endif
         XrSession Session{XR_NULL_HANDLE};
         XrSpace AppSpace{XR_NULL_HANDLE};
         XrSessionState SessionState{XR_SESSION_STATE_UNKNOWN};
         XrFrameState FrameState{MakeXr<XrFrameState>(XR_TYPE_FRAME_STATE)};
         std::vector<XrViewConfigurationView> ViewConfigurationViews{};
         std::vector<ViewSwapchain> ViewSwapchains{};
+        std::atomic<double> ProjectionScale{1.0};
         std::vector<XrView> LocatedViews{};
         std::vector<Session::Frame::View> ActiveFrameViews{};
         std::vector<Session::Frame::InputSource> InputSources{};
+        XrActionSet ControllerActions{};
+        XrAction Grip{}, Aim{}, Trigger{}, Squeeze{}, Stick{}, StickClick{}, Primary{}, Secondary{};
+        XrPath TouchProfile{};
+        std::array<XrPath, 2> HandPaths{};
+        std::array<XrSpace, 2> GripSpaces{}, AimSpaces{};
         std::vector<FeaturePoint> FeaturePointCloud{};
         std::optional<Space> EyeTrackerSpace{};
         std::vector<ImageTrackingScore> ImageTrackingScores{};
@@ -823,6 +1122,7 @@ namespace xr
               *system.m_impl,
               *static_cast<const VulkanGraphicsBinding*>(graphicsDevice))}
     {
+        m_displayRateControl = m_impl->DisplayRates;
     }
 
     System::Session::~Session() = default;
@@ -841,6 +1141,16 @@ namespace xr
     void System::Session::RequestEndSession()
     {
         m_impl->RequestEndSession();
+    }
+
+    void System::Session::SetProjectionScale(double scale)
+    {
+        m_impl->ProjectionScale.store(scale);
+    }
+
+    TextureFormat System::Session::GetColorTextureFormat() const
+    {
+        return m_impl->ColorTextureFormat;
     }
 
     void System::Session::SetDepthsNearFar(float depthNear, float depthFar)

@@ -1,0 +1,6 @@
+{
+  "queries": [
+    "webgpu:api,validation,createTexture:viewFormats:formatFeature=\"_undef_\";viewFormatFeature=\"_undef_\"",
+    "webgpu:api,validation,createView:format:textureFormatFeature=\"_undef_\";viewFormatFeature=\"_undef_\""
+  ]
+}

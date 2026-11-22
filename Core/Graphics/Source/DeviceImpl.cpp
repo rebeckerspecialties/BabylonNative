@@ -538,6 +538,17 @@ namespace Babylon::Graphics
         m_frameSyncCV.notify_all();
     }
 
+    bool DeviceImpl::TryIncrementPendingFrameScopes()
+    {
+        std::lock_guard lock{m_frameSyncMutex};
+        if (m_frameBlocked)
+        {
+            return false;
+        }
+        ++m_pendingFrameScopes;
+        return true;
+    }
+
     void DeviceImpl::SetActiveEncoder(bgfx::Encoder* encoder)
     {
         m_frameEncoder = encoder;

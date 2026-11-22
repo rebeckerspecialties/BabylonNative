@@ -59,10 +59,13 @@ set(SOURCES
     "Source/App.cpp"
     "Source/Tests.JavaScript.cpp"
     "Source/Tests.NativeXr.Compositor.cpp"
+    "Source/Tests.NativeXr.ReferenceSpace.cpp"
+    "Source/Tests.NativeXr.ProjectionExtent.cpp"
     "Source/Tests.NativeXr.ImageTracking.cpp")
 
 set(UNITTEST_LIBRARIES
     AppRuntime
+    babylon_webxr_core
     Blob
     Canvas
     Compression
@@ -171,6 +174,9 @@ if(TARGET NativeEngine)
         list(APPEND ADDITIONAL_COMPILE_DEFINITIONS HAS_RENDERDOC)
     endif()
 elseif(TARGET NativeWebGPU)
+    list(APPEND SOURCES
+        "Source/Tests.GraphicsWgpu.ScreenShot.cpp"
+        "Source/Tests.GraphicsWgpu.FrameCompletion.cpp")
     if(APPLE)
         list(APPEND SOURCES
             "Source/MetalCppImplementation.cpp")

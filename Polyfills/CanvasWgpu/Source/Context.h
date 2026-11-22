@@ -134,6 +134,9 @@ namespace Babylon::Polyfills::Internal
         float m_shadowOffsetY{0.f};
 
         std::map<std::string, int> m_fonts;
+#ifdef __ANDROID__
+        std::optional<int> m_systemFaces[2];
+#endif
         int m_currentFontId{-1};
 
         bool m_frameActive{false};

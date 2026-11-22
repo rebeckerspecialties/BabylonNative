@@ -1,12 +1,15 @@
 #pragma once
 #include <algorithm>
+#include <cctype>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <limits>
 #include <regex>
 #include <string>
+#include <unordered_map>
 #include "CanvasConstants.h"
-#include "nanovg/nanovg.h"
+#include <nanovg/nanovg.h>
 
 namespace Babylon::Polyfills::Internal
 {
@@ -29,8 +32,10 @@ namespace Babylon::Polyfills::Internal
     static NVGcolor StringToColor(Napi::Env env, const std::string& colorString)
     {
         std::string str = colorString;
-        std::transform(str.begin(), str.end(), str.begin(),
-            [](unsigned char c) { return std::tolower(c); });
+        for (char& c : str)
+        {
+            c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        }
 
         static const std::unordered_map<std::string, uint32_t> webColors = {
             {"aliceblue", 0xf0f8ff},

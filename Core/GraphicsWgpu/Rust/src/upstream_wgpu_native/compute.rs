@@ -3,53 +3,16 @@
 // Keep this small: it exists to preserve the native WebGPU test hook while the
 // renderer is being collapsed toward the upstream wgpu-native C API.
 
-use std::sync::{Mutex, OnceLock};
-
-use super::{bootstrap_local_wgpu_runtime, create_local_instance, LocalBootstrapRuntime};
-
 #[cfg(feature = "wgpu-native-rlib")]
 unsafe extern "C" {
     fn wgpuGetVersion() -> u32;
 }
 
-struct ComputeRuntime {
-    _instance: wgpu::Instance,
-    _bootstrap: LocalBootstrapRuntime,
+#[derive(Default)]
+pub(crate) struct ComputeCache {
     cached_shader_source: String,
     cached_entry_point: String,
     cached_pipeline: Option<wgpu::ComputePipeline>,
-}
-
-static COMPUTE_RUNTIME: OnceLock<Mutex<Option<ComputeRuntime>>> = OnceLock::new();
-
-fn compute_runtime_cell() -> &'static Mutex<Option<ComputeRuntime>> {
-    COMPUTE_RUNTIME.get_or_init(|| Mutex::new(None))
-}
-
-fn initialize_compute_runtime(prefer_low_power: bool) -> Result<ComputeRuntime, String> {
-    let instance = create_local_instance();
-    let bootstrap = bootstrap_local_wgpu_runtime(&instance, None, prefer_low_power)?;
-
-    Ok(ComputeRuntime {
-        _instance: instance,
-        _bootstrap: bootstrap,
-        cached_shader_source: String::new(),
-        cached_entry_point: String::new(),
-        cached_pipeline: None,
-    })
-}
-
-fn ensure_runtime_locked(
-    runtime_slot: &mut Option<ComputeRuntime>,
-    prefer_low_power: bool,
-) -> Result<&mut ComputeRuntime, String> {
-    if runtime_slot.is_none() {
-        *runtime_slot = Some(initialize_compute_runtime(prefer_low_power)?);
-    }
-
-    Ok(runtime_slot
-        .as_mut()
-        .expect("runtime initialized before returning mutable reference"))
 }
 
 pub fn version() -> u32 {
@@ -72,14 +35,13 @@ pub fn dispatch_compute_global(
     x: u32,
     y: u32,
     z: u32,
-    prefer_low_power: bool,
 ) -> Result<(), String> {
-    let mut runtime_guard = match compute_runtime_cell().lock() {
-        Ok(lock) => lock,
-        Err(poisoned) => poisoned.into_inner(),
-    };
-
-    let runtime = ensure_runtime_locked(&mut runtime_guard, prefer_low_power)?;
+    let renderer = crate::active_renderer()?;
+    let (device, queue) = &renderer.device_queue;
+    let mut runtime = renderer
+        .compute_cache
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     let entry = if entry_point.is_empty() {
         "main"
     } else {
@@ -91,27 +53,19 @@ pub fn dispatch_compute_global(
         || runtime.cached_entry_point != entry;
 
     if pipeline_needs_rebuild {
-        let shader_module =
-            runtime
-                ._bootstrap
-                .device
-                .create_shader_module(wgpu::ShaderModuleDescriptor {
-                    label: Some("babylon-native-webgpu.compute-shader"),
-                    source: wgpu::ShaderSource::Wgsl(shader_source.into()),
-                });
+        let shader_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("babylon-native-webgpu.compute-shader"),
+            source: wgpu::ShaderSource::Wgsl(shader_source.into()),
+        });
 
-        let pipeline =
-            runtime
-                ._bootstrap
-                .device
-                .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                    label: Some("babylon-native-webgpu.compute-pipeline"),
-                    layout: None,
-                    module: &shader_module,
-                    entry_point: Some(entry),
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                    cache: None,
-                });
+        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("babylon-native-webgpu.compute-pipeline"),
+            layout: None,
+            module: &shader_module,
+            entry_point: Some(entry),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            cache: None,
+        });
 
         runtime.cached_shader_source.clear();
         runtime.cached_shader_source.push_str(shader_source);
@@ -124,8 +78,6 @@ pub fn dispatch_compute_global(
         .cached_pipeline
         .as_ref()
         .ok_or_else(|| "compute pipeline was not available after creation".to_string())?;
-    let device = &runtime._bootstrap.device;
-    let queue = &runtime._bootstrap.queue;
 
     let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
         label: Some("babylon-native-webgpu.compute-encoder"),

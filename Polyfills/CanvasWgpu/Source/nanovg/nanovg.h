@@ -101,6 +101,7 @@ static inline NVGcolor nvgRGBAf(float r, float g, float b, float a)
     return c;
 }
 
+NVGcolor nvgHSLA(float h, float s, float l, unsigned char a);
 NVGcontext* nvgCreate(int flags);
 const char* nvgLastCreateError();
 const char* nvgLastReadPixelsError();

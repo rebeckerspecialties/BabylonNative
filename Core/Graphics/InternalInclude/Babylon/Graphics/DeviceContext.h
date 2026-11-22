@@ -12,6 +12,7 @@
 
 #include <array>
 #include <mutex>
+#include <optional>
 #include <unordered_map>
 
 namespace Babylon::Graphics
@@ -63,6 +64,8 @@ namespace Babylon::Graphics
     private:
         friend class DeviceContext;
         FrameCompletionScope(DeviceImpl&);
+        struct Adopt {};
+        FrameCompletionScope(DeviceImpl& impl, Adopt) : m_impl{&impl} {}
         DeviceImpl* m_impl;
     };
 
@@ -92,6 +95,7 @@ namespace Babylon::Graphics
         // single phase can hold it stack-scoped. See the class comment on
         // FrameCompletionScope above for the two patterns.
         FrameCompletionScope AcquireFrameCompletionScope();
+        std::optional<FrameCompletionScope> TryAcquireFrameCompletionScope();
 
         // Active encoder for the current frame. Managed by DeviceImpl in
         // StartRenderingCurrentFrame/FinishRenderingCurrentFrame.

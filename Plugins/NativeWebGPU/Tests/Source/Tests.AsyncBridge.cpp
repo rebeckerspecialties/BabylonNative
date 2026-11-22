@@ -169,6 +169,7 @@ TEST(NativeWebGPUAsyncBridge, AnimationFrameCancellationAndNestingMatchBrowserSe
     loader.Eval(R"JS(
         (() => {
             const calls = [];
+            let firstTimestamp;
             __babylonNativeWebGpuAnimationFrameState.nextId = 0x70000000;
             const canceledId = requestAnimationFrame(() => calls.push("canceled"));
             let canceledDuringFrameId;
@@ -176,18 +177,28 @@ TEST(NativeWebGPUAsyncBridge, AnimationFrameCancellationAndNestingMatchBrowserSe
                 if (typeof timestamp !== "number" || !Number.isFinite(timestamp)) {
                     throw new Error("Animation frame timestamp is not finite: " + String(timestamp));
                 }
+                firstTimestamp = timestamp;
                 calls.push("first");
                 cancelAnimationFrame(canceledDuringFrameId);
-                requestAnimationFrame(() => {
+                requestAnimationFrame((nestedTimestamp) => {
+                    if (nestedTimestamp < firstTimestamp) {
+                        throw new Error("Animation frame timestamps went backwards.");
+                    }
                     calls.push("nested");
                     const actual = calls.join(",");
-                    __nativeWebGpuTestDone(actual === "first,nested", "Unexpected callback order: " + actual);
+                    __nativeWebGpuTestDone(actual === "first,peer,nested", "Unexpected callback order: " + actual);
                 });
                 if (calls.join(",") !== "first") {
                     throw new Error("Nested callback ran in the same frame.");
                 }
             });
             canceledDuringFrameId = requestAnimationFrame(() => calls.push("canceled-during-frame"));
+            requestAnimationFrame((timestamp) => {
+                if (timestamp !== firstTimestamp) {
+                    throw new Error("Callbacks in one animation frame received different timestamps.");
+                }
+                calls.push("peer");
+            });
 
             if (typeof canceledId !== "number" || typeof firstId !== "number" ||
                 typeof canceledDuringFrameId !== "number" || canceledId === firstId ||
@@ -253,6 +264,139 @@ TEST(NativeWebGPUAsyncBridge, DescriptorlessArrayTextureViewUsesWebGpuDefaultDim
         })().catch((error) => {
             __nativeWebGpuTestDone(false, error && error.stack ? error.stack : String(error));
         });
+    )JS");
+}
+
+TEST(NativeWebGPUAsyncBridge, BufferPrototypeMethodsUseTheirActualReceiver)
+{
+    RunNativeWebGpuAsyncScript(R"JS(
+        (async () => {
+            const adapter = await navigator.gpu.requestAdapter();
+            const a = await adapter.requestDevice();
+            const b = await adapter.requestDevice();
+            const make = device => device.createBuffer({size: 16, usage: GPUBufferUsage.MAP_WRITE | GPUBufferUsage.COPY_SRC});
+            const first = make(a), second = make(b);
+            for (const name of ["mapAsync", "getMappedRange", "unmap", "destroy"]) {
+                if (!Object.hasOwn(GPUBuffer.prototype, name) || Object.hasOwn(first, name) || first[name] !== second[name]) {
+                    throw Error(name + " is not a shared GPUBuffer prototype operation");
+                }
+            }
+            await first.mapAsync.call(second, GPUMapMode.WRITE);
+            if (first.mapState !== "unmapped" || second.mapState !== "mapped") throw Error("Wrong mapped receiver");
+            const range = first.getMappedRange.call(second);
+            first.unmap.call(second);
+            if (range.byteLength !== 0 || second.mapState !== "unmapped") throw Error("Wrong unmap receiver");
+            const invalid = [Object.create(first), a.createSampler(), {}];
+            for (const receiver of invalid) {
+                const promise = first.mapAsync.call(receiver, GPUMapMode.WRITE);
+                if (!(promise instanceof Promise) || !(await promise.then(() => null, e => e) instanceof TypeError)) {
+                    throw Error("Invalid mapAsync receiver must reject TypeError");
+                }
+                for (const name of ["getMappedRange", "unmap", "destroy"]) {
+                    let error;
+                    try { first[name].call(receiver); } catch (e) { error = e; }
+                    if (!(error instanceof TypeError)) throw Error("Invalid " + name + " receiver was accepted");
+                }
+            }
+            first.destroy.call(second);
+            await first.mapAsync(GPUMapMode.WRITE);
+            first.unmap();
+            first.destroy();
+            __nativeWebGpuTestDone(true, "");
+        })().catch(error => __nativeWebGpuTestDone(false, error.stack || String(error)));
+    )JS");
+}
+
+TEST(NativeWebGPUAsyncBridge, TextureViewsRequireAnExplicitAlternateFormat)
+{
+    RunNativeWebGpuAsyncScript(R"JS(
+        (async () => {
+            const device = await (await navigator.gpu.requestAdapter()).requestDevice();
+            const base = {size: [4, 4], format: "rgba8unorm", usage: GPUTextureUsage.TEXTURE_BINDING};
+            async function check(descriptor, format, valid) {
+                const texture = device.createTexture(descriptor);
+                device.pushErrorScope("validation");
+                texture.createView({format});
+                const error = await device.popErrorScope();
+                texture.destroy();
+                if ((error === null) !== valid) {
+                    throw Error("Unexpected validation for " + format + " with " +
+                        JSON.stringify(descriptor.viewFormats) + ": " + (error?.message ?? "success"));
+                }
+            }
+            await check(base, "rgba8unorm", true);
+            await check(base, "rgba8unorm-srgb", false);
+            await check({...base, viewFormats: []}, "rgba8unorm-srgb", false);
+            await check({...base, viewFormats: ["rgba8unorm-srgb"]}, "rgba8unorm-srgb", true);
+            await check({...base, viewFormats: new Set(["rgba8unorm-srgb"]),
+                toJSON() { throw Error("GPUTextureDescriptor is not JSON"); }}, "rgba8unorm-srgb", true);
+            await check({...base, format: "rgba8unorm-srgb", viewFormats: ["rgba8unorm"]}, "rgba8unorm", true);
+            __nativeWebGpuTestDone(true, "");
+        })().catch(error => __nativeWebGpuTestDone(false, error.stack || String(error)));
+    )JS");
+}
+
+TEST(NativeWebGPUAsyncBridge, BindGroupEntriesConvertInIteratorOrderWithoutJsonSerialization)
+{
+    RunNativeWebGpuAsyncScript(R"JS(
+        (async () => {
+            const check = (v, m) => { if (!v) throw Error(m); };
+            const adapter = await navigator.gpu.requestAdapter();
+            const device = await adapter.requestDevice();
+            const layout = device.createBindGroupLayout({entries: [
+                {binding: 0, visibility: 4, buffer: {type: "uniform"}},
+                {binding: 1, visibility: 4, sampler: {}}
+            ]});
+            const buffer = device.createBuffer({size: 256, usage: GPUBufferUsage.UNIFORM});
+            const sampler = device.createSampler({});
+            const calls = [];
+            const marker = Error("entry getter failed");
+            device.pushErrorScope("validation");
+            const entries = {
+                *[Symbol.iterator]() {
+                    calls.push("first");
+                    yield {binding: 0, get resource() { calls.push("read"); return {buffer, size: 64}; }};
+                    calls.push("second");
+                    yield {binding: 1, resource: sampler};
+                }
+            };
+            device.createBindGroup({layout, entries, get toJSON() { throw Error("Unexpected JSON serialization"); }});
+            check(calls.join(",") === "first,read,second", "Entry values must convert before advancing the iterator: " + calls);
+            check(await device.popErrorScope() === null, "Valid mixed bindings produced a validation error");
+            const rawLayout = device.createBindGroupLayout({entries: [
+                {binding: 0, visibility: 4, buffer: {}}, {binding: 1, visibility: 4, texture: {}}
+            ]});
+            const texture = device.createTexture({size: [2, 2], format: "rgba8unorm", usage: GPUTextureUsage.TEXTURE_BINDING});
+            texture.createView = () => { throw Error("Internal conversion must not call an application override"); };
+            device.pushErrorScope("validation");
+            for (let i = 0; i < 2; ++i) {
+                device.createBindGroup({layout: rawLayout, entries: [{binding: 0, resource: buffer}, {binding: 1, resource: texture}]});
+            }
+            check(await device.popErrorScope() === null, "Raw GPUBuffer or GPUTexture was rejected");
+            let caught;
+            try { device.createBindGroup({layout, entries:[{binding:0, get resource(){throw marker;}}]}); }
+            catch (error) { caught = error; }
+            check(caught === marker, "Entry getter exception was replaced");
+            caught = undefined;
+            try { device.createBindGroup({layout, entries:{length:0}}); } catch (error) { caught = error; }
+            check(caught instanceof TypeError, "Non-iterable array-like entries must fail Web IDL conversion");
+            const empty = device.createBindGroupLayout({entries: []});
+            device.pushErrorScope("validation");
+            device.createBindGroup({layout: empty, entries: []});
+            check(await device.popErrorScope() === null, "Empty group failed");
+            device.pushErrorScope("validation");
+            device.createBindGroup({layout, entries:[{binding:0,resource:{buffer,size:0}},{binding:1,resource:sampler}]});
+            check(await device.popErrorScope() instanceof GPUValidationError, "Explicit zero size was treated as the remainder of the buffer");
+            const other = await adapter.requestDevice();
+            const foreign = other.createSampler({});
+            other.pushErrorScope("validation");
+            device.pushErrorScope("validation");
+            device.createBindGroup({layout, entries:[{binding:0,resource:{buffer}},{binding:1,resource:foreign}]});
+            check(await device.popErrorScope() instanceof GPUValidationError, "Foreign resource accepted");
+            check(await other.popErrorScope() === null, "Validation error reported to foreign owner");
+            device.destroy(); other.destroy();
+            __nativeWebGpuTestDone(true, "");
+        })().catch(e => __nativeWebGpuTestDone(false, e.stack || String(e)));
     )JS");
 }
 
@@ -633,6 +777,39 @@ TEST(NativeWebGPUAsyncBridge, LogicalDevicesIsolateErrorsResourcesAndLoss)
     )JS");
 }
 
+TEST(NativeWebGPUAsyncBridge, MapCompletionHandlesCancellationRemapAndQueueOrder)
+{
+    RunNativeWebGpuAsyncScript(R"JS(
+        (async () => {
+            const device = await (await navigator.gpu.requestAdapter()).requestDevice();
+            const check = (ok, message) => { if (!ok) throw Error(message); };
+            const make = () => device.createBuffer({size: 8, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ});
+            const a = make(), b = make(), order = [];
+            device.queue.writeBuffer(a, 0, new Uint32Array([17, 23]));
+            const aborted = a.mapAsync(GPUMapMode.READ).then(() => "resolved", e => e.name);
+            a.unmap();
+            const next = a.mapAsync(GPUMapMode.READ).then(() => {
+                check(new Uint32Array(a.getMappedRange())[1] === 23, "remap lost queued bytes");
+                order.push("map");
+            });
+            const other = b.mapAsync(GPUMapMode.READ).then(() => order.push("other"));
+            const done = device.queue.onSubmittedWorkDone().then(() => order.push("queue"));
+            check(a.mapState === "pending", "mapping completed inline");
+            check(await aborted === "AbortError", "cancelled request did not reject");
+            await Promise.all([next, other, done]);
+            check(order.length === 3 && order[2] === "queue", "queue settled ahead of an earlier map: " + order);
+            a.unmap(); b.unmap();
+            for (const destroyDevice of [false, true]) {
+                const buffer = make();
+                const pending = buffer.mapAsync(GPUMapMode.READ).then(() => "resolved", e => e.name);
+                if (destroyDevice) device.destroy(); else buffer.destroy();
+                check(await pending === "AbortError", "destroy did not cancel map");
+            }
+            __nativeWebGpuTestDone(true, "");
+        })().catch(e => __nativeWebGpuTestDone(false, e.stack || String(e)));
+    )JS");
+}
+
 TEST(NativeWebGPUAsyncBridge, AsyncPipelineErrorsRejectWithoutScopeOrEventLeakage)
 {
     RunNativeWebGpuAsyncScript(R"JS(
@@ -655,6 +832,37 @@ TEST(NativeWebGPUAsyncBridge, AsyncPipelineErrorsRejectWithoutScopeOrEventLeakag
             device.destroy();
             check(await pending instanceof GPUComputePipeline, 'Destroyed device did not resolve invalid pipeline');
             __nativeWebGpuTestDone(true, '');
+        })().catch(e => __nativeWebGpuTestDone(false, e.stack || String(e)));
+    )JS");
+}
+
+TEST(NativeWebGPUAsyncBridge, QueuedCompilesSnapshotDescriptorsAndKeepDevicesIsolated)
+{
+    RunNativeWebGpuAsyncScript(R"JS(
+        (async () => {
+            const adapter = await navigator.gpu.requestAdapter();
+            const a = await adapter.requestDevice(), b = await adapter.requestDevice();
+            const shader = device => device.createShaderModule({code:"@compute @workgroup_size(1) fn entry() {}"});
+            const descriptor = {layout:"auto", compute:{module:shader(a), entryPoint:"entry"}};
+            a.pushErrorScope("validation");
+            b.pushErrorScope("validation");
+            const goodA = a.createComputePipelineAsync(descriptor);
+            descriptor.compute.module = shader(b);
+            const wrong = a.createComputePipelineAsync(descriptor);
+            const goodB = b.createComputePipelineAsync(descriptor);
+            descriptor.compute.entryPoint = "missing";
+            const bad = b.createComputePipelineAsync(descriptor);
+            const scopes = Promise.all([a.popErrorScope(), b.popErrorScope()]);
+            const [one, two, three, four] = await Promise.allSettled([goodA, wrong, goodB, bad]);
+            for (const r of [one, three]) {
+                if (r.status !== "fulfilled" || !(r.value instanceof GPUComputePipeline)) throw Error("Lost valid pipeline");
+            }
+            for (const r of [two, four]) {
+                if (r.status !== "rejected" || !(r.reason instanceof GPUPipelineError) || r.reason.reason !== "validation") throw Error("Lost validation failure");
+            }
+            if ((await scopes).some(Boolean)) throw Error("Error leaked between compiles");
+            a.destroy(); b.destroy();
+            __nativeWebGpuTestDone(true, "");
         })().catch(e => __nativeWebGpuTestDone(false, e.stack || String(e)));
     )JS");
 }

@@ -1,0 +1,314 @@
+diff --git a/packages/dev/core/src/Engines/Extensions/engine.multiview.pure.ts b/packages/dev/core/src/Engines/Extensions/engine.multiview.pure.ts
+index f4fe0fd551..70eda05f20 100644
+--- a/packages/dev/core/src/Engines/Extensions/engine.multiview.pure.ts
++++ b/packages/dev/core/src/Engines/Extensions/engine.multiview.pure.ts
+@@ -7,10 +7,9 @@ import { MultiviewRenderTarget } from "../../Materials/Textures/MultiviewRenderT
+ import { Frustum } from "../../Maths/math.frustum";
+ import { type WebGLRenderTargetWrapper } from "../WebGL/webGLRenderTargetWrapper";
+ import { type RenderTargetWrapper } from "../renderTargetWrapper";
+-import { type AbstractEngine } from "../abstractEngine.pure";
+ import { Camera } from "../../Cameras/camera.pure";
+ import { Engine } from "../../Engines/engine.pure";
+-import { UniformBuffer } from "../../Materials/uniformBuffer";
++import { type UniformBuffer } from "../../Materials/uniformBuffer";
+ 
+ let _Registered = false;
+ /**
+@@ -23,18 +22,6 @@ export function RegisterEngineMultiview(): void {
+     }
+     _Registered = true;
+ 
+-    // eslint-disable-next-line @typescript-eslint/naming-convention
+-    function CreateMultiviewUbo(engine: AbstractEngine, name?: string, trackUBOsInFrame?: boolean) {
+-        const ubo = new UniformBuffer(engine, undefined, true, name, undefined, trackUBOsInFrame);
+-        ubo.addUniform("viewProjection", 16);
+-        ubo.addUniform("viewProjectionR", 16);
+-        ubo.addUniform("view", 16);
+-        ubo.addUniform("projection", 16);
+-        ubo.addUniform("vEyePosition", 4);
+-        ubo.addUniform("inverseProjection", 16);
+-        return ubo;
+-    }
+-
+     // eslint-disable-next-line @typescript-eslint/naming-convention
+     const CurrentCreateSceneUniformBuffer = Scene.prototype.createSceneUniformBuffer;
+ 
+@@ -145,7 +132,7 @@ export function RegisterEngineMultiview(): void {
+     Scene.prototype._multiviewSceneUboIsActive = false;
+ 
+     Scene.prototype._createMultiviewUbo = function () {
+-        this._multiviewSceneUbo = CreateMultiviewUbo(this.getEngine(), "scene_multiview");
++        this._multiviewSceneUbo = this._createSceneUniformBuffer("scene_multiview", undefined, true);
+         this._multiviewSceneUboIsActive = true;
+     };
+ 
+@@ -153,7 +140,7 @@ export function RegisterEngineMultiview(): void {
+         const forceMono = typeof trackUBOsInFrameOrOptions === "object" && !!trackUBOsInFrameOrOptions?.forceMono;
+         if (!forceMono && this._multiviewSceneUboIsActive) {
+             const trackUBOsInFrame = typeof trackUBOsInFrameOrOptions === "boolean" ? trackUBOsInFrameOrOptions : trackUBOsInFrameOrOptions?.trackUBOsInFrame;
+-            return CreateMultiviewUbo(this.getEngine(), name, trackUBOsInFrame);
++            return this._createSceneUniformBuffer(name, trackUBOsInFrame, true);
+         }
+         // Cast to implementation signature: .call() on overloaded functions resolves to the last overload in TypeScript,
+         // but the original implementation correctly handles boolean | ICreateSceneUboOptions | undefined.
+diff --git a/packages/dev/core/src/Engines/WebGPU/webgpuCacheRenderPipeline.ts b/packages/dev/core/src/Engines/WebGPU/webgpuCacheRenderPipeline.ts
+index 2769ce9e4f..8328230fca 100644
+--- a/packages/dev/core/src/Engines/WebGPU/webgpuCacheRenderPipeline.ts
++++ b/packages/dev/core/src/Engines/WebGPU/webgpuCacheRenderPipeline.ts
+@@ -1259,6 +1259,7 @@ export abstract class WebGPUCacheRenderPipeline {
+ 
+         return {
+             label: `RenderPipeline_${colorStates[0]?.format ?? "nooutput"}_${this._webgpuDepthStencilFormat ?? "nodepth"}_samples${sampleCount}_textureState${this._textureState}`,
++            ...(effect.defines.includes("#define MULTIVIEW\n") || effect.defines.endsWith("#define MULTIVIEW") ? { _xrViewCount: 2 } : {}),
+             layout: pipelineLayout,
+             vertex: {
+                 module: webgpuPipelineContext.stages!.vertexStage.module,
+diff --git a/packages/dev/core/src/Engines/WebGPU/webgpuShaderProcessorsWGSL.pure.ts b/packages/dev/core/src/Engines/WebGPU/webgpuShaderProcessorsWGSL.pure.ts
+index e997553e70..14b8eb1818 100644
+--- a/packages/dev/core/src/Engines/WebGPU/webgpuShaderProcessorsWGSL.pure.ts
++++ b/packages/dev/core/src/Engines/WebGPU/webgpuShaderProcessorsWGSL.pure.ts
+@@ -381,12 +381,19 @@ export class WebGPUShaderProcessorWGSL extends WebGPUShaderProcessor {
+         vertexCode = this._processStridedUniformArrays(vertexCode);
+ 
+         let vertexInputs = "struct VertexInputs {\n  @builtin(vertex_index) vertexIndex : u32,\n  @builtin(instance_index) instanceIndex : u32,\n";
++        const usesViewIndex = vertexCode.includes("vertexInputs.viewIndex");
++        if (usesViewIndex) {
++            vertexInputs += "  @builtin(view_index) viewIndex : u32,\n";
++        }
+         if (this._attributesInputWGSL.length > 0) {
+             vertexInputs += this._attributesInputWGSL.join("\n");
+         }
+         vertexInputs += "\n};\nvar<private> vertexInputs" + (this._hasNonFloatAttribute ? "_" : "") + " : VertexInputs;\n";
+         if (this._hasNonFloatAttribute) {
+             vertexInputs += "struct VertexInputs_ {\n  vertexIndex : u32, instanceIndex : u32,\n";
++            if (usesViewIndex) {
++                vertexInputs += "  viewIndex : u32,\n";
++            }
+             vertexInputs += this._attributesWGSL.join("\n");
+             vertexInputs += "\n};\nvar<private> vertexInputs : VertexInputs_;\n";
+         }
+@@ -403,6 +410,9 @@ export class WebGPUShaderProcessorWGSL extends WebGPUShaderProcessor {
+         let vertexMainStartingCode = `\n  vertexInputs${this._hasNonFloatAttribute ? "_" : ""} = input;\n`;
+         if (this._hasNonFloatAttribute) {
+             vertexMainStartingCode += "vertexInputs.vertexIndex = vertexInputs_.vertexIndex;\nvertexInputs.instanceIndex = vertexInputs_.instanceIndex;\n";
++            if (usesViewIndex) {
++                vertexMainStartingCode += "vertexInputs.viewIndex = vertexInputs_.viewIndex;\n";
++            }
+             vertexMainStartingCode += this._attributesConversionCodeWGSL.join("\n");
+             vertexMainStartingCode += "\n";
+         }
+diff --git a/packages/dev/core/src/Engines/webgpuEngine.pure.ts b/packages/dev/core/src/Engines/webgpuEngine.pure.ts
+index a7fef485f8..208703fb10 100644
+--- a/packages/dev/core/src/Engines/webgpuEngine.pure.ts
++++ b/packages/dev/core/src/Engines/webgpuEngine.pure.ts
+@@ -1160,7 +1160,7 @@ export class WebGPUEngine extends ThinWebGPUEngine {
+                 typeof BigUint64Array !== "undefined" && this._deviceEnabledExtensions.indexOf(WebGPUConstants.FeatureName.TimestampQuery) !== -1 ? (true as any) : undefined,
+             supportOcclusionQuery: typeof BigUint64Array !== "undefined",
+             canUseTimestampForTimerQuery: true,
+-            multiview: false,
++            multiview: (this._device as GPUDevice & { _nativeFeatures?: ReadonlySet<string> })._nativeFeatures?.has("xr-stereo-multiview") === true,
+             oculusMultiview: false,
+             parallelShaderCompile: undefined,
+             blendMinMax: true,
+@@ -3571,6 +3571,7 @@ export class WebGPUEngine extends ThinWebGPUEngine {
+         this._endCurrentRenderPass();
+ 
+         const rtWrapper = renderTargetWrapper as WebGPURenderTargetWrapper;
++        const stereo = rtWrapper.texture?.isMultiview === true;
+         const sampleCount = renderTargetWrapper.samples;
+         const useMSAA = sampleCount > 1;
+ 
+@@ -3592,7 +3593,8 @@ export class WebGPUEngine extends ThinWebGPUEngine {
+         }
+ 
+         if (!depthStencilView && gpuDepthStencilTexture) {
+-            depthStencilView = this._cacheTextureViews.getView(gpuDepthStencilTexture, this._rttRenderPassWrapper.depthAttachmentViewDescriptor!);
++            const descriptor = this._rttRenderPassWrapper.depthAttachmentViewDescriptor!;
++            depthStencilView = this._cacheTextureViews.getView(gpuDepthStencilTexture, stereo ? { ...descriptor, dimension: "2d-array", baseArrayLayer: 0, arrayLayerCount: 2 } : descriptor);
+         }
+ 
+         if (!format && gpuDepthStencilWrapper) {
+@@ -3681,7 +3683,8 @@ export class WebGPUEngine extends ThinWebGPUEngine {
+                 const layerIndex = depthSlice ?? this._rttRenderPassWrapper.colorAttachmentViewDescriptor!.baseArrayLayer;
+ 
+                 const gpuMSAATexture = useMSAA ? gpuWrapper.getMSAATexture(sampleCount, layerIndex) : undefined;
+-                const colorTextureView = this._cacheTextureViews.getView(gpuTexture, this._rttRenderPassWrapper.colorAttachmentViewDescriptor!);
++                const descriptor = this._rttRenderPassWrapper.colorAttachmentViewDescriptor!;
++                const colorTextureView = this._cacheTextureViews.getView(gpuTexture, stereo ? { ...descriptor, dimension: "2d-array", baseArrayLayer: 0, arrayLayerCount: 2 } : descriptor);
+                 const colorMSAATextureView = gpuMSAATexture
+                     ? this._cacheTextureViews.getView(gpuMSAATexture, this._rttRenderPassWrapper.colorAttachmentViewDescriptor!)
+                     : undefined;
+@@ -3728,7 +3731,9 @@ export class WebGPUEngine extends ThinWebGPUEngine {
+             occlusionQuerySet: this._occlusionQuery?.hasQueries ? this._occlusionQuery.querySet : undefined,
+         };
+         this._timestampQuery.startPass(this._rttRenderPassWrapper.renderPassDescriptor, this._timestampIndex);
+-        this._currentRenderPass = this._renderEncoder.beginRenderPass(this._rttRenderPassWrapper.renderPassDescriptor);
++        const descriptor = this._rttRenderPassWrapper.renderPassDescriptor;
++        const passDescriptor = stereo ? { ...descriptor, _xrViewCount: 2 } : descriptor;
++        this._currentRenderPass = this._renderEncoder.beginRenderPass(passDescriptor);
+ 
+         this._debugPushAfterStartOfEncoder();
+ 
+diff --git a/packages/dev/core/src/ShadersWGSL/default.vertex.fx b/packages/dev/core/src/ShadersWGSL/default.vertex.fx
+index 2f64f59115..12cf5d11e0 100644
+--- a/packages/dev/core/src/ShadersWGSL/default.vertex.fx
++++ b/packages/dev/core/src/ShadersWGSL/default.vertex.fx
+@@ -171,7 +171,7 @@ fn main(input : VertexInputs) -> FragmentInputs {
+ #define CUSTOM_VERTEX_UPDATE_WORLDPOS
+ 
+ #ifdef MULTIVIEW
+-	if (gl_ViewID_OVR == 0u) {
++	if (vertexInputs.viewIndex == 0u) {
+ 		vertexOutputs.position = scene.viewProjection * worldPos;
+ 	} else {
+ 		vertexOutputs.position = scene.viewProjectionR * worldPos;
+diff --git a/packages/dev/core/src/ShadersWGSL/pbr.vertex.fx b/packages/dev/core/src/ShadersWGSL/pbr.vertex.fx
+index 945191b87f..aa12eca98a 100644
+--- a/packages/dev/core/src/ShadersWGSL/pbr.vertex.fx
++++ b/packages/dev/core/src/ShadersWGSL/pbr.vertex.fx
+@@ -231,7 +231,7 @@ fn main(input : VertexInputs) -> FragmentInputs {
+ #define CUSTOM_VERTEX_UPDATE_WORLDPOS
+ 
+ #ifdef MULTIVIEW
+-	if (gl_ViewID_OVR == 0u) {
++	if (vertexInputs.viewIndex == 0u) {
+ 		vertexOutputs.position = scene.viewProjection * worldPos;
+ 	} else {
+ 		vertexOutputs.position = scene.viewProjectionR * worldPos;
+@@ -337,4 +337,4 @@ fn main(input : VertexInputs) -> FragmentInputs {
+ 
+ #define CUSTOM_VERTEX_MAIN_END
+ 
+-}
+\ No newline at end of file
++}
+diff --git a/packages/dev/core/src/XR/features/Layers/WebXRWebGPUCompositionLayer.ts b/packages/dev/core/src/XR/features/Layers/WebXRWebGPUCompositionLayer.ts
+index 14ec4971f6..e56dd9eca8 100644
+--- a/packages/dev/core/src/XR/features/Layers/WebXRWebGPUCompositionLayer.ts
++++ b/packages/dev/core/src/XR/features/Layers/WebXRWebGPUCompositionLayer.ts
+@@ -62,17 +62,18 @@ export class WebXRWebGPUCompositionLayerRenderTargetTextureProvider<
+     }
+ 
+     protected _getRenderTargetForSubImage(subImage: XRGPUSubImage, eye: XREye = "none") {
+-        const lastSubImage = this._lastSubImages.get(eye);
+-        const eyeIndex = eye == "right" ? 1 : 0;
+-
+         const colorTexture = subImage.colorTexture;
+         const colorTextureWidth = colorTexture.width;
+         const colorTextureHeight = colorTexture.height;
+ 
+         const depthStencilTexture = subImage.depthStencilTexture ?? null;
++        // The actual array shape is only known on first acquisition, not at layer creation.
++        const stereo = this.layerWrapper.isMultiview && colorTexture.depthOrArrayLayers === 2 && depthStencilTexture?.depthOrArrayLayers === 2;
++        const eyeIndex = !stereo && eye === "right" ? 1 : 0;
+ 
+         const existingRenderTarget = this._renderTargetTexturesByEye[eyeIndex];
+-        const sizeChanged = !existingRenderTarget || lastSubImage?.colorTexture.width !== colorTextureWidth || lastSubImage?.colorTexture.height !== colorTextureHeight;
++        const size = existingRenderTarget?.getSize();
++        const sizeChanged = !existingRenderTarget || size?.width !== colorTextureWidth || size?.height !== colorTextureHeight || (existingRenderTarget.getViewCount() === 2) !== stereo;
+ 
+         if (sizeChanged) {
+             if (existingRenderTarget) {
+@@ -87,7 +88,7 @@ export class WebXRWebGPUCompositionLayerRenderTargetTextureProvider<
+                 colorTexture,
+                 depthStencilTexture,
+                 this._depthStencilFormat,
+-                this.layerWrapper.isMultiview
++                stereo
+             );
+ 
+             this._framebufferDimensions = {
+@@ -108,7 +109,7 @@ export class WebXRWebGPUCompositionLayerRenderTargetTextureProvider<
+         // index for this eye, so route it into the render target's bind so each eye renders into its own
+         // layer. For non-layered textures this is 0 (unchanged behavior).
+         const renderTargetTexture = this._renderTargetTexturesByEye[eyeIndex];
+-        renderTargetTexture.layerIndex = subImage.getViewDescriptor().baseArrayLayer ?? 0;
++        renderTargetTexture.layerIndex = stereo ? 0 : (subImage.getViewDescriptor().baseArrayLayer ?? 0);
+ 
+         return renderTargetTexture;
+     }
+diff --git a/packages/dev/core/src/XR/features/WebXRLayers.pure.ts b/packages/dev/core/src/XR/features/WebXRLayers.pure.ts
+index a94be58805..2c4dbf0c8f 100644
+--- a/packages/dev/core/src/XR/features/WebXRLayers.pure.ts
++++ b/packages/dev/core/src/XR/features/WebXRLayers.pure.ts
+@@ -238,8 +238,7 @@ export class WebXRLayers extends WebXRAbstractFeature {
+                 throw new Error("Expected a WebGPU graphics binding for a WebGPU engine.");
+             }
+             this._xrGPUBinding = binding.binding;
+-            // Multiview is not yet supported on the WebGPU XR path; force single-view (two sub-images).
+-            this._isMultiviewEnabled = false;
++            this._isMultiviewEnabled = !!this._options.preferMultiviewOnInit && engine.getCaps().multiview;
+             this._createWebGPUProjectionLayer();
+         } else {
+             const binding = this._xrSessionManager._getGraphicsBinding();
+@@ -602,7 +601,7 @@ export class WebXRLayers extends WebXRAbstractFeature {
+         const binding = this._xrGPUBinding!;
+         const init = CreateDefaultXRGPUProjectionLayerInit(binding.getPreferredColorFormat());
+         const projLayer = binding.createProjectionLayer(init);
+-        const layer = new WebXRWebGPUProjectionLayerWrapper(projLayer, false, binding, init.depthStencilFormat);
++        const layer = new WebXRWebGPUProjectionLayerWrapper(projLayer, this._isMultiviewEnabled, binding, init.depthStencilFormat);
+         this.addXRSessionLayer(layer);
+         return layer;
+     }
+diff --git a/packages/dev/core/src/XR/webXRLayerRenderTargetTexture.ts b/packages/dev/core/src/XR/webXRLayerRenderTargetTexture.ts
+index 7326d64d19..ecaaec8dc8 100644
+--- a/packages/dev/core/src/XR/webXRLayerRenderTargetTexture.ts
++++ b/packages/dev/core/src/XR/webXRLayerRenderTargetTexture.ts
+@@ -11,6 +11,10 @@ import { RenderTargetTexture } from "../Materials/Textures/renderTargetTexture.p
+  * @internal
+  */
+ export class WebXRLayerRenderTargetTexture extends RenderTargetTexture {
++    public override getViewCount(): number {
++        return this._texture?.isMultiview ? 2 : 1;
++    }
++
+     /**
+      * The array layer index this render target binds when the scene binds it with no explicit layer.
+      * Defaults to 0. Set per eye by the WebGPU XR layer provider so each eye renders into its own layer.
+diff --git a/packages/dev/core/src/XR/webXRWebGPURenderTargetTextureProvider.ts b/packages/dev/core/src/XR/webXRWebGPURenderTargetTextureProvider.ts
+index 33746b85e6..10d6c0a1e4 100644
+--- a/packages/dev/core/src/XR/webXRWebGPURenderTargetTextureProvider.ts
++++ b/packages/dev/core/src/XR/webXRWebGPURenderTargetTextureProvider.ts
+@@ -1,4 +1,5 @@
+ import { Constants } from "../Engines/constants";
++import { RegisterEngineMultiview } from "../Engines/Extensions/engine.multiview.pure";
+ import { type WebGPUEngine } from "../Engines/webgpuEngine";
+ import { type WebGPURenderTargetWrapper } from "../Engines/WebGPU/webgpuRenderTargetWrapper";
+ import { type InternalTexture } from "../Materials/Textures/internalTexture";
+@@ -118,8 +119,12 @@ export abstract class WebXRWebGPURenderTargetTextureProvider<
+     ): WebXRLayerRenderTargetTexture {
+         const color = this._wrapColorTexture(colorTexture);
+         const depth = depthStencilTexture && depthStencilFormat ? this._wrapDepthTexture(depthStencilTexture, depthStencilFormat) : null;
+-        // Single-view (the only path here) always builds a WebXRLayerRenderTargetTexture via the shell override above.
+-        const renderTargetTexture = this._createRenderTargetTextureInternal(width, height, color, depth, multiview) as WebXRLayerRenderTargetTexture;
++        // Both paths wrap the acquired WebGPU array. Do not allocate a WebGL multiview framebuffer.
++        if (multiview) {
++            RegisterEngineMultiview();
++        }
++        const renderTargetTexture = this._createRenderTargetTextureInternal(width, height, color, depth, false) as WebXRLayerRenderTargetTexture;
++        color.isMultiview = multiview;
+         this._attachPerEyeClearObserver(renderTargetTexture);
+         return renderTargetTexture;
+     }
+diff --git a/packages/dev/core/src/scene.pure.ts b/packages/dev/core/src/scene.pure.ts
+index 5b32f27797..f0463f6595 100644
+--- a/packages/dev/core/src/scene.pure.ts
++++ b/packages/dev/core/src/scene.pure.ts
+@@ -3048,8 +3048,16 @@ export class Scene implements IAnimatable, IClipPlanesHolder, IAssetContainer {
+     public createSceneUniformBuffer(name?: string, options?: ICreateSceneUboOptions): UniformBuffer;
+     public createSceneUniformBuffer(name?: string, trackUBOsInFrameOrOptions?: boolean | ICreateSceneUboOptions): UniformBuffer {
+         const trackUBOsInFrame = typeof trackUBOsInFrameOrOptions === "boolean" ? trackUBOsInFrameOrOptions : trackUBOsInFrameOrOptions?.trackUBOsInFrame;
+-        const sceneUbo = new UniformBuffer(this._engine, undefined, false, name ?? "scene", undefined, trackUBOsInFrame);
++        return this._createSceneUniformBuffer(name ?? "scene", trackUBOsInFrame, false);
++    }
++
++    /** @internal */
++    public _createSceneUniformBuffer(name: string | undefined, trackUBOsInFrame: boolean | undefined, multiview: boolean): UniformBuffer {
++        const sceneUbo = new UniformBuffer(this._engine, undefined, multiview, name, undefined, trackUBOsInFrame);
+         sceneUbo.addUniform("viewProjection", 16);
++        if (multiview) {
++            sceneUbo.addUniform("viewProjectionR", 16);
++        }
+         sceneUbo.addUniform("view", 16);
+         sceneUbo.addUniform("projection", 16);
+         sceneUbo.addUniform("vEyePosition", 4);

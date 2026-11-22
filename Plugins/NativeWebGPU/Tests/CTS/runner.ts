@@ -15,6 +15,8 @@ import { g as errorScope } from '@cts/webgpu/api/validation/error_scope.spec.js'
 import { g as uncaptured } from '@cts/webgpu/api/operation/uncapturederror.spec.js';
 import { g as deviceLost } from '@cts/webgpu/api/operation/device/lost.spec.js';
 import { g as mapping } from '@cts/webgpu/api/validation/buffer/mapping.spec.js';
+import { g as textureCreation } from '@cts/webgpu/api/validation/createTexture.spec.js';
+import { g as textureView } from '@cts/webgpu/api/validation/createView.spec.js';
 import manifest from './smoke.json';
 
 declare const __ctsLog: (message: string) => void;
@@ -40,6 +42,8 @@ const groups = [
   ['api,operation,uncapturederror', uncaptured],
   ['api,operation,device,lost', deviceLost],
   ['api,validation,buffer,mapping', mapping],
+  ['api,validation,createTexture', textureCreation],
+  ['api,validation,createView', textureView],
 ] as const;
 
 async function main() {

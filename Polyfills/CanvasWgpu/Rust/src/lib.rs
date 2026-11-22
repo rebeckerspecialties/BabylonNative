@@ -23,6 +23,12 @@ pub struct NVGcolor {
     pub a: f32,
 }
 
+#[no_mangle]
+pub extern "C" fn nvgHSLA(h: f32, s: f32, l: f32, a: u8) -> NVGcolor {
+    let c = Color::hsla(h, s, l, f32::from(a) / 255.0);
+    NVGcolor { r: c.r, g: c.g, b: c.b, a: c.a }
+}
+
 #[repr(C)]
 #[derive(Copy, Clone, Default)]
 pub struct NVGpaint {
@@ -122,41 +128,6 @@ pub struct NVGcontext {
     backend: Backend,
 }
 
-fn preferred_backends() -> wgpu::Backends {
-    #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
-    {
-        return wgpu::Backends::METAL;
-    }
-
-    #[cfg(target_os = "windows")]
-    {
-        return wgpu::Backends::DX12;
-    }
-
-    #[cfg(not(any(
-        target_os = "macos",
-        target_os = "ios",
-        target_os = "tvos",
-        target_os = "windows"
-    )))]
-    {
-        return wgpu::Backends::VULKAN;
-    }
-}
-
-fn create_instance() -> wgpu::Instance {
-    #[allow(unused_mut)]
-    let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
-    descriptor.backends = preferred_backends();
-
-    #[cfg(target_os = "android")]
-    {
-        descriptor.flags |= wgpu::InstanceFlags::ALLOW_UNDERLYING_NONCOMPLIANT_ADAPTER;
-    }
-
-    wgpu::Instance::new(descriptor)
-}
-
 fn memory_trace_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
     *ENABLED.get_or_init(|| std::env::var_os("BABYLON_NATIVE_WEBGPU_MEMORY_TRACE").is_some())
@@ -212,93 +183,6 @@ fn remove_live_render_texture_bytes(bytes: u64) -> u64 {
         .saturating_sub(bytes)
 }
 
-fn required_canvas_limits(adapter_limits: &wgpu::Limits) -> wgpu::Limits {
-    let default_limits = wgpu::Limits::default();
-    let default_limits_with_resolution = wgpu::Limits {
-        max_texture_dimension_1d: adapter_limits
-            .max_texture_dimension_1d
-            .min(default_limits.max_texture_dimension_1d),
-        max_texture_dimension_2d: adapter_limits
-            .max_texture_dimension_2d
-            .min(default_limits.max_texture_dimension_2d),
-        max_texture_dimension_3d: adapter_limits
-            .max_texture_dimension_3d
-            .min(default_limits.max_texture_dimension_3d),
-        ..default_limits
-    };
-    if wgpu::Limits::check_limits(&default_limits_with_resolution, adapter_limits) {
-        return default_limits_with_resolution;
-    }
-
-    let downlevel_limits = wgpu::Limits::downlevel_defaults();
-    let downlevel_limits_with_resolution = wgpu::Limits {
-        max_texture_dimension_1d: adapter_limits
-            .max_texture_dimension_1d
-            .min(downlevel_limits.max_texture_dimension_1d),
-        max_texture_dimension_2d: adapter_limits
-            .max_texture_dimension_2d
-            .min(downlevel_limits.max_texture_dimension_2d),
-        max_texture_dimension_3d: adapter_limits
-            .max_texture_dimension_3d
-            .min(downlevel_limits.max_texture_dimension_3d),
-        ..downlevel_limits
-    };
-    if wgpu::Limits::check_limits(&downlevel_limits_with_resolution, adapter_limits) {
-        return downlevel_limits_with_resolution;
-    }
-
-    let webgl_limits = wgpu::Limits::downlevel_webgl2_defaults();
-    wgpu::Limits {
-        max_texture_dimension_1d: adapter_limits
-            .max_texture_dimension_1d
-            .min(webgl_limits.max_texture_dimension_1d),
-        max_texture_dimension_2d: adapter_limits
-            .max_texture_dimension_2d
-            .min(webgl_limits.max_texture_dimension_2d),
-        max_texture_dimension_3d: adapter_limits
-            .max_texture_dimension_3d
-            .min(webgl_limits.max_texture_dimension_3d),
-        ..webgl_limits
-    }
-}
-
-fn create_device() -> Result<(wgpu::Device, wgpu::Queue), String> {
-    let instance = create_instance();
-    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-        power_preference: wgpu::PowerPreference::HighPerformance,
-        force_fallback_adapter: false,
-        compatible_surface: None,
-        apply_limit_buckets: false,
-    }))
-    .map_err(|err| format!("request_adapter failed: {err}"))?;
-
-    let adapter_info = adapter.get_info();
-    let adapter_limits = adapter.limits();
-    let required_limits = required_canvas_limits(&adapter_limits);
-    if memory_trace_enabled() {
-        eprintln!(
-            "CanvasWgpu memory requestDevice adapter=\"{}\" backend={:?} adapterMaxTexture2D={} requiredMaxTexture2D={} requiredStorageBuffersPerShaderStage={} requiredBindGroups={}",
-            adapter_info.name,
-            adapter_info.backend,
-            adapter_limits.max_texture_dimension_2d,
-            required_limits.max_texture_dimension_2d,
-            required_limits.max_storage_buffers_per_shader_stage,
-            required_limits.max_bind_groups
-        );
-    }
-
-    let descriptor = wgpu::DeviceDescriptor {
-        label: Some("babylon-canvas-wgpu.device"),
-        required_features: wgpu::Features::empty(),
-        required_limits,
-        experimental_features: wgpu::ExperimentalFeatures::disabled(),
-        memory_hints: wgpu::MemoryHints::default(),
-        trace: wgpu::Trace::default(),
-    };
-
-    pollster::block_on(adapter.request_device(&descriptor))
-        .map_err(|err| format!("request_device failed: {err}"))
-}
 
 static LAST_CREATE_ERROR: Mutex<Option<CString>> = Mutex::new(None);
 static LAST_READ_PIXELS_ERROR: Mutex<Option<CString>> = Mutex::new(None);
@@ -327,16 +211,6 @@ fn set_last_read_pixels_error(message: Option<String>) {
 
 fn align_to(value: u32, alignment: u32) -> u32 {
     value.div_ceil(alignment).saturating_mul(alignment)
-}
-
-fn shared_device() -> Result<(wgpu::Device, wgpu::Queue), String> {
-    static SHARED_DEVICE: OnceLock<Result<(wgpu::Device, wgpu::Queue), String>> = OnceLock::new();
-
-    SHARED_DEVICE
-        .get_or_init(create_device)
-        .as_ref()
-        .map(|(device, queue)| (device.clone(), queue.clone()))
-        .map_err(Clone::clone)
 }
 
 fn opaque_ptr_as_ref<T>(ptr: *const c_void) -> Option<&'static T> {
@@ -521,7 +395,7 @@ impl Backend {
                 height.max(1)
             );
         }
-        let (device, queue) = shared_device()?;
+        let (device, queue) = crate::active_renderer()?.device_queue.clone();
         let renderer = WGPURenderer::new(device.clone(), queue.clone());
         let mut canvas = SHARED_TEXT_CONTEXT
             .with(|text_context| {

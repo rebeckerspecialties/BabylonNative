@@ -18,6 +18,7 @@ namespace Babylon::Polyfills::Internal
         static std::optional<Font> Parse(const std::string& fontString);
 
         float Size() const { return m_size; }
+        bool IsBold() const { return m_weight >= 600; }
         const std::string& Family() const { return m_family; }
 
     private:

@@ -15,7 +15,6 @@ namespace Babylon
     namespace
     {
         constexpr auto JS_CLASS_NAME{"XRGPUBinding"};
-        constexpr auto PREFERRED_COLOR_FORMAT{"bgra8unorm"};
         constexpr auto SUPPORTED_DEPTH_STENCIL_FORMAT{"depth24plus-stencil8"};
         constexpr uint32_t GPU_TEXTURE_USAGE_RENDER_ATTACHMENT{0x10};
 
@@ -86,6 +85,7 @@ namespace Babylon
         {
             throw std::runtime_error{"XRGPUBinding requires a session created with the WebXR 'webgpu' feature."};
         }
+        m_preferredColorFormat = m_session.GetWebGPUColorFormat();
     }
 
     Napi::Value XRGPUBinding::GetNativeProjectionScaleFactor(const Napi::CallbackInfo& info)
@@ -95,51 +95,49 @@ namespace Babylon
 
     Napi::Value XRGPUBinding::GetPreferredColorFormat(const Napi::CallbackInfo& info)
     {
-        return Napi::String::New(info.Env(), PREFERRED_COLOR_FORMAT);
+        return Napi::String::New(info.Env(), m_preferredColorFormat);
     }
 
     Napi::Value XRGPUBinding::CreateProjectionLayer(const Napi::CallbackInfo& info)
     {
         auto init = info.Length() > 0 && info[0].IsObject() ? info[0].As<Napi::Object>() : Napi::Object::New(info.Env());
-        if (!init.Has("colorFormat"))
+        auto resolved = Napi::Object::New(info.Env());
+        const auto requestedFormat = init.Get("colorFormat");
+        const auto colorFormat = requestedFormat.IsUndefined() ? std::string{m_preferredColorFormat} : requestedFormat.As<Napi::String>().Utf8Value();
+        if (colorFormat != m_preferredColorFormat)
         {
-            init.Set("colorFormat", PREFERRED_COLOR_FORMAT);
+            throw std::runtime_error{std::string{"The XR session requires projection-layer color format "} + m_preferredColorFormat + ", not " + colorFormat + "."};
         }
 
-        const auto colorFormat = init.Get("colorFormat").As<Napi::String>().Utf8Value();
-        if (colorFormat != PREFERRED_COLOR_FORMAT)
+        resolved.Set("colorFormat", colorFormat);
+        const auto requestedDepth = init.Get("depthStencilFormat");
+        auto depthStencilFormat = std::string{SUPPORTED_DEPTH_STENCIL_FORMAT};
+        if (!requestedDepth.IsUndefined())
         {
-            throw std::runtime_error{"NativeXR only supports bgra8unorm WebGPU projection-layer color textures."};
-        }
-
-        if (init.Has("depthStencilFormat") && !init.Get("depthStencilFormat").IsUndefined())
-        {
-            const auto depthStencilFormat = init.Get("depthStencilFormat").As<Napi::String>().Utf8Value();
-            if (depthStencilFormat != SUPPORTED_DEPTH_STENCIL_FORMAT)
+            depthStencilFormat = requestedDepth.As<Napi::String>().Utf8Value();
+            if (depthStencilFormat != SUPPORTED_DEPTH_STENCIL_FORMAT && depthStencilFormat != "depth24plus")
             {
-                throw std::runtime_error{"NativeXR only supports depth24plus-stencil8 WebGPU projection-layer depth textures."};
+                throw std::runtime_error{"Expected depth24plus or depth24plus-stencil8 for the WebGPU projection layer."};
             }
         }
-        else
-        {
-            init.Set("depthStencilFormat", SUPPORTED_DEPTH_STENCIL_FORMAT);
-        }
+        resolved.Set("depthStencilFormat", depthStencilFormat);
 
         const auto textureUsage = init.Has("textureUsage") ? init.Get("textureUsage").As<Napi::Number>().Uint32Value() : GPU_TEXTURE_USAGE_RENDER_ATTACHMENT;
         if ((textureUsage & GPU_TEXTURE_USAGE_RENDER_ATTACHMENT) == 0)
         {
             throw std::runtime_error{"NativeXR WebGPU projection-layer textures require GPUTextureUsage.RENDER_ATTACHMENT."};
         }
-        init.Set("textureUsage", Napi::Number::New(info.Env(), textureUsage));
+        resolved.Set("textureUsage", Napi::Number::New(info.Env(), textureUsage));
 
         const auto scaleFactor = init.Has("scaleFactor") ? init.Get("scaleFactor").As<Napi::Number>().DoubleValue() : 1.0;
         if (!std::isfinite(scaleFactor) || scaleFactor <= 0.0)
         {
             throw std::runtime_error{"XRGPUBinding.createProjectionLayer scaleFactor must be a finite positive number."};
         }
-        init.Set("scaleFactor", Napi::Number::New(info.Env(), scaleFactor));
+        resolved.Set("scaleFactor", Napi::Number::New(info.Env(), scaleFactor));
+        resolved.Set("ignoreDepthValues", init.Get("ignoreDepthValues"));
 
-        return XRProjectionLayer::New(info.Env(), m_sessionReference.Value(), init);
+        return XRProjectionLayer::New(info.Env(), m_sessionReference.Value(), resolved);
     }
 
     Napi::Value XRGPUBinding::GetSubImage(const Napi::CallbackInfo& info)

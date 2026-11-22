@@ -19,7 +19,7 @@ serde_json = "=1.0.145"
 wgpu = { git = "https://github.com/gfx-rs/wgpu.git", rev = "40f4a34ebaf56f9a046231f54125ad046239d3f3", default-features = false }
 
 [patch.crates-io]
-femtovg = { git = "https://github.com/rebeckerspecialties/femtovg.git", branch = "show-multiple-guis-stack-0.26" }
+# The CMake build supplies the pinned and patched femtovg path to every workspace member.
 # femtovg 0.26 asks crates.io for wgpu 30; resolve it to the same wgpu checkout the
 # workspace and wgpu-native use so there is exactly one wgpu in the graph.
 wgpu = { git = "https://github.com/gfx-rs/wgpu.git", rev = "40f4a34ebaf56f9a046231f54125ad046239d3f3" }
