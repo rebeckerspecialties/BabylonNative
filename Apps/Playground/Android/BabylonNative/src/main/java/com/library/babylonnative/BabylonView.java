@@ -44,8 +44,9 @@ public class BabylonView extends FrameLayout implements SurfaceHolder.Callback2,
     private boolean mFrameCallbackPosted = false;
     private final Choreographer.FrameCallback mFrameCallback = frameTimeNanos -> {
         mFrameCallbackPosted = false;
-        renderFrame();
+        // Arm the next vsync before OpenXR can block the UI thread in xrWaitFrame.
         postFrameCallback();
+        renderFrame();
     };
     /** Current surface-buffer size in physical pixels (0 until surfaceChanged). */
     private int mSurfaceWidth = 0;

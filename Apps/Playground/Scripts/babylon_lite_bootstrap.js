@@ -106,6 +106,10 @@
         element.attributes = element.attributes || Object.create(null);
         element.parentNode = element.parentNode || null;
         element.ownerDocument = element.ownerDocument || null;
+        // Elements without layout boxes have an empty bounding rectangle.
+        element.getBoundingClientRect = element.getBoundingClientRect || function () {
+            return { x: 0, y: 0, top: 0, left: 0, right: 0, bottom: 0, width: 0, height: 0 };
+        };
         element.setAttribute = element.setAttribute || function (name, value) {
             var key = String(name);
             var text = String(value);
@@ -161,6 +165,9 @@
         var nativeCanvas = (typeof _native !== "undefined" && _native.Canvas) ? new _native.Canvas() : null;
         var nativeGetContext = nativeCanvas && typeof nativeCanvas.getContext === "function" ? nativeCanvas.getContext.bind(nativeCanvas) : null;
         var canvas = {};
+        if (nativeCanvas && typeof nativeCanvas.getCanvasTexture === "function") {
+            Object.defineProperty(canvas, "getCanvasTexture", { value: nativeCanvas.getCanvasTexture.bind(nativeCanvas) });
+        }
         var gpuContext = null;
         var context2d = null;
         var contextType = null;
@@ -254,8 +261,25 @@
 
     function createElement(tagName) {
         var element;
-        if (String(tagName).toLowerCase() === "canvas") {
+        var tag = String(tagName).toLowerCase();
+        if (tag === "canvas") {
             element = createCanvas("");
+        } else if (tag === "img" && typeof globalThis.Image === "function") {
+            element = addElementSurface(new globalThis.Image(), tag);
+            var prototype = Object.getPrototypeOf(element);
+            var src = Object.getOwnPropertyDescriptor(prototype, "src");
+            if (src && src.set) {
+                Object.defineProperty(element, "src", {
+                    configurable: true,
+                    enumerable: true,
+                    get: src.get,
+                    set: function (value) {
+                        var text = String(value);
+                        var base = element.ownerDocument && element.ownerDocument.baseURI;
+                        src.set.call(this, base && text ? new URL(text, base).href : text);
+                    }
+                });
+            }
         } else {
             element = addElementSurface({}, tagName);
         }
