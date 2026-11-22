@@ -136,6 +136,7 @@ namespace Babylon::Polyfills::Console
         }
 
         AddMethod(console, "log", LogLevel::Log, callback);
+        AddMethod(console, "info", LogLevel::Log, callback);
         AddMethod(console, "warn", LogLevel::Warn, callback);
         AddMethod(console, "error", LogLevel::Error, callback);
     }
