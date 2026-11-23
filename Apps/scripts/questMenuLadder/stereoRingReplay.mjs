@@ -25,7 +25,7 @@ export function ringReplay(scene) {
                 mesh.thinInstanceSetBuffer(key,output,stride,false);
                 return {key,stride,data,output};
             });
-            groups.push({mesh,attrs,members:new Int32Array(count),size:0});
+            groups.push({mesh,attrs,members:new Int32Array(count),uploaded:new Int32Array(count).fill(-1),size:0});
         }
         families.push({src,max,base,count,groups,streams,previous:new Int16Array(count).fill(-1),
             vp:[src.getWorldMatrix().clone(),src.getWorldMatrix().clone()],
@@ -53,7 +53,7 @@ export function ringReplay(scene) {
                 let px=-1;
                 for(let eye=0;eye<2;eye++){
                     const target=eyes[eye].outputRenderTarget;
-                    px=Math.max(px,eyeDemand(f.vp[eye].m,x,y,z,r,target.getRenderWidth(),target.getRenderHeight()));
+                    px=Math.max(px,eyeDemand(f.vp[eye].m,x,y,z,r,target.getRenderWidth(),target.getRenderHeight(),f.previous[i]>0));
                 }
                 const n=mode==="cull" ? (px<0?0:f.max) : ringSegments(px,f.max,f.previous[i]);
                 if(f.previous[i]!==n)dirty=true;
@@ -64,14 +64,19 @@ export function ringReplay(scene) {
             for(const group of f.groups){
                 group.mesh.setEnabled(group.size!==0);
                 if(group.size===0)continue;
+                let first=0,last=group.size;
+                while(first<last && group.uploaded[first]===group.members[first]) first++;
+                while(last>first && group.uploaded[last-1]===group.members[last-1]) last--;
                 for(const {key,stride,data,output} of group.attrs){
-                    for(let k=0;k<group.size;k++){
+                    if(first===last) break;
+                    for(let k=first;k<last;k++){
                         const source=group.members[k]*stride;
                         for(let t=0;t<stride;t++)output[k*stride+t]=data[source+t];
                     }
-                    group.mesh.thinInstanceBufferUpdated(key);
+                    group.mesh.thinInstancePartialBufferUpdate(key,output.subarray(first*stride,last*stride),first*stride);
                     uploads++;
                 }
+                for(let k=first;k<last;k++)group.uploaded[k]=group.members[k];
                 group.mesh.thinInstanceCount=group.size;
             }
         }

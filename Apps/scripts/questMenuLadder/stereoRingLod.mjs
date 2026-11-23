@@ -1,5 +1,5 @@
 // Distances and planes are expressed in the source mesh's local coordinates.
-export function eyeDemand(m, x, y, z, r, width, height) {
+export function eyeDemand(m, x, y, z, r, width, height, wasVisible = false) {
     const cx = m[0]*x + m[4]*y + m[8]*z + m[12];
     const cy = m[1]*x + m[5]*y + m[9]*z + m[13];
     const cz = m[2]*x + m[6]*y + m[10]*z + m[14];
@@ -8,9 +8,11 @@ export function eyeDemand(m, x, y, z, r, width, height) {
         const c = axis === 0 ? cx : axis === 1 ? cy : cz;
         for (let sign = -1; sign <= 1; sign += 2) {
             // A symmetric clip depth accepts both the WebGL and WebGPU near plane conservatively.
-            const outside = -(w + sign * c);
+            // Only delay exits. A sphere entering either eye must be drawn immediately.
+            const margin = wasVisible && axis < 2 ? 1 + 16 / (axis === 0 ? width : height) : 1;
+            const outside = -(margin*w + sign * c);
             if (outside <= 0) continue;
-            const a = m[3]+sign*m[axis], b=m[7]+sign*m[4+axis], d=m[11]+sign*m[8+axis];
+            const a = margin*m[3]+sign*m[axis], b=margin*m[7]+sign*m[4+axis], d=margin*m[11]+sign*m[8+axis];
             if (outside*outside > r*r*(a*a+b*b+d*d)) return -1;
         }
     }

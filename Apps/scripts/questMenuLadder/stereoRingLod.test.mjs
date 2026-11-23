@@ -21,6 +21,13 @@ test("near intersection stays at full detail and a threshold has hysteresis", ()
     assert.equal(ringSegments(9,32,8),8);
     assert.equal(ringSegments(9,32,16),16);
 });
+test("an eight-pixel guard band delays exits, never entry or a change in geometric demand", () => {
+    const demand=(x,wasVisible) => eyeDemand(identity,x,0,0,0.5,2000,2000,wasVisible);
+    assert.equal(demand(1.504,false),-1);
+    assert.equal(demand(1.504,true),500);
+    assert.equal(demand(1.51,true),-1);
+    assert.equal(demand(1.499,false),demand(1.499,true));
+});
 test("decimation preserves winding and the distinct seam vertices of the original UV grid", () => {
     for(const max of [32,64]) for(const n of [8,16,32]) {
         const indices=ringIndices(max,n), step=max/n, stride=max+1;
