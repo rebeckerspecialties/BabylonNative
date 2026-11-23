@@ -27,6 +27,7 @@
 #include "XRSession.h"
 #if defined(__ANDROID__) && defined(BABYLON_NATIVE_XR_OPENXR)
 #include "XRShapedLayer.h"
+#include <Babylon/Graphics/WgpuInterop.h>
 #endif
 #include "XRFrame.h"
 #include "ImageTracking.h"
@@ -353,6 +354,31 @@ namespace Babylon
                         }
                     }
                     jsSession.Value().Set("onframeratechange", env.Null());
+#if defined(__ANDROID__) && defined(BABYLON_NATIVE_XR_OPENXR)
+                    if (session.m_warpRequested)
+                    {
+                        const auto platform = session.PlatformSession();
+                        session.m_warpEnabled = session.m_webGPUFeatureEnabled && platform &&
+                            (platform->SupportsWarpDepth(babylon_wgpu_native_openxr_vk_format("depth24plus")) ||
+                             platform->SupportsWarpDepth(babylon_wgpu_native_openxr_vk_format("depth32float")));
+                        if (session.m_warpEnabled)
+                        {
+                            session.m_enabledFeatures.emplace_back("space-warp");
+                            auto enabled = jsSession.Value().Get("enabledFeatures").As<Napi::Array>();
+                            enabled.Set(enabled.Length(), "space-warp");
+                        }
+                        else if (session.m_warpRequired)
+                        {
+                            session.m_xr->EndSessionAsync().then(session.m_runtimeScheduler, arcana::cancellation::none(),
+                                [deferred, env](const arcana::expected<void, std::exception_ptr>&) {
+                                    auto error = Napi::Error::New(env, "Required XR session feature unavailable: space-warp");
+                                    error.Value().Set("name", "NotSupportedError");
+                                    deferred.Reject(error.Value());
+                                });
+                            return;
+                        }
+                    }
+#endif
                     deferred.Resolve(jsSession.Value());
                 }
             });
@@ -433,6 +459,14 @@ namespace Babylon
                         }
 
                         const auto feature = featureList.Get(index).As<Napi::String>().Utf8Value();
+#if defined(__ANDROID__) && defined(BABYLON_NATIVE_XR_OPENXR)
+                        if (feature == "space-warp")
+                        {
+                            m_warpRequested = true;
+                            m_warpRequired |= std::string_view{featureListName} == "requiredFeatures";
+                            continue;
+                        }
+#endif
                         bool supported = IsXRFeatureDescriptor(feature);
 #if defined(__ANDROID__) && defined(BABYLON_NATIVE_XR_OPENXR)
                         // Only grant features delivered by this OpenXR backend.
@@ -497,7 +531,12 @@ namespace Babylon
 
         std::optional<XRGPUSubImageData> XRSession::GetWebGPUSubImage(uint32_t viewIndex) const
         {
-            return m_xr->GetWebGPUSubImage(viewIndex);
+            auto image = m_xr->GetWebGPUSubImage(viewIndex);
+#if defined(__ANDROID__) && defined(BABYLON_NATIVE_XR_OPENXR)
+            if (image && m_warpEnabled && m_activeProjectionLayer && !m_activeProjectionLayer->DepthStencilFormat().empty())
+                m_xr->AcquireWarpAttachments(*image, m_activeProjectionLayer->DepthStencilFormat());
+#endif
+            return image;
         }
 
         const char* XRSession::GetWebGPUColorFormat() const
@@ -963,6 +1002,10 @@ namespace Babylon
                 const auto resetCallback = gsl::finally([this] { m_inAnimationCallback = false; });
                 callbackPtr->Value().Call({ Napi::Number::New(Env(), m_frameMilliseconds), m_jsXRFrame.Value() });
 #if defined(__ANDROID__) && defined(BABYLON_NATIVE_XR_OPENXR)
+                if (m_warpEnabled && m_activeProjectionLayer)
+                {
+                    m_xr->SetWarpDelta(m_activeProjectionLayer->DeltaPose());
+                }
                 if (auto platform = PlatformSession(); platform && m_renderState.Get("layers").IsArray())
                 {
                     auto layers = m_renderState.Get("layers").As<Napi::Array>();

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <napi/napi.h>
+#include <XR.h>
 
 #include <cstdint>
 #include <string>
@@ -26,10 +27,12 @@ namespace Babylon
         const std::string& DepthStencilFormat() const;
         uint32_t TextureUsage() const;
         double ScaleFactor() const { return m_scaleFactor; }
+        xr::Pose DeltaPose() const;
 
     private:
         Napi::ObjectReference m_sessionReference{};
         Napi::ObjectReference m_device{};
+        Napi::ObjectReference m_deltaPose{};
         std::string m_colorFormat{};
         std::string m_depthStencilFormat{};
         uint32_t m_textureUsage{};
@@ -45,5 +48,7 @@ namespace Babylon
         Napi::Value GetLayout(const Napi::CallbackInfo& info);
         Napi::Value GetFixedFoveation(const Napi::CallbackInfo& info);
         void SetFixedFoveation(const Napi::CallbackInfo& info, const Napi::Value& value);
+        Napi::Value GetDeltaPose(const Napi::CallbackInfo& info);
+        void SetDeltaPose(const Napi::CallbackInfo& info, const Napi::Value& value);
     };
 }

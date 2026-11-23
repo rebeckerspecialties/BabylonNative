@@ -133,6 +133,12 @@ namespace xr
         bool ViewerRelative{};
     };
     struct LayerImage { uint64_t Image; int64_t Format; };
+    struct WarpImages
+    {
+        LayerImage Motion;
+        LayerImage Depth;
+        uint32_t Width, Height, Views;
+    };
     class MediaSurfaceProducer
     {
     public:
@@ -442,6 +448,9 @@ namespace xr
             uint64_t CreateLayer(LayerShape shape, uint32_t width, uint32_t height, LayerLayout layout);
             uint64_t CreateMediaLayer(LayerShape shape, uint32_t width, uint32_t height, LayerLayout layout, std::shared_ptr<MediaSurfaceProducer> source);
             bool SupportsMediaLayers() const;
+            bool SupportsWarpDepth(int64_t format) const;
+            WarpImages AcquireWarpImages(int64_t format);
+            void MarkWarpImagesSubmitted(const Pose& delta);
             LayerImage AcquireLayer(uint64_t id);
             void MarkLayerRendered(uint64_t id);
             void RetireLayer(uint64_t id);

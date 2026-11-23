@@ -14,6 +14,7 @@
 #include <openxr/openxr_platform.h>
 #include <android/log.h>
 #include "CompositionLayers.h"
+#include "SpaceWarpSwapchains.h"
 
 #include <algorithm>
 #include <array>
@@ -514,6 +515,10 @@ namespace xr
                 const auto offered = [&formats](VkFormat format) {
                     return std::find(formats.begin(), formats.end(), format) != formats.end();
                 };
+                if (offered(VK_FORMAT_R16G16B16A16_SFLOAT))
+                    for (const auto depth : {VK_FORMAT_D16_UNORM, VK_FORMAT_D32_SFLOAT, VK_FORMAT_X8_D24_UNORM_PACK32,
+                        VK_FORMAT_D24_UNORM_S8_UINT, VK_FORMAT_D32_SFLOAT_S8_UINT})
+                        if (offered(depth)) WarpDepths.push_back(depth);
                 __android_log_print(ANDROID_LOG_INFO, "BabylonNative",
                     "OpenXR advertised warp swapchain formats: RGBA16F=%d D16=%d D24S8=%d D32F=%d",
                     offered(VK_FORMAT_R16G16B16A16_SFLOAT), offered(VK_FORMAT_D16_UNORM),
@@ -786,6 +791,7 @@ namespace xr
                 }
             }
             Layers.Clear();
+            WarpChains.clear();
             for (auto& viewSwapchain : ViewSwapchains)
             {
                 if (viewSwapchain.Handle != XR_NULL_HANDLE)
@@ -1017,6 +1023,7 @@ namespace xr
             }
 
             std::vector<XrCompositionLayerProjectionView> projectionViews;
+            std::vector<XrCompositionLayerSpaceWarpInfoFB> warpViews;
             auto projectionLayer =
                 MakeXr<XrCompositionLayerProjection>(XR_TYPE_COMPOSITION_LAYER_PROJECTION);
             const XrCompositionLayerBaseHeader* layerHeader{};
@@ -1025,6 +1032,7 @@ namespace xr
                 projectionViews.resize(
                     ActiveFrameViews.size(),
                     MakeXr<XrCompositionLayerProjectionView>(XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW));
+                if (ActiveWarp && WarpSubmitted) warpViews.resize(projectionViews.size());
                 for (uint32_t viewIndex = 0; viewIndex < projectionViews.size(); ++viewIndex)
                 {
                     auto& projectionView = projectionViews[viewIndex];
@@ -1039,6 +1047,11 @@ namespace xr
                             static_cast<int32_t>(viewSwapchain.Height),
                         }};
                     projectionView.subImage.imageArrayIndex = viewIndex;
+                    if (!warpViews.empty())
+                    {
+                        warpViews[viewIndex] = ActiveWarp->View(viewIndex, WarpDelta, DepthNearZ, DepthFarZ);
+                        projectionView.next = &warpViews[viewIndex];
+                    }
                 }
                 projectionLayer.space = AppSpace;
                 projectionLayer.viewCount = static_cast<uint32_t>(projectionViews.size());
@@ -1059,10 +1072,22 @@ namespace xr
                 }
             }
 
+            if (ActiveWarp)
+            {
+                ActiveWarp->Motion.Release();
+                ActiveWarp->Depth.Release();
+                ActiveWarp = nullptr;
+                WarpSubmitted = false;
+            }
             auto endInfo = MakeXr<XrFrameEndInfo>(XR_TYPE_FRAME_END_INFO);
             endInfo.displayTime = FrameState.predictedDisplayTime;
             endInfo.environmentBlendMode = System.BlendMode;
             const bool submittedProjection = Layers.Finish(Session, AppSpace, HeadSpace, endInfo, layerHeader, renderLayer && FrameShouldRender, System.Equirect2, System.MaxLayers);
+            if (submittedProjection && warpViews.size() == 2 && !LoggedWarpSubmission)
+            {
+                __android_log_print(ANDROID_LOG_INFO, "BabylonNative", "Submitted stereo motion and depth to OpenXR compositor");
+                LoggedWarpSubmission = true;
+            }
             if (submittedProjection && projectionViews.size() == 2 && !LoggedStereoSubmission)
             {
                 __android_log_print(ANDROID_LOG_INFO, "BabylonNative", "Submitted stereo frame to OpenXR compositor");
@@ -1088,6 +1113,7 @@ namespace xr
 
         System::Impl& System;
         bool LoggedStereoSubmission{};
+        bool LoggedWarpSubmission{};
 #ifndef NDEBUG
         uint32_t StereoFrames{};
 #endif
@@ -1100,6 +1126,11 @@ namespace xr
         std::vector<XrViewConfigurationView> ViewConfigurationViews{};
         std::vector<ViewSwapchain> ViewSwapchains{};
         CompositionLayers Layers;
+        std::vector<int64_t> WarpDepths;
+        std::unordered_map<int64_t, std::unique_ptr<SpaceWarpSwapchains>> WarpChains;
+        SpaceWarpSwapchains* ActiveWarp{};
+        XrPosef WarpDelta{};
+        bool WarpSubmitted{};
         std::atomic<double> ProjectionScale{1.0};
         std::vector<XrView> LocatedViews{};
         std::vector<Session::Frame::View> ActiveFrameViews{};
@@ -1259,6 +1290,34 @@ namespace xr
     }
     uint32_t System::Session::MaxLayerCount() const { return m_impl->System.MaxLayers; }
     bool System::Session::SupportsMediaLayers() const { return m_impl->System.AndroidSurface; }
+    bool System::Session::SupportsWarpDepth(int64_t format) const
+    {
+        return std::find(m_impl->WarpDepths.begin(), m_impl->WarpDepths.end(), format) != m_impl->WarpDepths.end();
+    }
+
+    WarpImages System::Session::AcquireWarpImages(int64_t format)
+    {
+        if (!m_impl->FrameBegun || !m_impl->FrameShouldRender || !SupportsWarpDepth(format))
+            throw std::runtime_error{"No renderable OpenXR frame with compatible space-warp attachments"};
+        auto& chain = m_impl->WarpChains[format];
+        const auto width = m_impl->System.MotionWidth;
+        const auto height = m_impl->System.MotionHeight;
+        const auto views = static_cast<uint32_t>(m_impl->ViewConfigurationViews.size());
+        if (m_impl->ActiveWarp && m_impl->ActiveWarp != chain.get())
+            throw std::runtime_error{"Cannot change space-warp attachments within an OpenXR frame"};
+        if (!chain) chain = std::make_unique<SpaceWarpSwapchains>(m_impl->Session, static_cast<VkFormat>(format), width, height, views);
+        m_impl->ActiveWarp = chain.get();
+        return {{reinterpret_cast<uint64_t>(chain->Motion.Acquire()), VK_FORMAT_R16G16B16A16_SFLOAT},
+            {reinterpret_cast<uint64_t>(chain->Depth.Acquire()), format}, width, height, views};
+    }
+
+    void System::Session::MarkWarpImagesSubmitted(const Pose& delta)
+    {
+        if (!m_impl->ActiveWarp) throw std::runtime_error{"No acquired space-warp images"};
+        m_impl->WarpDelta = {{delta.Orientation.X, delta.Orientation.Y, delta.Orientation.Z, delta.Orientation.W},
+            {delta.Position.X, delta.Position.Y, delta.Position.Z}};
+        m_impl->WarpSubmitted = true;
+    }
     uint64_t System::Session::CreateMediaLayer(LayerShape shape, uint32_t width, uint32_t height, LayerLayout layout, std::shared_ptr<MediaSurfaceProducer> source)
     {
         PFN_xrCreateSwapchainAndroidSurfaceKHR create{};

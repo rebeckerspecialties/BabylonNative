@@ -19,6 +19,8 @@ mod xr_depth_clear;
 mod xr_eye_timing;
 #[cfg(any(target_os = "android", test))]
 mod xr_eye_sample;
+#[cfg(any(target_os = "android", test))]
+mod xr_warp_writes;
 mod canvas_snapshot;
 #[cfg(any(target_os = "android", test))]
 mod vulkan_instance_retry;
@@ -897,7 +899,42 @@ pub extern "C" fn babylon_wgpu_native_import_vulkan_texture(
             native_image,
             width, height, vk_format,
             read_c_string(descriptor_json, "GPUTextureDescriptor")?,
+            false,
         )
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn babylon_wgpu_native_openxr_vk_format(webgpu_format: *const c_char) -> i64 {
+    run_with_active_backend("NativeWebGPU.openXRTextureFormat", 0, |backend| {
+        backend.openxr_vk_format(read_c_string(webgpu_format, "WebGPU texture format")?)
+    })
+}
+
+#[cfg(target_os = "android")]
+#[no_mangle]
+pub extern "C" fn babylon_wgpu_native_watch_warp_images(motion: u64, depth: u64) -> bool {
+    run_with_active_backend("NativeWebGPU.watchWarpImages", false, |backend| {
+        backend.warp_writes = Some(xr_warp_writes::Writes::new(motion, depth));
+        Ok(true)
+    })
+}
+
+#[cfg(target_os = "android")]
+#[no_mangle]
+pub extern "C" fn babylon_wgpu_native_finish_warp_images(views: u32) -> bool {
+    run_with_active_backend("NativeWebGPU.finishWarpImages", false, |backend| {
+        Ok(backend.warp_writes.take().is_some_and(|writes| writes.complete(views)))
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn babylon_wgpu_native_import_openxr_data_texture(
+    native_image: u64, width: u32, height: u32, vk_format: i64, descriptor_json: *const c_char,
+) -> u64 {
+    run_with_active_backend("NativeWebGPU.importOpenXRDataTexture", 0, |backend| {
+        backend.import_vulkan_texture(native_image, width, height, vk_format,
+            read_c_string(descriptor_json, "GPUTextureDescriptor")?, true)
     })
 }
 
@@ -2525,6 +2562,8 @@ mod upstream_wgpu_native {
         #[cfg(target_os = "android")]
         eye_resolvers: HashMap<wgpu::TextureFormat, crate::xr_eye_resolve::Pipeline>,
         #[cfg(target_os = "android")]
+        pub(super) warp_writes: Option<crate::xr_warp_writes::Writes>,
+        #[cfg(target_os = "android")]
         xr_depth_clears: HashMap<(wgpu::TextureFormat, wgpu::TextureFormat, bool, Option<std::num::NonZeroU32>), wgpu::RenderBundle>,
         #[cfg(target_os = "android")]
         needs_layered_depth_clear: bool,
@@ -2671,6 +2710,8 @@ mod upstream_wgpu_native {
 
     #[derive(Clone)]
     struct DepthStencilAttachmentCommand {
+        #[cfg(target_os = "android")]
+        output: (u64, u32),
         view: wgpu::TextureView,
         depth_ops: Option<wgpu::Operations<f32>>,
         stencil_ops: Option<wgpu::Operations<u32>>,
@@ -2865,6 +2906,8 @@ mod upstream_wgpu_native {
 
     struct CommandBufferResource {
         buffer: wgpu::CommandBuffer,
+        #[cfg(target_os = "android")]
+        warp: Option<Box<crate::xr_warp_writes::Writes>>,
     }
 
     struct PendingBufferWrite {
@@ -3803,6 +3846,8 @@ mod upstream_wgpu_native {
                 presentation_blitter: None,
                 #[cfg(target_os = "android")]
                 eye_resolvers: HashMap::new(),
+                #[cfg(target_os = "android")]
+                warp_writes: None,
                 #[cfg(target_os = "android")]
                 xr_depth_clears: HashMap::new(),
                 #[cfg(target_os = "android")]
@@ -4747,11 +4792,25 @@ mod upstream_wgpu_native {
         }
 
         #[cfg(target_os = "android")]
+        pub fn openxr_vk_format(&self, format: &str) -> Result<i64, String> {
+            let format = map_texture_format(format).ok_or_else(|| format!("Unknown WebGPU format {format}"))?;
+            let adapter = unsafe { self.runtime.adapter.as_hal::<wgpu::hal::api::Vulkan>() }
+                .ok_or("OpenXR requires the Vulkan adapter")?;
+            Ok(i64::from(adapter.texture_format_as_raw(format).as_raw()))
+        }
+
+        #[cfg(not(target_os = "android"))]
+        pub fn openxr_vk_format(&self, _: &str) -> Result<i64, String> {
+            Err("OpenXR Vulkan formats are only available on Android".into())
+        }
+
+        #[cfg(target_os = "android")]
         pub fn import_vulkan_texture(
             &mut self,
             native_image: u64,
             width: u32, height: u32, vk_format: i64,
             descriptor_json: &str,
+            data_attachment: bool,
         ) -> Result<u64, String> {
             if native_image == 0 {
                 return Err("native Vulkan image handle was null".to_string());
@@ -4824,6 +4883,7 @@ mod upstream_wgpu_native {
                 Some(ash::vk::Format::R8G8B8A8_UNORM) => wgpu::TextureFormat::Rgba8Unorm,
                 Some(ash::vk::Format::B8G8R8A8_UNORM) => wgpu::TextureFormat::Bgra8Unorm,
                 Some(ash::vk::Format::R16G16B16A16_SFLOAT) => wgpu::TextureFormat::Rgba16Float,
+                Some(_) if data_attachment && format.has_depth_aspect() && self.openxr_vk_format(format_text)? == vk_format => format,
                 _ => return Err(format!("Unsupported OpenXR Vulkan image format {vk_format}")),
             };
             if width == 0 || height == 0 || size.depth_or_array_layers == 0 || dimension != wgpu::TextureDimension::D2 || sample_count != 1 || mip_level_count != 1 {
@@ -4833,7 +4893,12 @@ mod upstream_wgpu_native {
             // The OpenXR swapchain was created with sampled/color-attachment usage only.
             // A WebXR application requesting copy or storage needs its own application image.
             let external_usage = wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT;
-            let resolve = size != extent || !output_format.is_srgb() || !external_usage.contains(usage);
+            if data_attachment && (size != extent || format != output_format || !external_usage.contains(usage)
+                || !(format == wgpu::TextureFormat::Rgba16Float || format.has_depth_aspect()))
+            {
+                return Err("OpenXR motion/depth images require a matching extent, format and supported usage; color conversion is not valid for data".into());
+            }
+            let resolve = !data_attachment && (size != extent || !output_format.is_srgb() || !external_usage.contains(usage));
             let wrapped_format = if resolve { output_format } else { format };
             let import_formats = if resolve { &[][..] } else { &view_formats };
             let hal_descriptor = wgpu::hal::TextureDescriptor {
@@ -4917,6 +4982,7 @@ mod upstream_wgpu_native {
             _native_image: u64,
             _width: u32, _height: u32, _vk_format: i64,
             _descriptor_json: &str,
+            _data_attachment: bool,
         ) -> Result<u64, String> {
             Err("native Vulkan texture import is only available on Android".to_string())
         }
@@ -5857,6 +5923,8 @@ mod upstream_wgpu_native {
                         }
                     }
                     Ok::<_, String>(DepthStencilAttachmentCommand {
+                        #[cfg(target_os = "android")]
+                        output: (view.texture_id, view.base_array_layer),
                         view: view.view.clone(),
                         depth_ops,
                         stencil_ops,
@@ -6558,13 +6626,37 @@ mod upstream_wgpu_native {
             let mut native = self.runtime.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("babylon-native-webgpu.web-command-buffer"),
             });
+            #[cfg(target_os = "android")]
+            let mut warp = self.warp_writes.map(|watch| watch.empty_command());
             for command in &encoder.commands {
+                #[cfg(target_os = "android")]
+                if let (Some(writes), EncoderCommand::RenderPass { descriptor, commands }) = (&mut warp, command) {
+                    let views = descriptor.multiview_mask.map_or(1, |mask| mask.get());
+                    let draw = commands.iter().any(|op| matches!(op, RenderPassCommand::Draw { .. } | RenderPassCommand::DrawIndexed { .. }
+                        | RenderPassCommand::DrawIndirect { .. } | RenderPassCommand::DrawIndexedIndirect { .. }
+                        | RenderPassCommand::MultiDrawIndirect { .. } | RenderPassCommand::MultiDrawIndexedIndirect { .. }));
+                    for color in descriptor.color_attachments.iter().flatten() {
+                        let stored = color.resolve_target.is_some() || color.store == wgpu::StoreOp::Store;
+                        if draw || !stored || color.resolve_target.is_some() || matches!(color.load, wgpu::LoadOp::Clear(_)) {
+                            writes.record(color.output_texture_id, color.output_layer, views, stored);
+                        }
+                    }
+                    if let Some(depth) = &descriptor.depth_stencil_attachment {
+                        if let Some(ops) = depth.depth_ops {
+                            if draw || ops.store == wgpu::StoreOp::Discard || matches!(ops.load, wgpu::LoadOp::Clear(_)) {
+                                writes.record(depth.output.0, depth.output.1, views, ops.store == wgpu::StoreOp::Store);
+                            }
+                        }
+                    }
+                }
                 self.execute_encoder_command(&mut native, command);
             }
             self.resources.command_buffers.insert(
                 id,
                 CommandBufferResource {
                     buffer: native.finish(),
+                    #[cfg(target_os = "android")]
+                    warp: warp.filter(|writes| writes.any()).map(Box::new),
                 },
             );
             Ok(id)
@@ -7089,10 +7181,19 @@ mod upstream_wgpu_native {
                 self.staging_belt.finish();
                 buffers.push(uploads.finish());
             }
+            #[cfg(target_os = "android")]
+            let mut next_warp = self.warp_writes;
             for id in command_buffer_ids {
-                buffers.push(self.resources.command_buffers.remove(id).unwrap().buffer);
+                let command = self.resources.command_buffers.remove(id).unwrap();
+                #[cfg(target_os = "android")]
+                if let (Some(frame), Some(writes)) = (&mut next_warp, command.warp) {
+                    frame.submit(&writes);
+                }
+                buffers.push(command.buffer);
             }
             self.runtime.queue.submit(buffers);
+            #[cfg(target_os = "android")]
+            { self.warp_writes = next_warp; }
             self.presentation_damage.invalidate();
             if encoded_pending_writes {
                 self.staging_belt.recall();
@@ -7132,7 +7233,7 @@ mod upstream_wgpu_native {
                     .resources
                     .textures
                     .get(texture_id)
-                    .ok_or_else(|| format!("NativeXR color texture {texture_id} was not found"))?;
+                    .ok_or_else(|| format!("NativeXR texture {texture_id} was not found"))?;
                 let texture = &resource.texture;
                 #[cfg(target_os = "android")]
                 if let Some(target) = &resource.eye_target {
@@ -7145,7 +7246,11 @@ mod upstream_wgpu_native {
                     encoder.transition_resources(std::iter::empty(), std::iter::once(wgpu::TextureTransition {
                         texture,
                         selector: None,
-                        state: wgpu::TextureUses::COLOR_TARGET,
+                        state: if resource.format.is_depth_stencil_format() {
+                            wgpu::TextureUses::DEPTH_STENCIL_WRITE
+                        } else {
+                            wgpu::TextureUses::COLOR_TARGET
+                        },
                     }));
                     continue;
                 }
@@ -7156,6 +7261,23 @@ mod upstream_wgpu_native {
                         array_layer_count: Some(1),
                         ..Default::default()
                     });
+                    if resource.format.is_depth_stencil_format() {
+                        let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                            label: Some("NativeXR.prepareOpenXRDepthForRelease"),
+                            color_attachments: &[],
+                            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                                view: &view,
+                                depth_ops: resource.format.has_depth_aspect().then_some(wgpu::Operations {
+                                    load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store,
+                                }),
+                                stencil_ops: resource.format.has_stencil_aspect().then_some(wgpu::Operations {
+                                    load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store,
+                                }),
+                            }),
+                            ..Default::default()
+                        });
+                        continue;
+                    }
                     let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                         label: Some("NativeXR.prepareOpenXRTextureForRelease"),
                         color_attachments: &[Some(wgpu::RenderPassColorAttachment {

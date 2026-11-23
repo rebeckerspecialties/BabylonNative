@@ -49,6 +49,7 @@ namespace Babylon
             void InitializeXrLayer(Napi::Object layer);
 
             bool IsWebGPUFeatureEnabled() const;
+            bool IsSpaceWarpEnabled() const { return m_warpEnabled; }
             bool IsLayersFeatureEnabled() const;
             bool IsCurrentAnimationFrame(const Napi::Object& frame) const;
             bool IsInAnimationCallback() const { return m_inAnimationCallback; }
@@ -95,6 +96,7 @@ namespace Babylon
             float m_depthNear{0.1f};
             float m_depthFar{1000.0f};
             bool m_webGPUFeatureEnabled{};
+            bool m_warpRequested{}, m_warpRequired{}, m_warpEnabled{};
             std::vector<std::string> m_enabledFeatures{};
 
             std::vector<std::pair<std::string, Napi::FunctionReference>> m_eventNamesAndCallbacks{};
