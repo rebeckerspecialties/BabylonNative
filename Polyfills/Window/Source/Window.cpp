@@ -22,6 +22,28 @@ namespace Babylon::Polyfills::Internal
         constexpr auto JS_TYPE_NAME = "type";
         constexpr auto JS_BUBBLES_NAME = "bubbles";
         constexpr auto JS_CANCELABLE_NAME = "cancelable";
+
+        void DefineWindowDimension(Napi::Object window, const char* name, Napi::Value (*getter)(const Napi::CallbackInfo&))
+        {
+            if (window.Has(name))
+            {
+                return;
+            }
+
+            auto env = window.Env();
+            auto descriptor = Napi::Object::New(env);
+            descriptor.Set("enumerable", true);
+            descriptor.Set("configurable", true);
+            descriptor.Set("get", Napi::Function::New(env, getter, name));
+            // CSSOM View declares these attributes [Replaceable]. Assignment
+            // shadows the live getter without resizing the host's viewport.
+            descriptor.Set("set", Napi::Function::New(env, [name](const Napi::CallbackInfo& info) {
+                info.This().As<Napi::Object>().DefineProperty(Napi::PropertyDescriptor::Value(
+                    name, info[0], static_cast<napi_property_attributes>(napi_writable | napi_enumerable | napi_configurable)));
+            }));
+            auto object = env.Global().Get("Object").As<Napi::Object>();
+            object.Get("defineProperty").As<Napi::Function>().Call(object, {window, Napi::String::New(env, name), descriptor});
+        }
     }
 
     void Window::Initialize(Napi::Env env)
@@ -110,6 +132,9 @@ namespace Babylon::Polyfills::Internal
             Napi::Function defineProperty{object.Get("defineProperty").As<Napi::Function>()};
             defineProperty.Call(object, {global, Napi::String::New(env, JS_DEVICE_PIXEL_RATIO_NAME), descriptor});
         }
+
+        DefineWindowDimension(global, "innerWidth", &Window::GetInnerWidth);
+        DefineWindowDimension(global, "innerHeight", &Window::GetInnerHeight);
     }
 
     Window& Window::GetFromJavaScript(Napi::Env env)
@@ -163,6 +188,17 @@ namespace Babylon::Polyfills::Internal
     {
         auto env{info.Env()};
         return Napi::Value::From(env, Graphics::DeviceContext::GetFromJavaScript(env).GetDevicePixelRatio());
+    }
+
+    Napi::Value Window::GetInnerWidth(const Napi::CallbackInfo& info)
+    {
+        // DeviceContext dimensions are logical pixels, before hardware scaling.
+        return Napi::Number::New(info.Env(), Graphics::DeviceContext::GetFromJavaScript(info.Env()).GetWidth());
+    }
+
+    Napi::Value Window::GetInnerHeight(const Napi::CallbackInfo& info)
+    {
+        return Napi::Number::New(info.Env(), Graphics::DeviceContext::GetFromJavaScript(info.Env()).GetHeight());
     }
 }
 

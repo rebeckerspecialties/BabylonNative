@@ -413,6 +413,104 @@ TEST(JavaScript, WindowDocumentCreateEvent)
     )JS", "window.document-create-event.test.js"));
 }
 
+TEST(JavaScript, WindowDimensionsFollowLogicalViewport)
+{
+    auto config = g_deviceConfig;
+    config.Width = 1;
+    config.Height = 1;
+    Babylon::Graphics::Device device{config};
+    std::promise<void> done;
+    auto completed = done.get_future();
+    Babylon::AppRuntime runtime{};
+    runtime.Dispatch([&](Napi::Env env) {
+        try
+        {
+            device.AddToJavaScript(env);
+            Babylon::Polyfills::Window::Initialize(env);
+            Napi::Eval(env, "if (innerWidth !== 1 || innerHeight !== 1) throw new Error('Incorrect initial viewport.');", "window.dimensions.test.js");
+            device.UpdateSize(844, 390);
+            Napi::Eval(env, "if (innerWidth !== 844 || innerHeight !== 390) throw new Error('Incorrect landscape viewport.');", "window.dimensions.test.js");
+            device.SetHardwareScalingLevel(0.5f);
+            Napi::Eval(env, "if (innerWidth !== 844 || innerHeight !== 390) throw new Error('Hardware scaling changed logical viewport.');", "window.dimensions.test.js");
+            device.UpdateSize(390, 844);
+            Napi::Eval(env, "if (innerWidth !== 390 || innerHeight !== 844) throw new Error('Incorrect portrait viewport.');", "window.dimensions.test.js");
+            done.set_value();
+        }
+        catch (...)
+        {
+            done.set_exception(std::current_exception());
+        }
+    });
+    ASSERT_EQ(completed.wait_for(10s), std::future_status::ready);
+    EXPECT_NO_THROW(completed.get());
+}
+
+TEST(JavaScript, WindowDimensionsAreReplaceableWithoutResizingHost)
+{
+    auto config = g_deviceConfig;
+    config.Width = 844;
+    config.Height = 390;
+    Babylon::Graphics::Device device{config};
+    std::promise<void> done;
+    auto completed = done.get_future();
+    Babylon::AppRuntime runtime{};
+    runtime.Dispatch([&](Napi::Env env) {
+        try
+        {
+            device.AddToJavaScript(env);
+            Babylon::Polyfills::Window::Initialize(env);
+            Napi::Eval(env, R"JS(
+                for (const name of ["innerWidth", "innerHeight"]) {
+                    const descriptor = Object.getOwnPropertyDescriptor(globalThis, name);
+                    if (!descriptor.enumerable || !descriptor.configurable || typeof descriptor.get !== "function" || typeof descriptor.set !== "function") {
+                        throw new Error("Viewport property is not a replaceable accessor: " + name);
+                    }
+                    globalThis[name] = 37;
+                    const replaced = Object.getOwnPropertyDescriptor(globalThis, name);
+                    if (replaced.value !== 37 || !replaced.writable || !replaced.configurable || !replaced.enumerable) {
+                        throw new Error("Viewport assignment did not replace the accessor: " + name);
+                    }
+                    delete globalThis[name];
+                }
+            )JS", "window.replaceable-dimensions.test.js");
+            Babylon::Polyfills::Window::Initialize(env);
+            Napi::Eval(env, "if (innerWidth !== 844 || innerHeight !== 390) throw new Error('Override resized the host.');", "window.replaceable-dimensions.test.js");
+            done.set_value();
+        }
+        catch (...)
+        {
+            done.set_exception(std::current_exception());
+        }
+    });
+    ASSERT_EQ(completed.wait_for(10s), std::future_status::ready);
+    EXPECT_NO_THROW(completed.get());
+}
+
+TEST(JavaScript, WindowDimensionsPreserveHostProperties)
+{
+    std::promise<void> done;
+    auto completed = done.get_future();
+    Babylon::AppRuntime runtime{};
+    runtime.Dispatch([&](Napi::Env env) {
+        try
+        {
+            Napi::Eval(env, R"JS(
+                Object.defineProperty(globalThis, "innerWidth", { value: undefined });
+                Object.defineProperty(globalThis, "innerHeight", { get: () => 27 });
+            )JS", "window.host-dimensions.test.js");
+            Babylon::Polyfills::Window::Initialize(env);
+            Napi::Eval(env, "if (innerWidth !== undefined || innerHeight !== 27) throw new Error('Host viewport was replaced.');", "window.host-dimensions.test.js");
+            done.set_value();
+        }
+        catch (...)
+        {
+            done.set_exception(std::current_exception());
+        }
+    });
+    ASSERT_EQ(completed.wait_for(10s), std::future_status::ready);
+    EXPECT_NO_THROW(completed.get());
+}
+
 TEST(JavaScript, BrowserStreamResponseCompressionIntegration)
 {
     Babylon::AppRuntime runtime{};

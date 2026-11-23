@@ -24,5 +24,7 @@ namespace Babylon::Polyfills::Internal
         static void AddEventListener(const Napi::CallbackInfo& info);
         static void RemoveEventListener(const Napi::CallbackInfo& info);
         static Napi::Value GetDevicePixelRatio(const Napi::CallbackInfo& info);
+        static Napi::Value GetInnerWidth(const Napi::CallbackInfo& info);
+        static Napi::Value GetInnerHeight(const Napi::CallbackInfo& info);
     };
 }
