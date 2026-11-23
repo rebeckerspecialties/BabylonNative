@@ -18,7 +18,8 @@ set(ANDROID_EMBEDDING_INCLUDE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../Include/Platf
 
 set(SOURCES
     "${ANDROID_EMBEDDING_INCLUDE_ROOT}/Babylon/Embedding/Android/RuntimeHandle.h"
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/BabylonNativeEmbedding.cpp")
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/BabylonNativeEmbedding.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/PackagedAudio.cpp")
 
 add_library(BabylonNativeEmbedding SHARED ${SOURCES})
 

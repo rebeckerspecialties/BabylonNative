@@ -15,6 +15,7 @@
 // Hosts can use any class name as long as Java signatures match.
 
 #include <Babylon/Embedding/Runtime.h>
+#include "PackagedAudio.h"
 #include <Babylon/Embedding/View.h>
 #include <Babylon/Embedding/Android/RuntimeHandle.h>
 
@@ -27,6 +28,7 @@
 #include <jni.h>
 
 #include <cstdint>
+#include <atomic>
 #include <functional>
 #include <memory>
 #include <string>
@@ -75,6 +77,7 @@ namespace
     // Set by Babylon::Embedding::Android::SetLogCallback; replaces the
     // default logcat sink for Runtimes created afterwards.
     std::function<void(LogLevel, std::string_view)> g_logCallback{};
+    std::atomic_bool g_packagedAudioEnabled{};
 
     int LogPriorityFor(LogLevel level)
     {
@@ -221,7 +224,7 @@ namespace
     // log sink (the host's SetLogCallback sink, or logcat by default),
     // constructs the Runtime, and registers Activity-lifecycle
     // auto-Suspend/Resume tickets.
-    jlong MakeRuntimeHandle(RuntimeOptions options)
+    jlong MakeRuntimeHandle(JNIEnv* env, RuntimeOptions options)
     {
         if (g_logCallback)
         {
@@ -237,6 +240,10 @@ namespace
         }
 
         auto runtime = std::make_unique<Runtime>(std::move(options));
+        if (g_packagedAudioEnabled.load())
+        {
+            Babylon::Embedding::InstallPackagedAudio(env, *runtime);
+        }
         Runtime* runtimePtr = runtime.get();
 
         // Auto-Suspend/Resume on process-wide Activity lifecycle. Hosts
@@ -303,6 +310,7 @@ Java_com_babylonjs_embedding_BabylonNative_setContext(
         return;
     }
     android::global::Initialize(javaVM, context);
+    g_packagedAudioEnabled.store(Babylon::Embedding::PackagedAudioEnabled(env, context));
 }
 
 JNIEXPORT void JNICALL
@@ -313,14 +321,16 @@ Java_com_babylonjs_embedding_BabylonNative_setCurrentActivity(
 }
 
 JNIEXPORT void JNICALL
-Java_com_babylonjs_embedding_BabylonNative_pause(JNIEnv*, jclass)
+Java_com_babylonjs_embedding_BabylonNative_pause(JNIEnv* env, jclass)
 {
+    if (g_packagedAudioEnabled.load()) Babylon::Embedding::SetPackagedAudioForeground(env, false);
     android::global::Pause();
 }
 
 JNIEXPORT void JNICALL
-Java_com_babylonjs_embedding_BabylonNative_resume(JNIEnv*, jclass)
+Java_com_babylonjs_embedding_BabylonNative_resume(JNIEnv* env, jclass)
 {
+    if (g_packagedAudioEnabled.load()) Babylon::Embedding::SetPackagedAudioForeground(env, true);
     android::global::Resume();
 }
 
@@ -358,13 +368,13 @@ Java_com_babylonjs_embedding_BabylonNative_requestPermissionsResult(
 // =====================================================================
 
 JNIEXPORT jlong JNICALL
-Java_com_babylonjs_embedding_BabylonNative_runtimeCreate__(JNIEnv*, jclass)
+Java_com_babylonjs_embedding_BabylonNative_runtimeCreate__(JNIEnv* env, jclass)
 {
     // Default Android consumers want logcat output; Console polyfill,
     // uncaught JS exceptions, and (when enabled) DebugTrace all route
     // there. Hosts wanting different behavior use the C++ API directly.
     RuntimeOptions options{};
-    return MakeRuntimeHandle(std::move(options));
+    return MakeRuntimeHandle(env, std::move(options));
 }
 
 JNIEXPORT jlong JNICALL
@@ -378,7 +388,7 @@ Java_com_babylonjs_embedding_BabylonNative_runtimeCreate__Lcom_babylonjs_embeddi
     {
         return 0;
     }
-    return MakeRuntimeHandle(std::move(options));
+    return MakeRuntimeHandle(env, std::move(options));
 }
 
 JNIEXPORT void JNICALL
