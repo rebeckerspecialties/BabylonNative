@@ -13,6 +13,7 @@
 #include <openxr/openxr.h>
 #include <openxr/openxr_platform.h>
 #include <android/log.h>
+#include "CompositionLayers.h"
 
 #include <algorithm>
 #include <array>
@@ -31,21 +32,6 @@ namespace xr
         constexpr XrViewConfigurationType VIEW_CONFIGURATION_TYPE{XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO};
         constexpr XrReferenceSpaceType REFERENCE_SPACE_TYPE{XR_REFERENCE_SPACE_TYPE_LOCAL};
 
-        template<typename T>
-        T MakeXr(XrStructureType type)
-        {
-            T value{};
-            value.type = type;
-            return value;
-        }
-
-        void CheckXr(XrResult result, const char* operation)
-        {
-            if (XR_FAILED(result))
-            {
-                throw std::runtime_error{std::string{operation} + " failed with OpenXR result " + std::to_string(result)};
-            }
-        }
 
         void LogOpenXrError(const char* context, const char* detail)
         {
@@ -222,6 +208,17 @@ namespace xr
                 XR_KHR_ANDROID_CREATE_INSTANCE_EXTENSION_NAME,
                 AppOwnedVulkan ? XR_KHR_VULKAN_ENABLE_EXTENSION_NAME : XR_KHR_VULKAN_ENABLE2_EXTENSION_NAME};
             DisplayRefreshRateSupported = HasExtension(extensions, XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME);
+            const auto enable = [&](const char* name) {
+                if (!HasExtension(extensions, name)) return false;
+                enabledExtensions.push_back(name);
+                return true;
+            };
+            Cylinder = enable(XR_KHR_COMPOSITION_LAYER_CYLINDER_EXTENSION_NAME);
+            AndroidSurface = enable(XR_KHR_ANDROID_SURFACE_SWAPCHAIN_EXTENSION_NAME);
+            __android_log_print(ANDROID_LOG_INFO,"BabylonNative","OpenXR mediaSurface=%d spaceWarp=%d",AndroidSurface,HasExtension(extensions,XR_FB_SPACE_WARP_EXTENSION_NAME));
+            Cube = enable(XR_KHR_COMPOSITION_LAYER_CUBE_EXTENSION_NAME);
+            Equirect2 = enable(XR_KHR_COMPOSITION_LAYER_EQUIRECT2_EXTENSION_NAME);
+            Equirect = Equirect2 || enable(XR_KHR_COMPOSITION_LAYER_EQUIRECT_EXTENSION_NAME);
             if (DisplayRefreshRateSupported)
             {
                 enabledExtensions.push_back(XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME);
@@ -246,6 +243,9 @@ namespace xr
             auto systemInfo = MakeXr<XrSystemGetInfo>(XR_TYPE_SYSTEM_GET_INFO);
             systemInfo.formFactor = XR_FORM_FACTOR_HEAD_MOUNTED_DISPLAY;
             CheckXr(xrGetSystem(Instance, &systemInfo, &SystemId), "xrGetSystem");
+            auto properties = MakeXr<XrSystemProperties>(XR_TYPE_SYSTEM_PROPERTIES);
+            CheckXr(xrGetSystemProperties(Instance, SystemId, &properties), "xrGetSystemProperties");
+            MaxLayers = properties.graphicsProperties.maxLayerCount;
 
             CheckXr(
                 xrGetInstanceProcAddr(
@@ -319,6 +319,8 @@ namespace xr
         PFN_xrGetVulkanGraphicsDeviceKHR GetAppVulkanGraphicsDevice{};
         bool AppOwnedVulkan{};
         bool DisplayRefreshRateSupported{};
+        bool Cylinder{}, Cube{}, Equirect{}, Equirect2{}, AndroidSurface{};
+        uint32_t MaxLayers{};
     };
 
     struct System::Session::Impl
@@ -337,6 +339,7 @@ namespace xr
         Impl(System::Impl& system, const VulkanGraphicsBinding& graphicsBinding)
             : System{system}
         {
+            Layers.WaitForSubmittedWork = graphicsBinding.WaitForSubmittedWork;
             if (graphicsBinding.Instance == 0 ||
                 graphicsBinding.PhysicalDevice == 0 ||
                 graphicsBinding.Device == 0 ||
@@ -442,6 +445,8 @@ namespace xr
             spaceCreateInfo.referenceSpaceType = REFERENCE_SPACE_TYPE;
             spaceCreateInfo.poseInReferenceSpace.orientation.w = 1.0f;
             CheckXr(xrCreateReferenceSpace(Session, &spaceCreateInfo, &AppSpace), "xrCreateReferenceSpace");
+            spaceCreateInfo.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_VIEW;
+            CheckXr(xrCreateReferenceSpace(Session,&spaceCreateInfo,&HeadSpace),"create viewer reference space");
 
             uint32_t viewCount{};
             CheckXr(
@@ -708,6 +713,7 @@ namespace xr
                 {
                 }
             }
+            Layers.Clear();
             for (auto& viewSwapchain : ViewSwapchains)
             {
                 if (viewSwapchain.Handle != XR_NULL_HANDLE)
@@ -719,6 +725,7 @@ namespace xr
             {
                 xrDestroySpace(AppSpace);
             }
+            if (HeadSpace != XR_NULL_HANDLE) xrDestroySpace(HeadSpace);
             if (Session != XR_NULL_HANDLE)
             {
                 xrDestroySession(Session);
@@ -735,6 +742,7 @@ namespace xr
                 {
                     const auto& stateChanged = *reinterpret_cast<const XrEventDataSessionStateChanged*>(&event);
                     SessionState = stateChanged.state;
+                    Layers.Visibility(SessionState == XR_SESSION_STATE_VISIBLE || SessionState == XR_SESSION_STATE_FOCUSED);
                     LogOpenXrInfo("session state", SessionState);
                     if (SessionState == XR_SESSION_STATE_READY && !SessionRunning)
                     {
@@ -883,6 +891,11 @@ namespace xr
             }
 
             ActiveFrameViews.resize(locatedViewCount);
+            HeadPose.reset();
+            auto head = MakeXr<XrSpaceLocation>(XR_TYPE_SPACE_LOCATION);
+            CheckXr(xrLocateSpace(HeadSpace,AppSpace,FrameState.predictedDisplayTime,&head),"locate viewer reference space");
+            constexpr auto valid = XR_SPACE_LOCATION_POSITION_VALID_BIT | XR_SPACE_LOCATION_ORIENTATION_VALID_BIT;
+            if ((head.locationFlags & valid) == valid) HeadPose = Space{ToPose(head.pose)};
             const double projectionScale = ProjectionScale.load();
             for (uint32_t viewIndex = 0; viewIndex < locatedViewCount; ++viewIndex)
             {
@@ -965,9 +978,7 @@ namespace xr
             auto endInfo = MakeXr<XrFrameEndInfo>(XR_TYPE_FRAME_END_INFO);
             endInfo.displayTime = FrameState.predictedDisplayTime;
             endInfo.environmentBlendMode = System.BlendMode;
-            endInfo.layerCount = layerHeader == nullptr ? 0 : 1;
-            endInfo.layers = layerHeader == nullptr ? nullptr : &layerHeader;
-            CheckXr(xrEndFrame(Session, &endInfo), "xrEndFrame");
+            Layers.Finish(Session, AppSpace, HeadSpace, endInfo, layerHeader, renderLayer && FrameShouldRender, System.Equirect2, System.MaxLayers);
 #ifndef NDEBUG
             if (projectionViews.size() == 2 && ++StereoFrames % 240 == 1)
             {
@@ -992,10 +1003,13 @@ namespace xr
 #endif
         XrSession Session{XR_NULL_HANDLE};
         XrSpace AppSpace{XR_NULL_HANDLE};
+        XrSpace HeadSpace{XR_NULL_HANDLE};
+        std::optional<Space> HeadPose;
         XrSessionState SessionState{XR_SESSION_STATE_UNKNOWN};
         XrFrameState FrameState{MakeXr<XrFrameState>(XR_TYPE_FRAME_STATE)};
         std::vector<XrViewConfigurationView> ViewConfigurationViews{};
         std::vector<ViewSwapchain> ViewSwapchains{};
+        CompositionLayers Layers;
         std::atomic<double> ProjectionScale{1.0};
         std::vector<XrView> LocatedViews{};
         std::vector<Session::Frame::View> ActiveFrameViews{};
@@ -1148,6 +1162,29 @@ namespace xr
         m_impl->ProjectionScale.store(scale);
     }
 
+    bool System::Session::SupportsLayer(LayerShape shape) const
+    {
+        return shape == LayerShape::Quad || (shape == LayerShape::Cube && m_impl->System.Cube) ||
+            (shape == LayerShape::Cylinder && m_impl->System.Cylinder) || (shape == LayerShape::Equirect && m_impl->System.Equirect);
+    }
+    uint32_t System::Session::MaxLayerCount() const { return m_impl->System.MaxLayers; }
+    bool System::Session::SupportsMediaLayers() const { return m_impl->System.AndroidSurface; }
+    uint64_t System::Session::CreateMediaLayer(LayerShape shape, uint32_t width, uint32_t height, LayerLayout layout, std::shared_ptr<MediaSurfaceProducer> source)
+    {
+        PFN_xrCreateSwapchainAndroidSurfaceKHR create{};
+        CheckXr(xrGetInstanceProcAddr(m_impl->System.Instance, "xrCreateSwapchainAndroidSurfaceKHR", reinterpret_cast<PFN_xrVoidFunction*>(&create)), "get Android surface swapchain function");
+        return m_impl->Layers.CreateMedia(m_impl->Session, create, shape, width, height, layout, std::move(source));
+    }
+    uint64_t System::Session::CreateLayer(LayerShape shape, uint32_t width, uint32_t height, LayerLayout layout)
+    {
+        if (!SupportsLayer(shape)) throw std::runtime_error{"Layer shape unavailable in this OpenXR runtime"};
+        return m_impl->Layers.Create(m_impl->Session, shape, m_impl->ColorFormat, width, height, layout);
+    }
+    LayerImage System::Session::AcquireLayer(uint64_t id) { return {m_impl->Layers.Acquire(id), m_impl->ColorFormat}; }
+    void System::Session::MarkLayerRendered(uint64_t id) { m_impl->Layers.MarkRendered(id); }
+    void System::Session::RetireLayer(uint64_t id) { m_impl->Layers.Retire(id); }
+    void System::Session::SetLayerOrder(std::vector<LayerPlacement> layers) { m_impl->Layers.SetOrder(std::move(layers)); }
+
     TextureFormat System::Session::GetColorTextureFormat() const
     {
         return m_impl->ColorTextureFormat;
@@ -1194,6 +1231,7 @@ namespace xr
 
     System::Session::Frame::Frame(Session::Impl& sessionImpl)
         : Views{sessionImpl.ActiveFrameViews}
+        , ViewerSpace{sessionImpl.HeadPose}
         , InputSources{sessionImpl.InputSources}
         , FeaturePointCloud{sessionImpl.FeaturePointCloud}
         , EyeTrackerSpace{sessionImpl.EyeTrackerSpace}

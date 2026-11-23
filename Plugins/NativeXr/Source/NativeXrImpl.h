@@ -31,6 +31,10 @@ namespace Babylon
 
             Napi::Value GetRenderTargetForViewIndex(uint32_t viewIndex) const;
             std::optional<XRGPUSubImageData> GetWebGPUSubImage(uint32_t viewIndex) const;
+#if defined(__ANDROID__) && defined(BABYLON_NATIVE_XR_OPENXR)
+            XRGPUSubImageData AcquireLayerTexture(uint64_t id, uint32_t width, uint32_t height, uint32_t slices,
+                const std::string& format, uint32_t usage, const std::string& depthFormat);
+#endif
             uint32_t GetWebGPUTextureWidth() const;
             const char* GetWebGPUColorFormat() const;
             uint32_t GetWebGPUTextureHeight() const;
@@ -146,6 +150,7 @@ namespace Babylon
 #if defined(__ANDROID__) && defined(BABYLON_NATIVE_XR_OPENXR)
                 // Destroy the OpenXR session before returning the window to Vulkan WSI.
                 std::optional<gsl::final_action<void (*)()>> ResumeWindowPresentation;
+                std::map<uint64_t, ViewConfiguration::RenderTarget> AcquiredLayers;
 #endif
                 std::shared_ptr<xr::System::Session> Session{};
                 std::shared_ptr<xr::System::Session::Frame> Frame{};

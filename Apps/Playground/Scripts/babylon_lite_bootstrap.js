@@ -264,6 +264,8 @@
         var tag = String(tagName).toLowerCase();
         if (tag === "canvas") {
             element = createCanvas("");
+        } else if (tag === "video" && typeof globalThis.NativeAssetVideo === "function") {
+            element = addElementSurface(new globalThis.NativeAssetVideo(), tag);
         } else if (tag === "img" && typeof globalThis.Image === "function") {
             element = addElementSurface(new globalThis.Image(), tag);
             var prototype = Object.getPrototypeOf(element);

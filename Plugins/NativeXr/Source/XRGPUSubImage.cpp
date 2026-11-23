@@ -63,6 +63,9 @@ namespace Babylon
             Napi::Number::New(env, data.Width),
             Napi::Number::New(env, data.Height),
             Napi::Number::New(env, data.ArrayLayer),
+            Napi::Number::New(env, data.X), Napi::Number::New(env, data.Y),
+            Napi::Number::New(env, data.ViewWidth ? data.ViewWidth : data.Width),
+            Napi::Number::New(env, data.ViewHeight ? data.ViewHeight : data.Height),
         });
     }
 
@@ -78,10 +81,10 @@ namespace Babylon
         {
             m_depthStencilTexture = Napi::Persistent(RequireGPUTexture(info, 1, "depthStencilTexture"));
         }
-        m_viewport.Set("x", Napi::Number::New(info.Env(), 0));
-        m_viewport.Set("y", Napi::Number::New(info.Env(), 0));
-        m_viewport.Set("width", Napi::Number::New(info.Env(), m_width));
-        m_viewport.Set("height", Napi::Number::New(info.Env(), m_height));
+        m_viewport.Set("x", info.Length() >= 9 ? info[5] : Napi::Value::From(info.Env(), 0));
+        m_viewport.Set("y", info.Length() >= 9 ? info[6] : Napi::Value::From(info.Env(), 0));
+        m_viewport.Set("width", info.Length() >= 9 ? info[7] : Napi::Value::From(info.Env(), m_width));
+        m_viewport.Set("height", info.Length() >= 9 ? info[8] : Napi::Value::From(info.Env(), m_height));
     }
 
     Napi::Value XRGPUSubImage::GetColorTexture(const Napi::CallbackInfo&)

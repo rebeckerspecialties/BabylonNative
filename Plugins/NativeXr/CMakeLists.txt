@@ -17,6 +17,9 @@ target_link_libraries(NativeXr
     PRIVATE xr)
 
 set_property(TARGET NativeXr PROPERTY FOLDER Plugins)
+if(ANDROID AND BABYLON_NATIVE_XR_OPENXR)
+    target_link_libraries(NativeXr PRIVATE AndroidExtensions jnigraphics)
+endif()
 source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${SOURCES})
 
 if(WINDOWS_STORE)

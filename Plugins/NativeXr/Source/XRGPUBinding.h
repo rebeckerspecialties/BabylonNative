@@ -27,6 +27,7 @@ namespace Babylon
         Napi::Value GetUsesDepthValues(const Napi::CallbackInfo& info);
         Napi::Value GetPreferredColorFormat(const Napi::CallbackInfo& info);
         Napi::Value CreateProjectionLayer(const Napi::CallbackInfo& info);
+        Napi::Value CreateShapedLayer(const Napi::CallbackInfo& info);
         Napi::Value GetSubImage(const Napi::CallbackInfo& info);
         Napi::Value GetViewSubImage(const Napi::CallbackInfo& info);
         Napi::Object GetSubImageForEye(Napi::Env env, const Napi::Object& layer, const std::string& eye);

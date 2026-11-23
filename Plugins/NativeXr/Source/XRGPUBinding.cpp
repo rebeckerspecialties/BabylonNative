@@ -6,6 +6,9 @@
 #include "XRGPUSubImage.h"
 #include "XRProjectionLayer.h"
 #include "XRSession.h"
+#if defined(__ANDROID__) && defined(BABYLON_NATIVE_XR_OPENXR)
+#include "XRShapedLayer.h"
+#endif
 
 #include <cmath>
 #include <stdexcept>
@@ -79,6 +82,10 @@ namespace Babylon
     void XRGPUBinding::Initialize(Napi::Env env)
     {
         Napi::HandleScope scope{env};
+#if defined(__ANDROID__) && defined(BABYLON_NATIVE_XR_OPENXR)
+        XRShapedLayer::Initialize(env);
+        XRMediaBinding::Initialize(env);
+#endif
         auto constructor = DefineClass(
             env,
             JS_CLASS_NAME,
@@ -87,6 +94,12 @@ namespace Babylon
                 InstanceAccessor("usesDepthValues", &XRGPUBinding::GetUsesDepthValues, nullptr),
                 InstanceMethod("getPreferredColorFormat", &XRGPUBinding::GetPreferredColorFormat),
                 InstanceMethod("createProjectionLayer", &XRGPUBinding::CreateProjectionLayer),
+#if defined(__ANDROID__) && defined(BABYLON_NATIVE_XR_OPENXR)
+                InstanceMethod("createQuadLayer", &XRGPUBinding::CreateShapedLayer, napi_default, const_cast<char*>("XRQuadLayer")),
+                InstanceMethod("createCylinderLayer", &XRGPUBinding::CreateShapedLayer, napi_default, const_cast<char*>("XRCylinderLayer")),
+                InstanceMethod("createEquirectLayer", &XRGPUBinding::CreateShapedLayer, napi_default, const_cast<char*>("XREquirectLayer")),
+                InstanceMethod("createCubeLayer", &XRGPUBinding::CreateShapedLayer, napi_default, const_cast<char*>("XRCubeLayer")),
+#endif
                 InstanceMethod("getSubImage", &XRGPUBinding::GetSubImage),
                 InstanceMethod("getViewSubImage", &XRGPUBinding::GetViewSubImage),
             });
@@ -163,9 +176,45 @@ namespace Babylon
         return XRProjectionLayer::New(info.Env(), m_sessionReference.Value(), resolved, m_deviceReference.Value());
     }
 
+#if defined(__ANDROID__) && defined(BABYLON_NATIVE_XR_OPENXR)
+    Napi::Value XRGPUBinding::CreateShapedLayer(const Napi::CallbackInfo& info)
+    {
+        auto env = info.Env();
+        auto platform = m_session.PlatformSession();
+        if (!platform) return RejectSubImage(env,"InvalidStateError","The XRSession has ended.");
+        if (!m_session.IsLayersFeatureEnabled()) return RejectSubImage(env,"NotSupportedError","The layers feature is required.");
+        if (!info[0].IsObject()) throw Napi::TypeError::New(env,"Expected an XRGPULayerInit dictionary");
+        auto init = info[0].As<Napi::Object>();
+        if (init.Get("colorFormat").ToString().Utf8Value() != m_preferredColorFormat)
+            return RejectSubImage(env,"NotSupportedError","Unsupported XR layer color format");
+        const auto depth = init.Get("depthStencilFormat");
+        if (!depth.IsUndefined() && depth.ToString().Utf8Value() != "depth24plus" && depth.ToString().Utf8Value() != SUPPORTED_DEPTH_STENCIL_FORMAT)
+            return RejectSubImage(env,"NotSupportedError","Unsupported XR layer depth format");
+        for (const auto& [name, shape] : XRShapedLayer::Types)
+        {
+            if (std::string_view{name} != static_cast<const char*>(info.Data())) continue;
+            if (!platform->SupportsLayer(shape)) return RejectSubImage(env,"NotSupportedError","The runtime does not expose this OpenXR layer type.");
+            return env.Global().Get(name).As<Napi::Function>().New({Napi::External<xr::LayerShape>::New(env,const_cast<xr::LayerShape*>(&shape)),
+                m_sessionReference.Value(),m_deviceReference.Value(),init});
+        }
+        throw std::logic_error{"Unknown composition layer factory"};
+    }
+#endif
     Napi::Value XRGPUBinding::GetSubImage(const Napi::CallbackInfo& info)
     {
         auto env = info.Env();
+#if defined(__ANDROID__) && defined(BABYLON_NATIVE_XR_OPENXR)
+        if (auto* layer = XRShapedLayer::From(info[0]))
+        {
+            if (layer->IsMedia()) throw Napi::TypeError::New(env,"A media layer has no WebGPU subimage.");
+            if (!info[1].IsObject() || !layer->Valid(m_session) || !layer->UsesDevice(m_deviceReference.Value()) ||
+                !m_session.IsCurrentAnimationFrame(info[1].As<Napi::Object>()))
+                return RejectSubImage(env,"InvalidStateError","The layer, device and active frame must belong to the same session.");
+            if (!m_session.IsCompositionLayerActive(info[0].As<Napi::Object>()))
+                throw Napi::TypeError::New(env,"The layer is not in the active render state.");
+            return layer->SubImage(m_session, info[2].IsUndefined() ? "none" : info[2].ToString().Utf8Value());
+        }
+#endif
         if (info.Length() < 2 || !info[0].IsObject() || !info[1].IsObject() ||
             !IsInstanceOfGlobalClass(info[0].As<Napi::Object>(), "XRProjectionLayer") ||
             !IsInstanceOfGlobalClass(info[1].As<Napi::Object>(), "XRFrame"))

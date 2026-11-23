@@ -25,6 +25,9 @@
 #include "XRHand.h"
 #include "NativeXrImpl.h"
 #include "XRSession.h"
+#if defined(__ANDROID__) && defined(BABYLON_NATIVE_XR_OPENXR)
+#include "XRShapedLayer.h"
+#endif
 #include "XRFrame.h"
 #include "ImageTracking.h"
 
@@ -520,6 +523,19 @@ namespace Babylon
             return XRReferenceSpace::Request(info, m_enabledFeatures);
         }
 
+#if defined(__ANDROID__) && defined(BABYLON_NATIVE_XR_OPENXR)
+        XRGPUSubImageData XRSession::AcquireLayerTexture(uint64_t id, uint32_t width, uint32_t height, uint32_t slices,
+            const std::string& format, uint32_t usage, const std::string& depth)
+        {
+            return m_xr->AcquireLayerTexture(id,width,height,slices,format,usage,depth);
+        }
+        bool XRSession::IsCompositionLayerActive(const Napi::Object& object) const
+        {
+            const auto layers = m_renderState.Get("layers").As<Napi::Array>();
+            for (uint32_t i=0; i<layers.Length(); ++i) if (object.StrictEquals(layers.Get(i))) return true;
+            return false;
+        }
+#endif
         Napi::Value XRSession::UpdateRenderState(const Napi::CallbackInfo& info)
         {
             if (info.Length() == 0 || !info[0].IsObject())
@@ -556,6 +572,7 @@ namespace Babylon
 
             const auto hasLayers = update.Has("layers") && !update.Get("layers").IsUndefined();
             Babylon::XRProjectionLayer* projectionLayerCandidate{};
+            uint32_t projectionIndex{};
             if (hasLayers)
             {
                 if (!update.Get("layers").IsArray())
@@ -564,14 +581,28 @@ namespace Babylon
                 }
 
                 const auto layers = update.Get("layers").As<Napi::Array>();
-                if (layers.Length() > 1)
+                uint32_t headerCount{};
+                for (uint32_t i=0; i<layers.Length(); ++i)
                 {
-                    throw std::runtime_error{"NativeXR currently supports one active WebGPU projection layer."};
-                }
-
-                if (layers.Length() == 1)
-                {
-                    const auto layerValue = layers.Get(uint32_t{0});
+                    const auto layerValue = layers.Get(i);
+#if defined(__ANDROID__) && defined(BABYLON_NATIVE_XR_OPENXR)
+                    if (auto* shaped = XRShapedLayer::From(layerValue))
+                    {
+                        if (!shaped->Valid(*this))
+                        {
+                            auto error = Napi::Error::New(info.Env(),"Destroyed or foreign composition layer");
+                            error.Value().Set("name","InvalidStateError");
+                            throw error;
+                        }
+                        for (uint32_t j=0; j<i; ++j)
+                            if (layerValue.StrictEquals(layers.Get(j))) throw Napi::TypeError::New(info.Env(),"Duplicate layer");
+                        headerCount += shaped->Eyes();
+                        continue;
+                    }
+#endif
+                    if (projectionLayerCandidate) throw std::runtime_error{"Only one projection layer is supported."};
+                    ++headerCount;
+                    projectionIndex = i;
                     if (!layerValue.IsObject() || !IsInstanceOfGlobalClass(layerValue.As<Napi::Object>(), "XRProjectionLayer"))
                     {
                         throw std::runtime_error{"NativeXR renderState.layers only supports XRProjectionLayer objects."};
@@ -583,6 +614,10 @@ namespace Babylon
                         throw std::runtime_error{"XRSession.updateRenderState received a projection layer from another XRSession."};
                     }
                 }
+#if defined(__ANDROID__) && defined(BABYLON_NATIVE_XR_OPENXR)
+                if (auto platform = PlatformSession(); platform && headerCount > platform->MaxLayerCount())
+                    throw std::runtime_error{"OpenXR runtime layer count exceeded"};
+#endif
             }
 
             if (m_pendingRenderState.IsEmpty())
@@ -614,10 +649,12 @@ namespace Babylon
                 const auto layers = update.Get("layers").As<Napi::Array>();
                 auto snapshot = Napi::Array::New(info.Env(), layers.Length());
                 m_pendingProjectionLayer.Reset();
+                for (uint32_t i=0; i<layers.Length(); ++i) snapshot.Set(i,layers.Get(i));
+                auto object = info.Env().Global().Get("Object").As<Napi::Object>();
+                object.Get("freeze").As<Napi::Function>().Call(object,{snapshot});
                 if (projectionLayerCandidate)
                 {
-                    auto layer = layers.Get(uint32_t{0}).As<Napi::Object>();
-                    snapshot.Set(uint32_t{0}, layer);
+                    auto layer = snapshot.Get(projectionIndex).As<Napi::Object>();
                     m_pendingProjectionLayer = Napi::Persistent(layer);
                 }
                 m_xr->SetProjectionAttachments(projectionLayerCandidate ? std::optional{projectionLayerCandidate->DepthStencilFormat()} : std::nullopt,
@@ -879,6 +916,23 @@ namespace Babylon
                 m_inAnimationCallback = true;
                 const auto resetCallback = gsl::finally([this] { m_inAnimationCallback = false; });
                 callbackPtr->Value().Call({ Napi::Value::From(Env(), m_timestamp), m_jsXRFrame.Value() });
+#if defined(__ANDROID__) && defined(BABYLON_NATIVE_XR_OPENXR)
+                if (auto platform = PlatformSession(); platform && m_renderState.Get("layers").IsArray())
+                {
+                    auto layers = m_renderState.Get("layers").As<Napi::Array>();
+                    std::vector<xr::LayerPlacement> order;
+                    for (uint32_t i=0; i<layers.Length(); ++i)
+                    {
+                        if (auto* shaped = XRShapedLayer::From(layers.Get(i)))
+                        {
+                            if (shaped->Id()) order.push_back(shaped->Placement());
+                        }
+                        else order.emplace_back();
+                    }
+                    if (!m_renderState.Get("baseLayer").IsNull() && layers.Length() == 0) order.emplace_back();
+                    platform->SetLayerOrder(std::move(order));
+                }
+#endif
             });
 
             // The return value should be a request ID to allow for requesting cancellation, this is unused in Babylon.js currently.

@@ -90,6 +90,7 @@ namespace xr
         uint32_t QueueFamilyIndex{};
         uint32_t QueueIndex{};
         uint32_t MaxTextureDimension2D{};
+        bool (*WaitForSubmittedWork)(){};
     };
 
     struct Vector3f
@@ -117,6 +118,26 @@ namespace xr
     {
         xr::Pose Pose;
     };
+
+#if defined(BABYLON_NATIVE_XR_OPENXR) && defined(__ANDROID__)
+    enum class LayerShape { Projection, Quad, Cylinder, Equirect, Cube };
+    enum class LayerLayout { Mono, Array, LeftRight, TopBottom };
+    struct LayerPlacement
+    {
+        uint64_t Id{}; // Zero denotes the projection swapchain.
+        Pose Transform{};
+        float Width{1}, Height{1}, Radius{2}, Angle{1}, Aspect{2}, Upper{1.5707963f}, Lower{-1.5707963f};
+        bool BlendAlpha{true};
+        bool ViewerRelative{};
+    };
+    struct LayerImage { uint64_t Image; int64_t Format; };
+    class MediaSurfaceProducer
+    {
+    public:
+        virtual ~MediaSurfaceProducer() = default;
+        virtual void SetSurface(void* surface) = 0;
+    };
+#endif
 
     using NativeTrackablePtr = void*;
     struct HitResult
@@ -358,6 +379,7 @@ namespace xr
                 };
                 
                 std::vector<View>& Views;
+                std::optional<Space> ViewerSpace;
                 std::vector<InputSource>& InputSources;
                 std::vector<FeaturePoint>& FeaturePointCloud;
 
@@ -410,6 +432,15 @@ namespace xr
             TextureFormat GetColorTextureFormat() const;
 #if defined(BABYLON_NATIVE_XR_OPENXR) && defined(__ANDROID__)
             void SetProjectionScale(double scale);
+            bool SupportsLayer(LayerShape shape) const;
+            uint32_t MaxLayerCount() const;
+            uint64_t CreateLayer(LayerShape shape, uint32_t width, uint32_t height, LayerLayout layout);
+            uint64_t CreateMediaLayer(LayerShape shape, uint32_t width, uint32_t height, LayerLayout layout, std::shared_ptr<MediaSurfaceProducer> source);
+            bool SupportsMediaLayers() const;
+            LayerImage AcquireLayer(uint64_t id);
+            void MarkLayerRendered(uint64_t id);
+            void RetireLayer(uint64_t id);
+            void SetLayerOrder(std::vector<LayerPlacement> layers);
 #endif
             void SetDepthsNearFar(float depthNear, float depthFar);
             void SetPlaneDetectionEnabled(bool enabled) const;

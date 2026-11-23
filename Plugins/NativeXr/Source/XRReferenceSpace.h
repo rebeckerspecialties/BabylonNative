@@ -89,6 +89,7 @@ namespace Babylon
                 if (info[0].IsString())
                 {
                     const auto referenceSpaceType = info[0].As<Napi::String>().Utf8Value();
+                    m_viewer = referenceSpaceType == XRReferenceSpaceType::VIEWER;
                     if (referenceSpaceType == XRReferenceSpaceType::LOCAL_FLOOR)
                     {
 #ifdef __ANDROID__
@@ -116,6 +117,8 @@ namespace Babylon
         {
             m_jsTransform = Napi::Persistent(transformObj);
         }
+
+        bool IsViewer() const { return m_viewer; }
 
         XRRigidTransform* GetTransform()
         {
@@ -150,11 +153,16 @@ namespace Babylon
                 auto composedTransform = XRRigidTransform::New(info.Env());
                 XRRigidTransform::Unwrap(composedTransform)->Update(
                     ComposePoses(current->GetNativePose(), offset->GetNativePose()));
-                return XRReferenceSpace::New(info.Env(), composedTransform);
+                auto space = XRReferenceSpace::New(info.Env(), composedTransform);
+                Unwrap(space)->m_viewer = m_viewer;
+                return space;
             }
-            return XRReferenceSpace::New(info);
+            auto space = XRReferenceSpace::New(info);
+            Unwrap(space)->m_viewer = m_viewer;
+            return space;
         }
 
         Napi::ObjectReference m_jsTransform{};
+        bool m_viewer{};
     };
 } // Babylon

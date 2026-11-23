@@ -316,7 +316,8 @@ namespace Babylon
                         nativeVulkanBinding.api_version,
                         nativeVulkanBinding.queue_family_index,
                         nativeVulkanBinding.queue_index,
-                        nativeVulkanBinding.max_texture_dimension_2d});
+                        nativeVulkanBinding.max_texture_dimension_2d,
+                        babylon_wgpu_native_queue_wait_submitted_work});
                     void* graphicsDevice = vulkanBinding.get();
                     void* graphicsQueue = nullptr;
                     std::shared_ptr<void> graphicsBindingLifetime = vulkanBinding;
@@ -705,9 +706,57 @@ namespace Babylon
 #endif
         }
 
+#if defined(__ANDROID__) && defined(BABYLON_NATIVE_XR_OPENXR)
+        XRGPUSubImageData NativeXr::Impl::AcquireLayerTexture(uint64_t id, uint32_t width, uint32_t height, uint32_t slices,
+            const std::string& format, uint32_t usage, const std::string& depthFormat)
+        {
+            auto& target = m_sessionState->AcquiredLayers[id];
+            if (target.JsColorTexture.IsEmpty())
+            {
+                const auto image = m_sessionState->Session->AcquireLayer(id);
+                // A retained JS view must never reference an image that the runtime has reacquired.
+                // COPY_DST selects the app-owned render texture + ordered Vulkan resolve path.
+                const auto descriptor = MakeTextureDescriptorJson("XRCompositionLayer", width, height, slices, format.c_str(), usage | 2);
+                target.ColorTextureId = babylon_wgpu_native_import_vulkan_texture(image.Image, width, height, image.Format, descriptor.c_str());
+                if (!target.ColorTextureId) throw std::runtime_error{"Could not import OpenXR compositor image: " + GetLastWgpuError()};
+                target.JsColorTexture = Napi::Persistent(NativeWebGPU::CreateTextureFromNativeId(
+                    m_env, target.ColorTextureId, "XRCompositionLayer", format.c_str(), width, height, slices, usage));
+                if (!depthFormat.empty())
+                {
+                    const auto depth = MakeTextureDescriptorJson("XRCompositionLayer.depth", width, height, slices, depthFormat.c_str(), WEBGPU_TEXTURE_USAGE_RENDER_ATTACHMENT);
+                    target.DepthTextureId = babylon_wgpu_native_create_texture(depth.c_str());
+                    if (!target.DepthTextureId) throw std::runtime_error{"Could not create layer depth: " + GetLastWgpuError()};
+                    target.JsDepthTexture = Napi::Persistent(NativeWebGPU::CreateTextureFromNativeId(
+                        m_env, target.DepthTextureId, "XRCompositionLayer.depth", depthFormat.c_str(), width, height, slices, WEBGPU_TEXTURE_USAGE_RENDER_ATTACHMENT));
+                }
+            }
+            return {target.JsColorTexture.Value(), target.JsDepthTexture.IsEmpty() ? m_env.Null() : Napi::Value{target.JsDepthTexture.Value()}, width, height};
+        }
+#endif
+
         void NativeXr::Impl::EndUpdate()
         {
             arcana::trace_region endUpdateRegion{"NativeXR::EndUpdate"};
+#if defined(__ANDROID__) && defined(BABYLON_NATIVE_XR_OPENXR)
+            for (auto& [id, target] : m_sessionState->AcquiredLayers)
+            {
+                if (target.JsColorTexture.IsEmpty()) continue;
+                const auto color = target.JsColorTexture.Value();
+                if (!color.Get("__destroyed").ToBoolean().Value())
+                {
+                    if (!babylon_wgpu_native_prepare_openxr_textures_for_release(&target.ColorTextureId, 1))
+                        throw std::runtime_error{"Could not resolve OpenXR layer: " + GetLastWgpuError()};
+                    m_sessionState->Session->MarkLayerRendered(id);
+                    color.Get("destroy").As<Napi::Function>().Call(color, {});
+                }
+                if (!target.JsDepthTexture.IsEmpty())
+                {
+                    const auto depth = target.JsDepthTexture.Value();
+                    depth.Get("destroy").As<Napi::Function>().Call(depth, {});
+                }
+            }
+            m_sessionState->AcquiredLayers.clear();
+#endif
             m_sessionState->ActiveViewConfigurations.clear();
             m_sessionState->ViewConfigurationStartViewIdx.clear();
         }

@@ -56,9 +56,11 @@ namespace Babylon
                     : space;
             };
 
-            // Update the transform, for now assume that the pose of the first view if it exists represents the viewer transform.
-            // This is correct for devices with a single view, but is likely incorrect for devices with multiple views (eg. VR/AR headsets with binocular views).
-            if (frame.Views.size() > 0)
+            if (frame.ViewerSpace)
+            {
+                m_transform.Update(adjustSpace(*frame.ViewerSpace), false);
+            }
+            else if (!frame.Views.empty())
             {
                 m_transform.Update(adjustSpace(frame.Views[0].Space), false);
             }

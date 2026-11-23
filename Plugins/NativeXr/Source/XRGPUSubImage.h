@@ -13,6 +13,7 @@ namespace Babylon
         uint32_t Width{};
         uint32_t Height{};
         uint32_t ArrayLayer{};
+        uint32_t X{}, Y{}, ViewWidth{}, ViewHeight{};
     };
 
     // WebXR-WebGPU XRGPUSubImage implementation.
