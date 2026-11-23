@@ -15,6 +15,7 @@ namespace Babylon
 
             XRFrame(const Napi::CallbackInfo& info);
             void Update(const Napi::Env& env, const std::shared_ptr<const xr::System::Session::Frame>& frame, uint32_t timestamp);
+            void SetPoseAccess(bool active) { m_poseAccess = active; }
             Napi::Promise CreateNativeAnchor(const Napi::CallbackInfo& info, xr::Pose pose, xr::NativeTrackablePtr nativeTrackable);
             Napi::Value DeclareNativeAnchor(const Napi::Env& env, xr::NativeAnchorPtr nativeAnchor);
 
@@ -49,8 +50,10 @@ namespace Babylon
             Napi::ObjectReference m_jsJointPose{};
 
             bool m_hasBegunTracking{ false };
+            bool m_poseAccess{};
 
             Napi::Value GetViewerPose(const Napi::CallbackInfo& info);
+            Napi::Value GetPose(const Napi::CallbackInfo& info);
             Napi::Value GetPoseData(const Napi::CallbackInfo& info);
             Napi::Value GetJointPose(const Napi::CallbackInfo& info);
             Napi::Value FillPoses(const Napi::CallbackInfo& info);

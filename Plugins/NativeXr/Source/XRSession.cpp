@@ -861,10 +861,11 @@ namespace Babylon
                     }
                 }
                 NotifyFrameRateChange(sessionPtr->Value());
+                m_xrFrame.Update(Env(), frame, m_timestamp);
+                m_xrFrame.SetPoseAccess(true);
+                const auto endPoseAccess = gsl::finally([this] { m_xrFrame.SetPoseAccess(false); });
                 ProcessEyeInputSource(*frame.get(), Env());
                 ProcessControllerInputSources(*frame.get(), Env());
-
-                m_xrFrame.Update(Env(), frame, m_timestamp);
 
                 if (m_imageTrackingRequests.size() > 0)
                 {

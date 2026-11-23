@@ -37,6 +37,7 @@ namespace Babylon
                 JS_CLASS_NAME,
                 {
                     InstanceMethod("getViewerPose", &XRFrame::GetViewerPose),
+                    InstanceMethod("getPose", &XRFrame::GetPose),
                     InstanceMethod("getPoseData", &XRFrame::GetPoseData),
                     InstanceMethod("getHitTestResults", &XRFrame::GetHitTestResults),
                     InstanceMethod("createAnchor", &XRFrame::CreateAnchor),
@@ -202,6 +203,59 @@ namespace Babylon
                 referenceSpace == nullptr ? nullptr : referenceSpace->GetTransform());
 
             return m_jsXRViewerPose.Value();
+        }
+
+        Napi::Value XRFrame::GetPose(const Napi::CallbackInfo& info)
+        {
+            const auto env = info.Env();
+            if (!m_poseAccess || !m_frame)
+            {
+                auto error = Napi::Error::New(env, "XRFrame.getPose requires an active XR frame.");
+                error.Value().Set("name", "InvalidStateError");
+                error.ThrowAsJavaScriptException();
+                return env.Undefined();
+            }
+            const auto referenceType = env.Global().Get("XRReferenceSpace").As<Napi::Function>();
+            const auto locate = [&](const Napi::Value& value) -> std::optional<xr::Pose> {
+                if (value.IsExternal())
+                {
+                    // Do not dereference an opaque space retained from a disconnected source.
+                    const auto* address = value.As<Napi::External<void>>().Data();
+                    for (const auto& source : m_frame->InputSources)
+                    {
+                        if (!source.TrackedThisFrame)
+                        {
+                            continue;
+                        }
+                        if (address == &source.AimSpace) return source.AimSpace.Pose;
+                        if (address == &source.GripSpace) return source.GripSpace.Pose;
+                        if (source.JointsTrackedThisFrame)
+                        {
+                            for (const auto& joint : source.HandJoints)
+                            {
+                                if (address == &joint && joint.PoseTracked) return joint.Pose;
+                            }
+                        }
+                    }
+                    if (m_frame->EyeTrackerSpace && address == &*m_frame->EyeTrackerSpace) return m_frame->EyeTrackerSpace->Pose;
+                    return std::nullopt;
+                }
+                if (value.IsObject() && value.As<Napi::Object>().InstanceOf(referenceType))
+                {
+                    return XRReferenceSpace::Unwrap(value.As<Napi::Object>())->GetPoseInNativeSpace({});
+                }
+                Napi::TypeError::New(env, "XRFrame.getPose expects two XR spaces.").ThrowAsJavaScriptException();
+                return std::nullopt;
+            };
+            const auto space = locate(info[0]);
+            if (env.IsExceptionPending()) return env.Undefined();
+            const auto base = locate(info[1]);
+            if (env.IsExceptionPending()) return env.Undefined();
+            if (!space || !base) return env.Null();
+            auto result = XRPose::New(info);
+            XRPose::Unwrap(result)->Update(info, ComposePoses(InvertPose(*base), *space));
+            result.Set("emulatedPosition", !m_frame->IsTracking);
+            return result;
         }
 
         Napi::Value XRFrame::GetPoseData(const Napi::CallbackInfo& info)

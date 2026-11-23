@@ -31,12 +31,29 @@ async function runProjectionRotation({ layersFeature = true, replacementScale = 
             const initial = [layers[0]];
             check(session.updateRenderState({ layers: initial }) === undefined, "updateRenderState must return undefined");
             initial[0] = layers[1];
-            let retainedView;
+            let retainedView, retainedFrame;
             await new Promise((resolve, reject) => {
                 const tick = (time, frame) => {
                     try {
                         const pose = frame.getViewerPose(space);
                         if (!pose) { session.requestAnimationFrame(tick); return; }
+                        if (!frames) {
+                            const translated = space.getOffsetReferenceSpace(new XRRigidTransform({ x: 0.3, y: -0.2, z: 0.1 }));
+                            const forward = frame.getPose(translated, space);
+                            const reverse = frame.getPose(space, translated);
+                            check(forward !== reverse && Math.abs(forward.transform.position.x - 0.3) < 0.0001 &&
+                                Math.abs(reverse.transform.position.y - 0.2) < 0.0001, "relative poses were reversed or aliased");
+                            let invalid;
+                            try { frame.getPose({}, space); } catch (e) { invalid = e; }
+                            check(invalid instanceof TypeError, "non-space accepted by getPose");
+                        }
+                        for (const source of frame.session.inputSources) {
+                            if (!source.gripSpace || !frame.getPose(source.gripSpace, space)) continue;
+                            const identity = frame.getPose(source.gripSpace, source.gripSpace);
+                            check(identity && identity.transform.matrix.every((v, i) => Math.abs(v - (i % 5 === 0 ? 1 : 0)) < 0.0002),
+                                "tracked grip expressed relative to itself was not identity");
+                        }
+                        retainedFrame = frame;
                         const layer = layers[index];
                         const snapshot = session.renderState;
                         check(snapshot.layers[0] === layer, "new layer inactive on next frame");
@@ -99,6 +116,9 @@ async function runProjectionRotation({ layersFeature = true, replacementScale = 
             let error;
             try { binding.getViewSubImage(layers[index], retainedView); } catch (e) { error = e; }
             check(error?.name === "InvalidStateError", "subimage escaped its animation callback");
+            let poseError;
+            try { retainedFrame.getPose(space, space); } catch (e) { poseError = e; }
+            check(poseError?.name === "InvalidStateError", "getPose escaped its active frame");
             await read.mapAsync(GPUMapMode.READ);
             const validationError = await device.popErrorScope();
             if (validationError) failures.add(validationError.message);
