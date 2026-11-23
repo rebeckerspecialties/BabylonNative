@@ -45,6 +45,60 @@ setNativeArPortalDefault("__nativeArPortalIblShadowMaxCasters", 24);
 setNativeArPortalDefault("__nativeArPortalIblShadowScreenSpace", false);
 setNativeArPortalDefault("__nativeArPortalExitDelayMs", 70000);
 
+// Plane hit tests may include an infinite extension. Auto-placement must remain
+// inside the observed floor polygon, with only a small edge-noise allowance.
+function findNativeArPortalFloorForPosition(position, floorPlanes) {
+    if (!position || !Number.isFinite(position.x) || !Number.isFinite(position.y) || !Number.isFinite(position.z)) {
+        return null;
+    }
+    var bestFloor = null;
+    var bestScore = Number.POSITIVE_INFINITY;
+    var edgeTolerance = 0.05;
+    var verticalTolerance = 0.12;
+    for (var key in floorPlanes) {
+        if (!Object.prototype.hasOwnProperty.call(floorPlanes, key)) {
+            continue;
+        }
+        var plane = floorPlanes[key];
+        if (!plane || !plane.transformationMatrix || !plane.polygonDefinition || plane.polygonDefinition.length < 3) {
+            continue;
+        }
+        var polygon = plane.polygonDefinition.map(function (point) {
+            return BABYLON.Vector3.TransformCoordinates(point, plane.transformationMatrix);
+        });
+        var averageY = 0;
+        var area = 0;
+        var inside = false;
+        var edgeDistanceSquared = Number.POSITIVE_INFINITY;
+        for (var i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+            var a = polygon[j];
+            var b = polygon[i];
+            averageY += b.y;
+            area += a.x * b.z - b.x * a.z;
+            if ((a.z > position.z) !== (b.z > position.z) &&
+                position.x < (b.x - a.x) * (position.z - a.z) / (b.z - a.z) + a.x) {
+                inside = !inside;
+            }
+            var dx = b.x - a.x;
+            var dz = b.z - a.z;
+            var lengthSquared = dx * dx + dz * dz;
+            var t = lengthSquared > 0 ? Math.max(0, Math.min(1, ((position.x - a.x) * dx + (position.z - a.z) * dz) / lengthSquared)) : 0;
+            var distanceX = position.x - (a.x + t * dx);
+            var distanceZ = position.z - (a.z + t * dz);
+            edgeDistanceSquared = Math.min(edgeDistanceSquared, distanceX * distanceX + distanceZ * distanceZ);
+        }
+        var verticalDistance = Math.abs(position.y - averageY / polygon.length);
+        var horizontalDistance = inside ? 0 : Math.sqrt(edgeDistanceSquared);
+        var score = verticalDistance + horizontalDistance * 0.01;
+        if (Number.isFinite(area) && Math.abs(area) > 1e-8 && verticalDistance <= verticalTolerance &&
+            horizontalDistance <= edgeTolerance && score < bestScore) {
+            bestFloor = { id: key, verticalDistance: verticalDistance, horizontalDistance: horizontalDistance };
+            bestScore = score;
+        }
+    }
+    return bestFloor;
+}
+
 (function () {
     var EXIT_DELAY_MS = Math.max(0, Math.min(600000, Number(globalThis.__nativeArPortalExitDelayMs || 70000)));
     var ASSET_ROOT_URL = "app:///Scripts/";
@@ -721,9 +775,14 @@ setNativeArPortalDefault("__nativeArPortalExitDelayMs", 70000);
                 continue;
             }
 
+            // Mirror the GLB tuner without including painted markings, grass, or car materials.
+            var isGroundMaterial = material.name === "New road" || material.name === "Trottoir" || material.name === "Trottoir3";
             if ("metallic" in material && "roughness" in material) {
                 pbrCount++;
-                if (materialNameMatches(material, /metal|carrosserie|chrome|wheel|wheels|reactor|plate|vents|delorean/)) {
+                if (isGroundMaterial) {
+                    material.metallic = 0;
+                    material.roughness = material.name === "New road" ? 0.95 : 0.9;
+                } else if (materialNameMatches(material, /metal|carrosserie|chrome|wheel|wheels|reactor|plate|vents|delorean/)) {
                     material.metallic = materialNameMatches(material, /seat|volant|convecteur/) ? 0.25 : 0.8;
                     material.roughness = materialNameMatches(material, /carrosserie|chrome|plate/) ? 0.2 : 0.34;
                 } else if (materialNameMatches(material, /cable|grid/)) {
@@ -750,7 +809,14 @@ setNativeArPortalDefault("__nativeArPortalExitDelayMs", 70000);
                 environmentReflectionCount++;
             }
 
-            if (materialNameMatches(material, /neon|feux|flare|convecteur_light/)) {
+            if (isGroundMaterial) {
+                if ("emissiveTexture" in material) {
+                    material.emissiveTexture = null;
+                }
+                if ("emissiveColor" in material) {
+                    material.emissiveColor = new BABYLON.Color3(0, 0, 0);
+                }
+            } else if (materialNameMatches(material, /neon|feux|flare|convecteur_light/)) {
                 if ("emissiveTexture" in material && !material.emissiveTexture && material.albedoTexture) {
                     material.emissiveTexture = material.albedoTexture;
                 }
@@ -1260,66 +1326,7 @@ setNativeArPortalDefault("__nativeArPortalExitDelayMs", 70000);
         }
 
         function findSemanticFloorForPosition(position) {
-            var bestFloor = null;
-            var bestScore = Number.POSITIVE_INFINITY;
-            var margin = 0.18;
-            var infinitePlaneHorizontalTolerance = 1.5;
-            var verticalTolerance = 0.12;
-
-            for (var key in nativeFloorPlanes) {
-                if (!Object.prototype.hasOwnProperty.call(nativeFloorPlanes, key)) {
-                    continue;
-                }
-
-                var plane = nativeFloorPlanes[key];
-                var polygon = plane && plane.polygonDefinition;
-                var matrix = plane && plane.transformationMatrix;
-                if (!polygon || !matrix || polygon.length < 3) {
-                    continue;
-                }
-
-                var minX = Number.POSITIVE_INFINITY;
-                var maxX = Number.NEGATIVE_INFINITY;
-                var minZ = Number.POSITIVE_INFINITY;
-                var maxZ = Number.NEGATIVE_INFINITY;
-                var averageY = 0;
-                for (var pointIndex = 0; pointIndex < polygon.length; pointIndex++) {
-                    var worldPoint = BABYLON.Vector3.TransformCoordinates(polygon[pointIndex], matrix);
-                    minX = Math.min(minX, worldPoint.x);
-                    maxX = Math.max(maxX, worldPoint.x);
-                    minZ = Math.min(minZ, worldPoint.z);
-                    maxZ = Math.max(maxZ, worldPoint.z);
-                    averageY += worldPoint.y;
-                }
-
-                averageY /= polygon.length;
-                var verticalDistance = Math.abs(Number(position.y || 0) - averageY);
-                var horizontalDistance = 0;
-                if (position.x < minX - margin) {
-                    horizontalDistance = Math.max(horizontalDistance, (minX - margin) - position.x);
-                } else if (position.x > maxX + margin) {
-                    horizontalDistance = Math.max(horizontalDistance, position.x - (maxX + margin));
-                }
-                if (position.z < minZ - margin) {
-                    horizontalDistance = Math.max(horizontalDistance, (minZ - margin) - position.z);
-                } else if (position.z > maxZ + margin) {
-                    horizontalDistance = Math.max(horizontalDistance, position.z - (maxZ + margin));
-                }
-
-                var score = verticalDistance + (horizontalDistance * 0.01);
-                if (verticalDistance <= verticalTolerance &&
-                    horizontalDistance <= infinitePlaneHorizontalTolerance &&
-                    score < bestScore) {
-                    bestFloor = {
-                        id: key,
-                        verticalDistance: verticalDistance,
-                        horizontalDistance: horizontalDistance
-                    };
-                    bestScore = score;
-                }
-            }
-
-            return bestFloor;
+            return findNativeArPortalFloorForPosition(position, nativeFloorPlanes);
         }
 
         function selectSemanticFloorHitResult(results) {
