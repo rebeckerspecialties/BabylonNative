@@ -65,8 +65,6 @@ namespace Babylon
 
         XRFrame::XRFrame(const Napi::CallbackInfo& info)
             : Napi::ObjectWrap<XRFrame>{ info }
-            , m_jsXRViewerPose{ Napi::Persistent(XRViewerPose::New(info)) }
-            , m_xrViewerPose{ *XRViewerPose::Unwrap(m_jsXRViewerPose.Value()) }
             , m_imageTrackingResultsArray{ Napi::Persistent(Napi::Array::New(info.Env())) }
             , m_jsTransform{ Napi::Persistent(XRRigidTransform::New(info.Env())) }
             , m_transform{ *XRRigidTransform::Unwrap(m_jsTransform.Value()) }
@@ -82,6 +80,11 @@ namespace Babylon
         {
             // Store off a pointer to the frame so that the viewer pose can be updated later. We cannot
             // update the viewer pose here because we don't yet know the desired reference space.
+            if (m_frame != frame)
+            {
+                m_jsXRViewerPose.Reset();
+                m_viewerPoseSpace.Reset();
+            }
             m_frame = frame;
 
             // Anchors created during the previous XR frame become observable from this frame.
@@ -185,10 +188,17 @@ namespace Babylon
             }
             m_hasBegunTracking = true;
 
-            auto* referenceSpace = XRReferenceSpace::Unwrap(info[0].As<Napi::Object>());
-            m_xrViewerPose.Update(
+            const auto space = info[0].As<Napi::Object>();
+            if (!m_jsXRViewerPose.IsEmpty() && m_viewerPoseSpace.Value().StrictEquals(space))
+            {
+                return m_jsXRViewerPose.Value();
+            }
+            auto* referenceSpace = XRReferenceSpace::Unwrap(space);
+            m_jsXRViewerPose = Napi::Persistent(XRViewerPose::New(info));
+            m_viewerPoseSpace = Napi::Persistent(space);
+            XRViewerPose::Unwrap(m_jsXRViewerPose.Value())->Update(
                 info,
-                *m_frame,
+                m_frame,
                 referenceSpace == nullptr ? nullptr : referenceSpace->GetTransform());
 
             return m_jsXRViewerPose.Value();

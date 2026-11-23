@@ -18,6 +18,23 @@ namespace Babylon
         constexpr auto SUPPORTED_DEPTH_STENCIL_FORMAT{"depth24plus-stencil8"};
         constexpr uint32_t GPU_TEXTURE_USAGE_RENDER_ATTACHMENT{0x10};
 
+        Napi::Value RejectSubImage(Napi::Env env, const char* name, const char* message)
+        {
+            auto ctor = env.Global().Get("DOMException");
+            if (ctor.IsFunction())
+            {
+                auto error = ctor.As<Napi::Function>().New({Napi::String::New(env, message), Napi::String::New(env, name)});
+                napi_throw(env, error);
+            }
+            else
+            {
+                auto error = Napi::Error::New(env, message);
+                error.Value().Set("name", name);
+                error.ThrowAsJavaScriptException();
+            }
+            return env.Undefined();
+        }
+
         Napi::Object RequireXRSession(const Napi::CallbackInfo& info)
         {
             if (info.Length() < 1 || !info[0].IsObject())
@@ -137,26 +154,46 @@ namespace Babylon
         resolved.Set("scaleFactor", Napi::Number::New(info.Env(), scaleFactor));
         resolved.Set("ignoreDepthValues", init.Get("ignoreDepthValues"));
 
-        return XRProjectionLayer::New(info.Env(), m_sessionReference.Value(), resolved);
+        return XRProjectionLayer::New(info.Env(), m_sessionReference.Value(), resolved, m_deviceReference.Value());
     }
 
     Napi::Value XRGPUBinding::GetSubImage(const Napi::CallbackInfo& info)
     {
-        if (info.Length() < 2 || !info[0].IsObject() || !info[1].IsObject())
+        auto env = info.Env();
+        if (info.Length() < 2 || !info[0].IsObject() || !info[1].IsObject() ||
+            !IsInstanceOfGlobalClass(info[0].As<Napi::Object>(), "XRProjectionLayer") ||
+            !IsInstanceOfGlobalClass(info[1].As<Napi::Object>(), "XRFrame"))
         {
-            throw std::runtime_error{"XRGPUBinding.getSubImage requires an XR layer and current XRFrame."};
+            Napi::TypeError::New(env, "getSubImage requires an XRCompositionLayer and an XRFrame.").ThrowAsJavaScriptException();
+            return env.Undefined();
         }
-        const auto eye = info.Length() > 2 && info[2].IsString() ? info[2].As<Napi::String>().Utf8Value() : std::string{XREye::NONE};
-        return GetSubImageForEye(info.Env(), info[0].As<Napi::Object>(), eye);
+        if (!m_session.IsLayersFeatureEnabled())
+        {
+            return RejectSubImage(env, "NotSupportedError", "getSubImage requires the layers feature.");
+        }
+        auto* layer = XRProjectionLayer::Unwrap(info[0].As<Napi::Object>());
+        if (!layer || !layer->BelongsTo(m_session) || !layer->UsesDevice(m_deviceReference.Value()) || !m_session.IsCurrentAnimationFrame(info[1].As<Napi::Object>()))
+        {
+            return RejectSubImage(env, "InvalidStateError", "The layer and active animation frame must belong to this session.");
+        }
+        Napi::TypeError::New(env, "Use getViewSubImage for an XRProjectionLayer.").ThrowAsJavaScriptException();
+        return env.Undefined();
     }
 
     Napi::Value XRGPUBinding::GetViewSubImage(const Napi::CallbackInfo& info)
     {
-        if (info.Length() < 2 || !info[0].IsObject() || !info[1].IsObject())
+        if (info.Length() < 2 || !info[0].IsObject() || !info[1].IsObject() ||
+            !IsInstanceOfGlobalClass(info[0].As<Napi::Object>(), "XRProjectionLayer") ||
+            !IsInstanceOfGlobalClass(info[1].As<Napi::Object>(), "XRView"))
         {
-            throw std::runtime_error{"XRGPUBinding.getViewSubImage requires an XRProjectionLayer and XRView."};
+            Napi::TypeError::New(info.Env(), "getViewSubImage requires an XRProjectionLayer and XRView.").ThrowAsJavaScriptException();
+            return info.Env().Undefined();
         }
         const auto view = info[1].As<Napi::Object>();
+        if (!m_session.IsCurrentView(view))
+        {
+            return RejectSubImage(info.Env(), "InvalidStateError", "The XRView is not from this session's active animation frame.");
+        }
         const auto eye = view.Get("eye").As<Napi::String>().Utf8Value();
         return GetSubImageForEye(info.Env(), info[0].As<Napi::Object>(), eye);
     }
@@ -164,20 +201,23 @@ namespace Babylon
     Napi::Object XRGPUBinding::GetSubImageForEye(Napi::Env env, const Napi::Object& layer, const std::string& eye)
     {
         auto* projectionLayer = XRProjectionLayer::Unwrap(layer);
-        if (projectionLayer == nullptr || !projectionLayer->BelongsTo(m_session))
+        if (projectionLayer == nullptr || !projectionLayer->BelongsTo(m_session) || !projectionLayer->UsesDevice(m_deviceReference.Value()) || !m_session.IsInAnimationCallback())
         {
-            throw std::runtime_error{"XRGPUBinding sub-image requests require a projection layer created by this binding's XRSession."};
+            RejectSubImage(env, "InvalidStateError", "The subimage requires an active XR animation callback and the same session and GPUDevice.");
+            return {};
         }
         if (!m_session.IsProjectionLayerActive(*projectionLayer))
         {
-            throw std::runtime_error{"XRGPUBinding sub-image requests require an active projection layer in XRSession.renderState.layers."};
+            Napi::TypeError::New(env, "The projection layer is not active in XRSession.renderState.layers.").ThrowAsJavaScriptException();
+            return {};
         }
 
         const auto viewIndex = eye == XREye::NONE ? 0 : XREye::EyeToIndex(eye);
         const auto subImage = m_session.GetWebGPUSubImage(viewIndex);
         if (!subImage)
         {
-            throw std::runtime_error{"XRGPUBinding sub-image textures are only available for a view during its current XR animation frame."};
+            RejectSubImage(env, "InvalidStateError", "The subimage is available only during its XR animation frame.");
+            return {};
         }
         return XRGPUSubImage::New(env, *subImage);
     }

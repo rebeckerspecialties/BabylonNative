@@ -16,11 +16,12 @@ namespace Babylon
     {
     public:
         static void Initialize(Napi::Env env);
-        static Napi::Object New(Napi::Env env, const Napi::Object& session, const Napi::Object& init);
+        static Napi::Object New(Napi::Env env, const Napi::Object& session, const Napi::Object& init, const Napi::Object& device);
 
         explicit XRProjectionLayer(const Napi::CallbackInfo& info);
 
         bool BelongsTo(const Plugins::XRSession& session) const;
+        bool UsesDevice(const Napi::Object& device) const;
         const std::string& ColorFormat() const;
         const std::string& DepthStencilFormat() const;
         uint32_t TextureUsage() const;
@@ -28,6 +29,7 @@ namespace Babylon
 
     private:
         Napi::ObjectReference m_sessionReference{};
+        Napi::ObjectReference m_device{};
         std::string m_colorFormat{};
         std::string m_depthStencilFormat{};
         uint32_t m_textureUsage{};
@@ -41,5 +43,7 @@ namespace Babylon
         Napi::Value GetTextureArrayLength(const Napi::CallbackInfo& info);
         Napi::Value GetIgnoreDepthValues(const Napi::CallbackInfo& info);
         Napi::Value GetLayout(const Napi::CallbackInfo& info);
+        Napi::Value GetFixedFoveation(const Napi::CallbackInfo& info);
+        void SetFixedFoveation(const Napi::CallbackInfo& info, const Napi::Value& value);
     };
 }

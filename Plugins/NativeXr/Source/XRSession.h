@@ -49,6 +49,10 @@ namespace Babylon
             void InitializeXrLayer(Napi::Object layer);
 
             bool IsWebGPUFeatureEnabled() const;
+            bool IsLayersFeatureEnabled() const;
+            bool IsCurrentAnimationFrame(const Napi::Object& frame) const;
+            bool IsInAnimationCallback() const { return m_inAnimationCallback; }
+            bool IsCurrentView(const Napi::Object& view) const;
             bool IsProjectionLayerActive(const Babylon::XRProjectionLayer& layer) const;
             std::optional<XRGPUSubImageData> GetWebGPUSubImage(uint32_t viewIndex) const;
             uint32_t GetWebGPUTextureWidth() const;
@@ -74,6 +78,11 @@ namespace Babylon
             Napi::ObjectReference m_jsXRFrame{};
             uint32_t m_timestamp{ 0 };
             Napi::ObjectReference m_renderState{};
+            Napi::ObjectReference m_pendingRenderState{};
+            Napi::ObjectReference m_pendingProjectionLayer{};
+            Napi::ObjectReference m_currentProjectionLayer{};
+            std::weak_ptr<const xr::System::Session::Frame> m_renderStateFrame;
+            bool m_inAnimationCallback{};
             Babylon::XRProjectionLayer* m_activeProjectionLayer{};
             float m_depthNear{0.1f};
             float m_depthFar{1000.0f};

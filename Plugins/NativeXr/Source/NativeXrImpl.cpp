@@ -556,6 +556,7 @@ namespace Babylon
                 m_sessionState->LastTextureHeight = static_cast<uint32_t>(view.ColorTextureSize.Height);
                 m_sessionState->LastTextureArrayLength = std::max<uint32_t>(1, static_cast<uint32_t>(view.ColorTextureSize.Depth));
                 const auto& it{m_sessionState->TextureToViewConfigurationMap.find(view.ColorTexturePointer)};
+                const auto colorUsage = WEBGPU_TEXTURE_USAGE_TEXTURE_BINDING | WEBGPU_TEXTURE_USAGE_RENDER_ATTACHMENT | m_sessionState->ProjectionColorUsage;
                 const auto* depthFormat = m_sessionState->ProjectionDepthFormat.empty()
                     ? XrDepthTextureFormatToWebGpuFormat(view.DepthTextureFormat)
                     : m_sessionState->ProjectionDepthFormat.c_str();
@@ -564,7 +565,7 @@ namespace Babylon
                     it->second.ViewTextureSize.Width != view.ColorTextureSize.Width ||
                     it->second.ViewTextureSize.Height != view.ColorTextureSize.Height ||
                     it->second.ViewTextureSize.Depth != view.ColorTextureSize.Depth ||
-                    it->second.DepthFormat != depthFormat)
+                    it->second.DepthFormat != depthFormat || it->second.ColorUsage != colorUsage)
                 {
                     if (it != m_sessionState->TextureToViewConfigurationMap.end() && !m_sessionState->DestroyRenderTexture.IsEmpty())
                     {
@@ -580,6 +581,7 @@ namespace Babylon
                     viewConfig.DepthTexturePointer = view.DepthTexturePointer;
                     viewConfig.ViewTextureSize = view.ColorTextureSize;
                     viewConfig.DepthFormat = depthFormat;
+                    viewConfig.ColorUsage = colorUsage;
 
                     assert(view.ColorTextureSize.Width != 0);
                     assert(view.ColorTextureSize.Height != 0);
@@ -591,7 +593,6 @@ namespace Babylon
                     const auto textureHeight = static_cast<uint32_t>(view.ColorTextureSize.Height);
                     const auto textureLayers = std::max<uint32_t>(1, static_cast<uint32_t>(view.ColorTextureSize.Depth));
                     const auto* colorFormat = XrTextureFormatToWebGpuFormat(view.ColorTextureFormat);
-                    const auto colorUsage = WEBGPU_TEXTURE_USAGE_TEXTURE_BINDING | WEBGPU_TEXTURE_USAGE_RENDER_ATTACHMENT;
                     const auto depthUsage = WEBGPU_TEXTURE_USAGE_RENDER_ATTACHMENT;
                     const auto colorDescriptor = MakeTextureDescriptorJson("NativeXR.color", textureWidth, textureHeight, textureLayers, colorFormat, colorUsage);
                     // The XR depth buffer is written and read only within the

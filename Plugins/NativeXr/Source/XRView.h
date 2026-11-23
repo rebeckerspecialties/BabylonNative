@@ -40,8 +40,15 @@ namespace Babylon
         {
         }
 
-        void Update(size_t eyeIdx, gsl::span<const float, 16> projectionMatrix, const xr::Space& space, bool isFirstPersonObserver)
+        bool BelongsTo(const std::shared_ptr<const xr::System::Session::Frame>& frame) const
         {
+            return frame && m_frame.lock() == frame;
+        }
+
+        void Update(size_t eyeIdx, gsl::span<const float, 16> projectionMatrix, const xr::Space& space, bool isFirstPersonObserver,
+            const std::shared_ptr<const xr::System::Session::Frame>& frame)
+        {
+            m_frame = frame;
             if (eyeIdx != m_eyeIdx)
             {
                 m_eyeIdx = eyeIdx;
@@ -61,6 +68,7 @@ namespace Babylon
         Napi::Reference<Napi::Float32Array> m_projectionMatrix{};
         Napi::ObjectReference m_rigidTransform{};
         bool m_isFirstPersonObserver{};
+        std::weak_ptr<const xr::System::Session::Frame> m_frame{};
 
         Napi::Value GetEye(const Napi::CallbackInfo& info)
         {

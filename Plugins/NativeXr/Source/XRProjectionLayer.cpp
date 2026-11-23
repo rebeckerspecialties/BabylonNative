@@ -60,13 +60,14 @@ namespace Babylon
                 InstanceAccessor("textureArrayLength", &XRProjectionLayer::GetTextureArrayLength, nullptr),
                 InstanceAccessor("ignoreDepthValues", &XRProjectionLayer::GetIgnoreDepthValues, nullptr),
                 InstanceAccessor("layout", &XRProjectionLayer::GetLayout, nullptr),
+                InstanceAccessor("fixedFoveation", &XRProjectionLayer::GetFixedFoveation, &XRProjectionLayer::SetFixedFoveation),
             });
         env.Global().Set(JS_CLASS_NAME, constructor);
     }
 
-    Napi::Object XRProjectionLayer::New(Napi::Env env, const Napi::Object& session, const Napi::Object& init)
+    Napi::Object XRProjectionLayer::New(Napi::Env env, const Napi::Object& session, const Napi::Object& init, const Napi::Object& device)
     {
-        return env.Global().Get(JS_CLASS_NAME).As<Napi::Function>().New({session, init});
+        return env.Global().Get(JS_CLASS_NAME).As<Napi::Function>().New({session, init, device});
     }
 
     XRProjectionLayer::XRProjectionLayer(const Napi::CallbackInfo& info)
@@ -75,6 +76,10 @@ namespace Babylon
     {
         UnwrapXRSession(m_sessionReference.Value());
         const auto init = RequireLayerInit(info);
+        if (info.Length() > 2 && info[2].IsObject())
+        {
+            m_device = Napi::Persistent(info[2].As<Napi::Object>());
+        }
         m_colorFormat = init.Get("colorFormat").As<Napi::String>().Utf8Value();
         if (init.Has("depthStencilFormat") && init.Get("depthStencilFormat").IsString())
         {
@@ -112,6 +117,21 @@ namespace Babylon
     const std::string& XRProjectionLayer::ColorFormat() const
     {
         return m_colorFormat;
+    }
+
+    bool XRProjectionLayer::UsesDevice(const Napi::Object& device) const
+    {
+        return !m_device.IsEmpty() && m_device.Value().StrictEquals(device);
+    }
+
+    Napi::Value XRProjectionLayer::GetFixedFoveation(const Napi::CallbackInfo& info)
+    {
+        return info.Env().Null();
+    }
+
+    void XRProjectionLayer::SetFixedFoveation(const Napi::CallbackInfo&, const Napi::Value&)
+    {
+        // No renderer currently attaches a density map to the application eye pass.
     }
 
     const std::string& XRProjectionLayer::DepthStencilFormat() const

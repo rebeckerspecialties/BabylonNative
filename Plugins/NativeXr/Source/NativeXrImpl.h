@@ -35,9 +35,10 @@ namespace Babylon
             const char* GetWebGPUColorFormat() const;
             uint32_t GetWebGPUTextureHeight() const;
             uint32_t GetWebGPUTextureArrayLength() const;
-            void SetProjectionDepthFormat(std::string format)
+            void SetProjectionAttachments(std::string format, uint32_t colorUsage)
             {
                 m_sessionState->ProjectionDepthFormat = std::move(format);
+                m_sessionState->ProjectionColorUsage = colorUsage;
             }
 
             void SetDepthsNarFar(float depthNear, float depthFar)
@@ -115,6 +116,7 @@ namespace Babylon
                 void* DepthTexturePointer{nullptr};
                 xr::Size ViewTextureSize{};
                 std::string DepthFormat{};
+                uint32_t ColorUsage{};
                 std::vector<RenderTarget> RenderTargets{};
                 bool Initialized{false};
             };
@@ -139,6 +141,7 @@ namespace Babylon
                 uint32_t LastTextureHeight{};
                 uint32_t LastTextureArrayLength{};
                 std::string ProjectionDepthFormat{};
+                uint32_t ProjectionColorUsage{};
 #if defined(__ANDROID__) && defined(BABYLON_NATIVE_XR_OPENXR)
                 // Destroy the OpenXR session before returning the window to Vulkan WSI.
                 std::optional<gsl::final_action<void (*)()>> ResumeWindowPresentation;

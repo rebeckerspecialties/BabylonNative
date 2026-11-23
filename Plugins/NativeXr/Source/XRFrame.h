@@ -33,7 +33,7 @@ namespace Babylon
         private:
             std::shared_ptr<const xr::System::Session::Frame> m_frame{};
             Napi::ObjectReference m_jsXRViewerPose{};
-            XRViewerPose& m_xrViewerPose;
+            Napi::ObjectReference m_viewerPoseSpace{};
             std::vector<Napi::ObjectReference> m_trackedAnchors{};
             std::vector<Napi::ObjectReference> m_pendingAnchors{};
             std::unordered_map<xr::System::Session::Frame::Plane::Identifier, Napi::ObjectReference> m_trackedPlanes{};

@@ -43,9 +43,10 @@ namespace Babylon
 
         void Update(
             const Napi::CallbackInfo& info,
-            const xr::System::Session::Frame& frame,
+            const std::shared_ptr<const xr::System::Session::Frame>& sourceFrame,
             const XRRigidTransform* referenceSpaceOffset)
         {
+            const auto& frame = *sourceFrame;
             const auto referenceSpaceInverse = referenceSpaceOffset == nullptr
                 ? std::optional<xr::Pose>{}
                 : std::optional<xr::Pose>{InvertPose(referenceSpaceOffset->GetNativePose())};
@@ -95,7 +96,7 @@ namespace Babylon
                     idx,
                     view.ProjectionMatrix,
                     adjustSpace(view.Space),
-                    view.IsFirstPersonObserver);
+                    view.IsFirstPersonObserver, sourceFrame);
             }
 
             // Check the frame to see if it has valid tracking, if it does not then the position should

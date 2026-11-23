@@ -4829,11 +4829,16 @@ mod upstream_wgpu_native {
                 return Err("Expected a single-sampled two-dimensional OpenXR projection image".into());
             }
             let extent = wgpu::Extent3d { width, height, depth_or_array_layers: size.depth_or_array_layers };
-            let resolve = size != extent || !output_format.is_srgb();
+            // The OpenXR swapchain was created with sampled/color-attachment usage only.
+            // A WebXR application requesting copy or storage needs its own application image.
+            let external_usage = wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT;
+            let resolve = size != extent || !output_format.is_srgb() || !external_usage.contains(usage);
             let wrapped_format = if resolve { output_format } else { format };
             let import_formats = if resolve { &[][..] } else { &view_formats };
             let hal_descriptor = wgpu::hal::TextureDescriptor {
-                size: extent, format: wrapped_format, view_formats: import_formats.to_vec(), ..hal_descriptor
+                size: extent, format: wrapped_format, view_formats: import_formats.to_vec(),
+                usage: if resolve { wgpu::TextureUses::COLOR_TARGET | wgpu::TextureUses::RESOURCE } else { hal_descriptor.usage },
+                ..hal_descriptor
             };
             let hal_texture = unsafe {
                 hal_device.texture_from_raw(
@@ -4855,7 +4860,7 @@ mod upstream_wgpu_native {
                             sample_count,
                             dimension,
                             format: wrapped_format,
-                            usage,
+                            usage: if resolve { external_usage } else { usage },
                             view_formats: import_formats,
                         },
                         // The swapchain image is fully rendered every frame; nothing

@@ -427,6 +427,22 @@ namespace Babylon
             return m_webGPUFeatureEnabled;
         }
 
+        bool XRSession::IsLayersFeatureEnabled() const
+        {
+            return std::find(m_enabledFeatures.begin(), m_enabledFeatures.end(), "layers") != m_enabledFeatures.end();
+        }
+
+        bool XRSession::IsCurrentAnimationFrame(const Napi::Object& frame) const
+        {
+            return m_inAnimationCallback && m_jsXRFrame.Value().StrictEquals(frame);
+        }
+
+        bool XRSession::IsCurrentView(const Napi::Object& view) const
+        {
+            auto* nativeView = XRView::Unwrap(view);
+            return m_inAnimationCallback && nativeView && nativeView->BelongsTo(m_renderStateFrame.lock());
+        }
+
         bool XRSession::IsProjectionLayerActive(const Babylon::XRProjectionLayer& layer) const
         {
             return m_activeProjectionLayer == &layer;
@@ -569,49 +585,70 @@ namespace Babylon
                 }
             }
 
+            if (m_pendingRenderState.IsEmpty())
+            {
+                m_pendingRenderState = Napi::Persistent(Napi::Object::New(info.Env()));
+                for (const char* key : {"layers", "baseLayer", "depthNear", "depthFar", "inlineVerticalFieldOfView"})
+                {
+                    if (m_renderState.Value().Has(key))
+                    {
+                        m_pendingRenderState.Set(key, m_renderState.Get(key));
+                    }
+                }
+                if (!m_currentProjectionLayer.IsEmpty())
+                {
+                    m_pendingProjectionLayer = Napi::Persistent(m_currentProjectionLayer.Value());
+                }
+            }
             if (depthsChanged)
             {
                 m_xr->SetDepthsNarFar(depthNear, depthFar);
                 m_depthNear = depthNear;
                 m_depthFar = depthFar;
-                m_renderState.Set("depthNear", Napi::Number::New(info.Env(), m_depthNear));
-                m_renderState.Set("depthFar", Napi::Number::New(info.Env(), m_depthFar));
+                m_pendingRenderState.Set("depthNear", Napi::Number::New(info.Env(), m_depthNear));
+                m_pendingRenderState.Set("depthFar", Napi::Number::New(info.Env(), m_depthFar));
             }
 
             if (hasLayers)
             {
                 const auto layers = update.Get("layers").As<Napi::Array>();
-                m_activeProjectionLayer = projectionLayerCandidate;
-                m_xr->SetProjectionDepthFormat(m_activeProjectionLayer ? m_activeProjectionLayer->DepthStencilFormat() : "");
-                m_renderState.Set("layers", layers);
-                m_renderState.Set("baseLayer", info.Env().Null());
+                auto snapshot = Napi::Array::New(info.Env(), layers.Length());
+                m_pendingProjectionLayer.Reset();
+                if (projectionLayerCandidate)
+                {
+                    auto layer = layers.Get(uint32_t{0}).As<Napi::Object>();
+                    snapshot.Set(uint32_t{0}, layer);
+                    m_pendingProjectionLayer = Napi::Persistent(layer);
+                }
+                m_xr->SetProjectionAttachments(projectionLayerCandidate ? projectionLayerCandidate->DepthStencilFormat() : "",
+                    projectionLayerCandidate ? projectionLayerCandidate->TextureUsage() : 0);
+                m_pendingRenderState.Set("layers", snapshot);
+                m_pendingRenderState.Set("baseLayer", info.Env().Null());
             }
             else if (update.Has("baseLayer"))
             {
                 const auto baseLayer = update.Get("baseLayer");
-                m_renderState.Set("baseLayer", baseLayer.IsUndefined() ? info.Env().Null() : baseLayer);
-                m_renderState.Set("layers", Napi::Array::New(info.Env()));
-                m_activeProjectionLayer = nullptr;
-                m_xr->SetProjectionDepthFormat("");
+                m_pendingRenderState.Set("baseLayer", baseLayer.IsUndefined() ? info.Env().Null() : baseLayer);
+                m_pendingRenderState.Set("layers", Napi::Array::New(info.Env()));
+                m_pendingProjectionLayer.Reset();
+                m_xr->SetProjectionAttachments("", 0);
             }
 
             if (update.Has("inlineVerticalFieldOfView"))
             {
-                m_renderState.Set("inlineVerticalFieldOfView", update.Get("inlineVerticalFieldOfView"));
+                m_pendingRenderState.Set("inlineVerticalFieldOfView", update.Get("inlineVerticalFieldOfView"));
             }
 #if defined(__ANDROID__) && defined(BABYLON_NATIVE_XR_OPENXR)
             if (hasLayers || update.Has("baseLayer"))
             {
                 if (auto session = m_xr->GetPlatformSession().lock())
                 {
-                    session->SetProjectionScale(m_activeProjectionLayer ? m_activeProjectionLayer->ScaleFactor() : 1.0);
+                    session->SetProjectionScale(projectionLayerCandidate ? projectionLayerCandidate->ScaleFactor() : 1.0);
                 }
             }
 #endif
 
-            auto deferred = Napi::Promise::Deferred::New(info.Env());
-            deferred.Resolve(info.Env().Undefined());
-            return deferred.Promise();
+            return info.Env().Undefined();
         }
 
         void XRSession::ProcessEyeInputSource(const xr::System::Session::Frame& frame, Napi::Env env)
@@ -811,6 +848,18 @@ namespace Babylon
                 this,
                 callbackPtr{ std::make_shared<Napi::FunctionReference>(Napi::Persistent(callback)) },
                 sessionPtr{ std::make_shared<Napi::ObjectReference>(Napi::Persistent(info.This().As<Napi::Object>())) }](const std::shared_ptr<const xr::System::Session::Frame>& frame) {
+                // Multiple callbacks in one device frame must all observe the same render state.
+                if (m_renderStateFrame.lock() != frame)
+                {
+                    m_renderStateFrame = frame;
+                    if (!m_pendingRenderState.IsEmpty())
+                    {
+                        m_renderState = std::move(m_pendingRenderState);
+                        m_currentProjectionLayer = std::move(m_pendingProjectionLayer);
+                        m_activeProjectionLayer = m_currentProjectionLayer.IsEmpty() ? nullptr : Babylon::XRProjectionLayer::Unwrap(m_currentProjectionLayer.Value());
+                        sessionPtr->Value().Set("renderState", m_renderState.Value());
+                    }
+                }
                 NotifyFrameRateChange(sessionPtr->Value());
                 ProcessEyeInputSource(*frame.get(), Env());
                 ProcessControllerInputSources(*frame.get(), Env());
@@ -826,6 +875,8 @@ namespace Babylon
                     m_imageTrackingRequests.clear();
                 }
 
+                m_inAnimationCallback = true;
+                const auto resetCallback = gsl::finally([this] { m_inAnimationCallback = false; });
                 callbackPtr->Value().Call({ Napi::Value::From(Env(), m_timestamp), m_jsXRFrame.Value() });
             });
 
