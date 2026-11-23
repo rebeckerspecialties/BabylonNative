@@ -17,6 +17,25 @@
   }
 
   function runStructuredMessageCase() {
+    try {
+      const original = { view: new Uint8Array([23]) };
+      original.self = original;
+      original.alias = original.view;
+      const copy = structuredClone(original);
+      copy.view[0] = 31;
+      if (copy === original || copy.self !== copy || copy.alias !== copy.view || original.view[0] !== 23)
+        fail("structuredClone", "cyclic graph, alias, or buffer independence lost");
+      const invalid = structuredClone(new Date(NaN));
+      if (!(invalid instanceof Date) || !Number.isNaN(invalid.getTime()))
+        fail("structuredClone", "an invalid date became a valid timestamp");
+      let visits = 0;
+      const snapshot = structuredClone({ get item() { ++visits; return original; } });
+      if (visits !== 1 || snapshot.item === original || snapshot.item.self !== snapshot.item)
+        fail("structuredClone", "getter must be evaluated once and its value cloned");
+      const bytes = structuredClone(original.view, {transfer: [original.view.buffer]});
+      if (bytes[0] !== 23 || (original.view.buffer.detached !== true && original.view.buffer.byteLength !== 0))
+        fail("structuredClone", "transfer did not preserve receiver bytes and detach the sender");
+    } catch (error) { fail("structuredClone", error.stack || String(error)); }
     const name = "/workers/support/Worker-structure-message.js";
     const worker = new Worker(name);
     const input = new ArrayBuffer(20);

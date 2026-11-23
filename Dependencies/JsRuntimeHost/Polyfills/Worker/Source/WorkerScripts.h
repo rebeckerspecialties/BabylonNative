@@ -188,7 +188,7 @@ namespace Babylon::Polyfills::Internal::WorkerScripts
     catch (_) { throw new TypeError('transfer must be an iterable'); }
   }
 
-  function serialize(root, transferArgument) {
+  function serialize(root, transferArgument, local = false) {
     const transferList = normalizeTransfers(transferArgument);
     const buffers = [];
     const bufferIndexes = new Map();
@@ -263,7 +263,7 @@ namespace Babylon::Polyfills::Internal::WorkerScripts
         nodes[id] = { t: 'a', i: items,
           p: ownProperties(value, key => key === 'length' || /^(0|[1-9][0-9]*)$/.test(key)) };
       } else if (value instanceof Date) {
-        nodes[id] = { t: 'd', v: value.getTime(), p: ownProperties(value) };
+        nodes[id] = { t: 'd', v: encode(value.getTime()), p: ownProperties(value) };
       } else if (value instanceof RegExp) {
         nodes[id] = { t: 're', s: value.source, f: value.flags, x: value.lastIndex,
           p: ownProperties(value) };
@@ -289,15 +289,16 @@ namespace Babylon::Polyfills::Internal::WorkerScripts
     // can prevent the original JS wrapper from observing the detach. Slicing
     // first also makes the required copy-before-detach ordering explicit for
     // every backend.
+    const graph = { root: encode(root), nodes };
     return {
-      json: JSON.stringify({ root: encode(root), nodes }),
+      ...(local ? { graph } : { json: JSON.stringify(graph) }),
       buffers: buffers.map(buffer => buffer.slice(0)),
       transferBuffers: transferList
     };
   }
 
-  function deserialize(json, buffers) {
-    const graph = JSON.parse(json);
+  function deserialize(payload, buffers) {
+    const graph = typeof payload === 'string' ? JSON.parse(payload) : payload;
     const nodes = graph.nodes;
     const values = new Array(nodes.length);
     const built = new Array(nodes.length).fill(false);
@@ -331,7 +332,7 @@ namespace Babylon::Polyfills::Internal::WorkerScripts
       switch (node.t) {
         case 'a': value = []; break;
         case 'o': value = node.z ? Object.create(null) : {}; break;
-        case 'd': value = new Date(node.v); break;
+        case 'd': value = new Date(decode(node.v)); break;
         case 're': value = new RegExp(node.s, node.f); value.lastIndex = node.x; break;
         case 'm': value = new Map(); break;
         case 's': value = new Set(); break;

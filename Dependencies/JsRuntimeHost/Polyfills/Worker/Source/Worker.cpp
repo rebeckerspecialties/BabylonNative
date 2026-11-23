@@ -264,6 +264,71 @@ namespace Babylon::Polyfills::Internal
             throw Napi::Error{env, exception};
         }
 #endif
+
+        void CompleteTransfers(Napi::Env env, const Napi::Array& transferBuffers)
+        {
+#if NAPI_VERSION >= 7
+            // Validate all transferables before copying or detaching any of them.
+            // Some engines do not expose detached state as a JavaScript property,
+            // so the Node-API check is the portable source of truth.
+            for (std::uint32_t i = 0; i < transferBuffers.Length(); ++i)
+            {
+                bool detached{};
+                const napi_status status = napi_is_detached_arraybuffer(env, transferBuffers.Get(i), &detached);
+                if (status != napi_ok)
+                {
+                    ThrowStatus(env, status, "napi_is_detached_arraybuffer");
+                }
+                if (detached)
+                {
+                    ThrowDataCloneError(env, "An ArrayBuffer in the transfer list is already detached");
+                }
+            }
+#endif
+            // Duplicate and invalid entries were rejected by the JS serializer;
+            // after validation and copying, detach each original transfer target.
+            // The native byte-copy loop above only inspects JS-side snapshots, so
+            // JavaScriptCore never exposes the original backing pointer before its
+            // standards-track transfer() implementation detaches it.
+            for (std::uint32_t i = 0; i < transferBuffers.Length(); ++i)
+            {
+#if NAPI_VERSION >= 7
+                const napi_status status = napi_detach_arraybuffer(env, transferBuffers.Get(i));
+                if (status != napi_ok)
+                {
+                    ThrowStatus(env, status, "napi_detach_arraybuffer");
+                }
+#else
+                (void)i;
+                throw Napi::Error::New(env, "Transferable ArrayBuffers require N-API v7");
+#endif
+            }
+        }
+
+        void InitializeCommon(Napi::Env env)
+        {
+            Napi::Eval(env, WorkerScripts::Common, "jsruntimehost-worker-common.js");
+            if (!env.Global().Get("structuredClone").IsUndefined()) return;
+            auto clone = Napi::Function::New(env, [](const Napi::CallbackInfo& info) {
+                auto realm = info.Env();
+                if (info.Length() == 0)
+                    throw Napi::TypeError::New(realm, "structuredClone requires a value");
+                auto options = Napi::Object::New(realm);
+                if (info.Length() > 1 && !info[1].IsNull() && !info[1].IsUndefined()) {
+                    if (!info[1].IsObject() && !info[1].IsFunction())
+                        throw Napi::TypeError::New(realm, "structuredClone options must be a dictionary");
+                    options.Set("transfer", info[1].As<Napi::Object>().Get("transfer"));
+                }
+                const auto encoded = realm.Global().Get("__jsrhSerialize").As<Napi::Function>()
+                    .Call(realm.Global(), {info[0], options, Napi::Boolean::New(realm, true)}).As<Napi::Object>();
+                // The serializer already snapshots the bytes. Same-realm clones do
+                // not need the extra native byte vector used to cross worker heaps.
+                CompleteTransfers(realm, encoded.Get("transferBuffers").As<Napi::Array>());
+                return realm.Global().Get("__jsrhDeserialize").As<Napi::Function>()
+                    .Call(realm.Global(), {encoded.Get("graph"), encoded.Get("buffers")});
+            }, "structuredClone");
+            env.Global().Set("structuredClone", clone);
+        }
     }
 
     struct Worker::State
@@ -288,7 +353,7 @@ namespace Babylon::Polyfills::Internal
             return;
         }
 
-        Napi::Eval(env, WorkerScripts::Common, "jsruntimehost-worker-common.js");
+        InitializeCommon(env);
 
         auto* classOptions = new Options{std::move(options)};
         auto constructor = DefineClass(
@@ -424,25 +489,6 @@ namespace Babylon::Polyfills::Internal
         result.Json = encoded.Get("json").As<Napi::String>().Utf8Value();
         const auto buffers = encoded.Get("buffers").As<Napi::Array>();
         const auto transferBuffers = encoded.Get("transferBuffers").As<Napi::Array>();
-#if NAPI_VERSION >= 7
-        // Validate all transferables before copying or detaching any of them.
-        // Some engines do not expose detached state as a JavaScript property,
-        // so the Node-API check is the portable source of truth.
-        for (std::uint32_t i = 0; i < transferBuffers.Length(); ++i)
-        {
-            bool detached{};
-            const napi_status status = napi_is_detached_arraybuffer(env, transferBuffers.Get(i), &detached);
-            if (status != napi_ok)
-            {
-                ThrowStatus(env, status, "napi_is_detached_arraybuffer");
-            }
-            if (detached)
-            {
-                ThrowDataCloneError(env, "An ArrayBuffer in the transfer list is already detached");
-            }
-        }
-#endif
-
         result.Buffers.reserve(buffers.Length());
         for (std::uint32_t i = 0; i < buffers.Length(); ++i)
         {
@@ -455,24 +501,7 @@ namespace Babylon::Polyfills::Internal
             result.Buffers.emplace_back(std::move(bytes));
         }
 
-        // Duplicate and invalid entries were rejected by the JS serializer;
-        // after validation and copying, detach each original transfer target.
-        // The native byte-copy loop above only inspects JS-side snapshots, so
-        // JavaScriptCore never exposes the original backing pointer before its
-        // standards-track transfer() implementation detaches it.
-        for (std::uint32_t i = 0; i < transferBuffers.Length(); ++i)
-        {
-#if NAPI_VERSION >= 7
-            const napi_status status = napi_detach_arraybuffer(env, transferBuffers.Get(i));
-            if (status != napi_ok)
-            {
-                ThrowStatus(env, status, "napi_detach_arraybuffer");
-            }
-#else
-            (void)i;
-            throw Napi::Error::New(env, "Transferable ArrayBuffers require N-API v7");
-#endif
-        }
+        CompleteTransfers(env, transferBuffers);
 
         return result;
     }
@@ -553,6 +582,10 @@ namespace Babylon::Polyfills::Internal
         Babylon::Polyfills::File::Initialize(env);
         Babylon::Polyfills::TextDecoder::Initialize(env);
         Babylon::Polyfills::TextEncoder::Initialize(env);
+        if (state->Config.InitializeWorkerGlobal)
+        {
+            state->Config.InitializeWorkerGlobal(env);
+        }
 
         const std::weak_ptr<State> weakState{state};
         env.Global().Set("__jsrhNativePostMessage", Napi::Function::New(
@@ -642,7 +675,7 @@ namespace Babylon::Polyfills::Internal
 
         env.Global().Set("__jsrhWorkerLocation", Napi::String::New(env, url));
         env.Global().Set("__jsrhWorkerName", Napi::String::New(env, state->Name));
-        Napi::Eval(env, WorkerScripts::Common, "jsruntimehost-worker-common.js");
+        InitializeCommon(env);
         Napi::Eval(env, WorkerScripts::WorkerGlobal, "jsruntimehost-worker-global.js");
 
         try
