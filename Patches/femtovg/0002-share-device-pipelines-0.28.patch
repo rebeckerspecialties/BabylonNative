@@ -1,0 +1,192 @@
+diff --git a/src/renderer/wgpu.rs b/src/renderer/wgpu.rs
+index 4fb328c..ed66b17 100644
+--- a/src/renderer/wgpu.rs
++++ b/src/renderer/wgpu.rs
+@@ -493,13 +493,78 @@ mod pipeline_eviction_tests {
+     }
+ }
+ 
++#[derive(Debug)]
++struct DevicePipelines {
++    device: wgpu::Device,
++    shader: Rc<wgpu::ShaderModule>,
++    viewport: wgpu::BindGroupLayout,
++    layouts: [DrawLayout; 2],
++    cache: Rc<RefCell<HashMap<PipelineState, CachedPipeline>>>,
++    epoch: std::cell::Cell<u64>,
++}
++
++impl DevicePipelines {
++    fn for_device(device: &wgpu::Device) -> Rc<Self> {
++        thread_local! {
++            static ENTRIES: RefCell<Vec<std::rc::Weak<DevicePipelines>>> = const { RefCell::new(Vec::new()) };
++        }
++        ENTRIES.with_borrow_mut(|entries| {
++            entries.retain(|p| p.strong_count() != 0);
++            if let Some(p) = entries
++                .iter()
++                .filter_map(std::rc::Weak::upgrade)
++                .find(|p| p.device == *device)
++            {
++                return p;
++            }
++            let module = wgpu::ShaderModuleDescriptor {
++                label: Some("femtovg"),
++                source: wgpu::ShaderSource::Wgsl(
++                    concat!(
++                        include_str!("wgpu/shader.wgsl"),
++                        "\n",
++                        include_str!("wgpu/filters.wgsl")
++                    )
++                    .into(),
++                ),
++            };
++            let shader_module = Rc::new(device.create_shader_module(module));
++            let viewport_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
++                label: Some("Bind Group Layout for Viewport uniform"),
++                entries: &[wgpu::BindGroupLayoutEntry {
++                    binding: 0,
++                    visibility: wgpu::ShaderStages::VERTEX,
++                    ty: wgpu::BindingType::Buffer {
++                        ty: wgpu::BufferBindingType::Uniform,
++                        has_dynamic_offset: false,
++                        min_binding_size: None,
++                    },
++                    count: None,
++                }],
++            });
++
++            let draw_layouts = [false, true].map(|mask| DrawLayout::new(device, &viewport_bind_group_layout, mask));
++            let p = Rc::new(Self {
++                device: device.clone(),
++                shader: shader_module,
++                viewport: viewport_bind_group_layout,
++                layouts: draw_layouts,
++                cache: Default::default(),
++                epoch: Default::default(),
++            });
++            entries.push(Rc::downgrade(&p));
++            p
++        })
++    }
++}
++
+ /// WGPU renderer.
+ #[derive(Debug)]
+ pub struct WGPURenderer {
+     device: wgpu::Device,
+     queue: wgpu::Queue,
+ 
+-    shader_module: Rc<wgpu::ShaderModule>,
++    shared: Rc<DevicePipelines>,
+ 
+     screen_view: [f32; 2],
+ 
+@@ -518,9 +583,6 @@ pub struct WGPURenderer {
+     screen_stencil: TargetStencil,
+     stencil_buffer_for_textures: HashMap<wgpu::Texture, TargetStencil>,
+     viewport_bind_groups: ViewportBindGroups,
+-    /// Without and with a coverage mask.
+-    draw_layouts: [DrawLayout; 2],
+-    pipeline_cache: Rc<RefCell<HashMap<PipelineState, CachedPipeline>>>,
+     slicing: Option<SubmissionSlicing>,
+     last_frame_slices: Vec<u32>,
+     /// Built on the first upload of an image with `GENERATE_MIPMAPS`.
+@@ -655,18 +717,7 @@ impl WGPURenderer {
+ 
+     /// Creates a new renderer for the device.
+     pub fn new(device: wgpu::Device, queue: wgpu::Queue) -> Self {
+-        let module = wgpu::ShaderModuleDescriptor {
+-            label: Some("femtovg"),
+-            source: wgpu::ShaderSource::Wgsl(
+-                concat!(
+-                    include_str!("wgpu/shader.wgsl"),
+-                    "\n",
+-                    include_str!("wgpu/filters.wgsl")
+-                )
+-                .into(),
+-            ),
+-        };
+-        let shader_module = Rc::new(device.create_shader_module(module));
++        let shared = DevicePipelines::for_device(&device);
+ 
+         let texture_descriptor = wgpu::TextureDescriptor {
+             size: wgpu::Extent3d::default(),
+@@ -712,22 +763,6 @@ impl WGPURenderer {
+             wgpu::Extent3d::default(),
+         );
+ 
+-        let viewport_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+-            label: Some("Bind Group Layout for Viewport uniform"),
+-            entries: &[wgpu::BindGroupLayoutEntry {
+-                binding: 0,
+-                visibility: wgpu::ShaderStages::VERTEX,
+-                ty: wgpu::BindingType::Buffer {
+-                    ty: wgpu::BufferBindingType::Uniform,
+-                    has_dynamic_offset: false,
+-                    min_binding_size: None,
+-                },
+-                count: None,
+-            }],
+-        });
+-
+-        let draw_layouts = [false, true].map(|mask| DrawLayout::new(&device, &viewport_bind_group_layout, mask));
+-
+         let fan_index_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+             label: Some(FAN_INDEX_LABEL),
+             size: MIN_VERTEX_BYTES,
+@@ -741,7 +776,7 @@ impl WGPURenderer {
+             device,
+             queue,
+ 
+-            shader_module,
++            shared: shared.clone(),
+ 
+             screen_view: [0.0, 0.0],
+ 
+@@ -754,9 +789,7 @@ impl WGPURenderer {
+             fan_index_buffer,
+             screen_stencil: TargetStencil::default(),
+             stencil_buffer_for_textures: HashMap::new(),
+-            viewport_bind_groups: ViewportBindGroups::new(viewport_bind_group_layout),
+-            draw_layouts,
+-            pipeline_cache: Default::default(),
++            viewport_bind_groups: ViewportBindGroups::new(shared.viewport.clone()),
+             slicing: None,
+             last_frame_slices: Vec::new(),
+             mipmaps: None,
+@@ -1157,6 +1190,8 @@ impl Renderer for WGPURenderer {
+             return None;
+         }
+         self.flush_count += 1;
++        let epoch = self.shared.epoch.get() + 1;
++        self.shared.epoch.set(epoch);
+ 
+         // The bind groups recorded below hold this buffer, so it cannot grow mid-frame.
+         let needed_slots = commands.len() as u64 * UNIFORM_SLOTS_PER_COMMAND;
+@@ -1284,10 +1319,10 @@ impl Renderer for WGPURenderer {
+             self.empty_texture_view.clone(),
+             self.sampler_cache.clone(),
+             self.uniform_buffer.clone(),
+-            self.shader_module.clone(),
+-            self.draw_layouts.clone(),
+-            self.pipeline_cache.clone(),
+-            self.flush_count,
++            self.shared.shader.clone(),
++            self.shared.layouts.clone(),
++            self.shared.cache.clone(),
++            epoch,
+         );
+ 
+         let mut current_render_target = RenderTarget::Screen;
+@@ -1487,8 +1522,8 @@ impl Renderer for WGPURenderer {
+ 
+         self.viewport_bind_groups.evict(self.flush_count);
+         evict_least_recently_used(
+-            &mut self.pipeline_cache.borrow_mut(),
+-            self.flush_count,
++            &mut self.shared.cache.borrow_mut(),
++            epoch,
+             PIPELINE_CACHE_CAPACITY,
+             PIPELINE_RECENT_FLUSHES,
+             |cached_pipeline| cached_pipeline.last_used,

@@ -81,10 +81,10 @@ FetchContent_Declare(wgpu_native
         "-DPATCH_FILE=${CMAKE_CURRENT_LIST_DIR}/Patches/wgpu-native/0001-wgpu-30.0.1.patch"
         -P "${CMAKE_CURRENT_LIST_DIR}/Patches/apply_patch_if_needed.cmake"
     EXCLUDE_FROM_ALL)
-set(BABYLON_NATIVE_CANVAS_REV d10169ee08d1fc79f9556df283e16dd6d985c1f9)
-set(BABYLON_NATIVE_CANVAS_PATCH "${CMAKE_CURRENT_LIST_DIR}/Patches/femtovg/0001-share-device-canvas-pipelines.patch")
+set(BABYLON_NATIVE_CANVAS_REV dde7023118892974f14d4c7dd2c44efba7ccb1d0) # upstream v0.28.0
+set(BABYLON_NATIVE_CANVAS_PATCH "${CMAKE_CURRENT_LIST_DIR}/Patches/femtovg/0002-share-device-pipelines-0.28.patch")
 FetchContent_Declare(canvas_femtovg
-    GIT_REPOSITORY https://github.com/rebeckerspecialties/femtovg.git
+    GIT_REPOSITORY https://github.com/femtovg/femtovg.git
     GIT_TAG ${BABYLON_NATIVE_CANVAS_REV}
     PATCH_COMMAND ${CMAKE_COMMAND} "-DPATCH_FILE=${BABYLON_NATIVE_CANVAS_PATCH}"
         -P "${CMAKE_CURRENT_LIST_DIR}/Patches/apply_patch_if_needed.cmake"

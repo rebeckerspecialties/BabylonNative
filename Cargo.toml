@@ -9,7 +9,7 @@ resolver = "2"
 [workspace.dependencies]
 ash = "=0.38.0"
 bytemuck = { version = "=1.25.0", features = ["derive"] }
-femtovg = { version = "=0.26.0", default-features = false, features = ["wgpu", "textlayout"] }
+femtovg = { version = "=0.28.0", default-features = false, features = ["wgpu", "textlayout", "swash"] }
 image = { version = "=0.25.10", default-features = false, features = ["png", "jpeg", "gif", "bmp", "webp"] }
 imgref = "=1.12.1"
 pollster = "=0.4.0"
@@ -20,6 +20,6 @@ wgpu = { git = "https://github.com/gfx-rs/wgpu.git", rev = "40f4a34ebaf56f9a0462
 
 [patch.crates-io]
 # The CMake build supplies the pinned and patched femtovg path to every workspace member.
-# femtovg 0.26 asks crates.io for wgpu 30; resolve it to the same wgpu checkout the
+# femtovg asks crates.io for wgpu 30; resolve it to the same wgpu checkout the
 # workspace and wgpu-native use so there is exactly one wgpu in the graph.
 wgpu = { git = "https://github.com/gfx-rs/wgpu.git", rev = "40f4a34ebaf56f9a046231f54125ad046239d3f3" }
