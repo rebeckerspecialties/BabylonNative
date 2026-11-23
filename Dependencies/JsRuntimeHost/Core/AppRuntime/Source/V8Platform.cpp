@@ -53,7 +53,7 @@ namespace Babylon::Internal
         runner->Shutdown();
     }
 
-    std::shared_ptr<v8::TaskRunner> V8Platform::GetForegroundTaskRunner(v8::Isolate* isolate)
+    std::shared_ptr<v8::TaskRunner> V8Platform::FindRunner(v8::Isolate* isolate)
     {
         std::scoped_lock lock{m_mutex};
         const auto entry = m_taskRunners.find(isolate);

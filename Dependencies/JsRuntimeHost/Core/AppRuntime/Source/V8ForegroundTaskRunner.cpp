@@ -53,7 +53,7 @@ namespace Babylon::Internal
         }
     }
 
-    void V8ForegroundTaskRunner::PostTask(std::unique_ptr<v8::Task> task)
+    void V8ForegroundTaskRunner::DispatchTask(std::unique_ptr<v8::Task> task)
     {
         std::scoped_lock lock{m_state->mutex};
         if (m_state->dispatch)
@@ -62,18 +62,13 @@ namespace Babylon::Internal
         }
     }
 
-    void V8ForegroundTaskRunner::PostNonNestableTask(std::unique_ptr<v8::Task> task)
-    {
-        PostTask(std::move(task));
-    }
-
     DelayedTaskScheduler::TimePoint V8ForegroundTaskRunner::GetScheduledTime(std::chrono::steady_clock::time_point now, double delayInSeconds)
     {
         return std::chrono::ceil<DelayedTaskScheduler::TimePoint::duration>(
             now + std::chrono::duration<double>{std::max(0.0, delayInSeconds)});
     }
 
-    void V8ForegroundTaskRunner::PostDelayedTask(std::unique_ptr<v8::Task> task, double delayInSeconds)
+    void V8ForegroundTaskRunner::ScheduleTask(std::unique_ptr<v8::Task> task, double delayInSeconds)
     {
         const auto when = GetScheduledTime(std::chrono::steady_clock::now(), delayInSeconds);
         const auto state = m_state;
@@ -98,15 +93,6 @@ namespace Babylon::Internal
         {
             state->pending.insert(pending);
         }
-    }
-
-    void V8ForegroundTaskRunner::PostNonNestableDelayedTask(std::unique_ptr<v8::Task> task, double delayInSeconds)
-    {
-        PostDelayedTask(std::move(task), delayInSeconds);
-    }
-
-    void V8ForegroundTaskRunner::PostIdleTask(std::unique_ptr<v8::IdleTask>)
-    {
     }
 
     bool V8ForegroundTaskRunner::IdleTasksEnabled()

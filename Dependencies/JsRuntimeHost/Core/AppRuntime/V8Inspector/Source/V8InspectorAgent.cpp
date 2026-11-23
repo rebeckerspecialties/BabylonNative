@@ -324,13 +324,13 @@ namespace Babylon
                 config_object->Set(context, in_call_key, v8::True(isolate)).FromJust());
             CHECK(
                 !inspector_method.As<v8::Function>()
-                     ->Call(context, info.Holder(), static_cast<int>(call_args.size()), call_args.data())
+                     ->Call(context, info.This(), static_cast<int>(call_args.size()), call_args.data())
                      .IsEmpty());
         }
 
         v8::TryCatch try_catch(info.GetIsolate());
         static_cast<void>(node_method.As<v8::Function>()->Call(
-            context, info.Holder(), static_cast<int>(call_args.size()), call_args.data()));
+            context, info.This(), static_cast<int>(call_args.size()), call_args.data()));
         CHECK(config_object->Delete(context, in_call_key).FromJust());
         if (try_catch.HasCaught())
             try_catch.ReThrow();
@@ -417,11 +417,8 @@ namespace Babylon
         {
             return v8_inspector::StringBuffer::create(v8_inspector::StringView());
         }
-        v8::Local<v8::String> string_value = v8::Local<v8::String>::Cast(value);
-        int len = string_value->Length();
-        std::basic_string<char16_t> buffer(len, '\0');
-        string_value->Write(v8::Isolate::GetCurrent(), reinterpret_cast<uint16_t*>(&buffer[0]), 0, len); // Write expects uint16_t* but the template parameter is char16_t
-        return v8_inspector::StringBuffer::create(v8_inspector::StringView(reinterpret_cast<uint16_t*>(buffer.data()), len));
+        v8::String::Value utf16{v8::Isolate::GetCurrent(), value};
+        return v8_inspector::StringBuffer::create(v8_inspector::StringView(*utf16, utf16.length()));
     }
 
     bool AgentImpl::AppendMessage(

@@ -33,23 +33,42 @@ namespace Babylon
 #if JSRH_V8_AT_LEAST(11, 9)
             v8::ThreadIsolatedAllocator* GetThreadIsolatedAllocator() override { return m_inner->GetThreadIsolatedAllocator(); }
 #endif
+#if V8_MAJOR_VERSION < 14
             v8::ZoneBackingAllocator* GetZoneBackingAllocator() override { return m_inner->GetZoneBackingAllocator(); }
+#endif
             void OnCriticalMemoryPressure() override { m_inner->OnCriticalMemoryPressure(); }
             int NumberOfWorkerThreads() override { return m_inner->NumberOfWorkerThreads(); }
-            std::shared_ptr<v8::TaskRunner> GetForegroundTaskRunner(v8::Isolate* isolate) override;
+#if V8_MAJOR_VERSION < 14
+            std::shared_ptr<v8::TaskRunner> GetForegroundTaskRunner(v8::Isolate* isolate) override { return FindRunner(isolate); }
+#endif
 #if JSRH_V8_AT_LEAST(11, 9)
             std::shared_ptr<v8::TaskRunner> GetForegroundTaskRunner(v8::Isolate* isolate, v8::TaskPriority) override
             {
-                return GetForegroundTaskRunner(isolate);
+                return FindRunner(isolate);
             }
 #endif
+            bool IdleTasksEnabled(v8::Isolate*) override { return false; }
+#if V8_MAJOR_VERSION < 14
             void CallOnWorkerThread(std::unique_ptr<v8::Task> task) override { m_inner->CallOnWorkerThread(std::move(task)); }
             void CallBlockingTaskOnWorkerThread(std::unique_ptr<v8::Task> task) override { m_inner->CallBlockingTaskOnWorkerThread(std::move(task)); }
             void CallLowPriorityTaskOnWorkerThread(std::unique_ptr<v8::Task> task) override { m_inner->CallLowPriorityTaskOnWorkerThread(std::move(task)); }
             void CallDelayedOnWorkerThread(std::unique_ptr<v8::Task> task, double delayInSeconds) override { m_inner->CallDelayedOnWorkerThread(std::move(task), delayInSeconds); }
-            bool IdleTasksEnabled(v8::Isolate*) override { return false; }
             std::unique_ptr<v8::JobHandle> PostJob(v8::TaskPriority priority, std::unique_ptr<v8::JobTask> jobTask) override { return m_inner->PostJob(priority, std::move(jobTask)); }
             std::unique_ptr<v8::JobHandle> CreateJob(v8::TaskPriority priority, std::unique_ptr<v8::JobTask> jobTask) override { return m_inner->CreateJob(priority, std::move(jobTask)); }
+#else
+            void PostTaskOnWorkerThreadImpl(v8::TaskPriority priority, std::unique_ptr<v8::Task> task, const v8::SourceLocation& location) override
+            {
+                m_inner->PostTaskOnWorkerThread(priority, std::move(task), location);
+            }
+            void PostDelayedTaskOnWorkerThreadImpl(v8::TaskPriority priority, std::unique_ptr<v8::Task> task, double delay, const v8::SourceLocation& location) override
+            {
+                m_inner->PostDelayedTaskOnWorkerThread(priority, std::move(task), delay, location);
+            }
+            std::unique_ptr<v8::JobHandle> CreateJobImpl(v8::TaskPriority priority, std::unique_ptr<v8::JobTask> task, const v8::SourceLocation& location) override
+            {
+                return m_inner->CreateJob(priority, std::move(task), location);
+            }
+#endif
 #if JSRH_V8_AT_LEAST(11, 9)
             std::unique_ptr<v8::ScopedBlockingCall> CreateBlockingScope(v8::BlockingType blockingType) override { return m_inner->CreateBlockingScope(blockingType); }
 #endif
@@ -67,6 +86,7 @@ namespace Babylon
             v8::HighAllocationThroughputObserver* GetHighAllocationThroughputObserver() override { return m_inner->GetHighAllocationThroughputObserver(); }
 
         private:
+            std::shared_ptr<v8::TaskRunner> FindRunner(v8::Isolate* isolate);
             std::unique_ptr<v8::Platform> m_inner;
             std::mutex m_mutex;
             std::map<v8::Isolate*, std::shared_ptr<V8ForegroundTaskRunner>> m_taskRunners;

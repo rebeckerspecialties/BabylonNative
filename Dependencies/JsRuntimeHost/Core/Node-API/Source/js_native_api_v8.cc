@@ -88,6 +88,34 @@ void napi_env__::InvokeFinalizerFromGC(v8impl::RefTracker* finalizer) {
 
 namespace v8impl {
 namespace {
+enum class ExternalKind : uint16_t { CallbackBundle = 1, AddonData = 2, WrappedReference = 3 };
+
+bool DetachBuffer(v8::Local<v8::ArrayBuffer> buffer) {
+#if V8_MAJOR_VERSION >= 14
+  return buffer->Detach(v8::Local<v8::Value>()).FromMaybe(false);
+#else
+  buffer->Detach();
+  return true;
+#endif
+}
+
+v8::Local<v8::External> NewExternal(v8::Isolate* isolate, void* value,
+                                     [[maybe_unused]] ExternalKind kind) {
+#if V8_MAJOR_VERSION >= 14
+  return v8::External::New(isolate, value, static_cast<v8::ExternalPointerTypeTag>(kind));
+#else
+  return v8::External::New(isolate, value);
+#endif
+}
+
+void* ReadExternal(v8::Local<v8::External> external, [[maybe_unused]] ExternalKind kind) {
+#if V8_MAJOR_VERSION >= 14
+  return external->Value(static_cast<v8::ExternalPointerTypeTag>(kind));
+#else
+  return external->Value();
+#endif
+}
+
 
 template <typename CCharType, typename StringMaker>
 napi_status NewString(napi_env env,
@@ -358,17 +386,18 @@ inline napi_status Unwrap(napi_env env,
   RETURN_STATUS_IF_FALSE(env, value->IsObject(), napi_invalid_arg);
   v8::Local<v8::Object> obj = value.As<v8::Object>();
   
-  // [BABYLON-NATIVE-ADDITION]: Increase perf by using internal field instead of private property
-  Reference* reference =
-      static_cast<v8impl::Reference*>(obj->GetAlignedPointerFromInternalField(0));
+  const auto key = env->wrap_key.Get(env->isolate);
+  v8::Local<v8::Value> wrapped;
+  RETURN_STATUS_IF_FALSE(env, obj->GetPrivate(context, key).ToLocal(&wrapped), napi_generic_failure);
+  RETURN_STATUS_IF_FALSE(env, wrapped->IsExternal(), napi_invalid_arg);
+  auto* reference = static_cast<Reference*>(ReadExternal(wrapped.As<v8::External>(), ExternalKind::WrappedReference));
 
   if (result) {
     *result = reference->Data();
   }
 
   if (action == RemoveWrap) {
-    // [BABYLON-NATIVE-ADDITION]: Increase perf by using internal field instead of private property
-    obj->SetAlignedPointerInInternalField(0, nullptr);
+    RETURN_STATUS_IF_FALSE(env, obj->DeletePrivate(context, key).FromMaybe(false), napi_generic_failure);
     if (reference->ownership() == Ownership::kUserland) {
       // When the wrap is been removed, the finalizer should be reset.
       reference->ResetFinalizer();
@@ -400,7 +429,7 @@ class CallbackBundle {
     bundle->cb_data = data;
     bundle->env = env;
 
-    v8::Local<v8::Value> cbdata = v8::External::New(env->isolate, bundle);
+    v8::Local<v8::Value> cbdata = NewExternal(env->isolate, bundle, ExternalKind::CallbackBundle);
     Reference::New(
         env, cbdata, 0, Ownership::kRuntime, Delete, bundle, nullptr);
     return cbdata;
@@ -447,7 +476,7 @@ class CallbackWrapperBase : public CallbackWrapper {
             JsValueFromV8LocalValue(cbinfo.This()), args_length, nullptr),
         _cbinfo(cbinfo) {
     _bundle = reinterpret_cast<CallbackBundle*>(
-        cbinfo.Data().As<v8::External>()->Value());
+        ReadExternal(cbinfo.Data().As<v8::External>(), ExternalKind::CallbackBundle));
     _data = _bundle->cb_data;
   }
 
@@ -568,6 +597,11 @@ inline napi_status Wrap(napi_env env,
   v8::Local<v8::Object> obj = value.As<v8::Object>();
 
   v8impl::Reference* reference = nullptr;
+  // Internal fields belong to the object's embedder and ordinary JS objects have none.
+  const auto key = env->wrap_key.Get(env->isolate);
+  const auto has_wrap = obj->HasPrivate(context, key);
+  RETURN_STATUS_IF_FALSE(env, !has_wrap.IsNothing(), napi_generic_failure);
+  RETURN_STATUS_IF_FALSE(env, !has_wrap.FromJust(), napi_invalid_arg);
   if (result != nullptr) {
     // The returned reference should be deleted via napi_delete_reference()
     // ONLY in response to the finalize callback invocation. (If it is deleted
@@ -581,7 +615,6 @@ inline napi_status Wrap(napi_env env,
                                        finalize_cb,
                                        native_object,
                                        finalize_hint);
-    *result = reinterpret_cast<napi_ref>(reference);
   } else {
     // Create a self-deleting reference.
     reference = v8impl::Reference::New(
@@ -594,8 +627,12 @@ inline napi_status Wrap(napi_env env,
         finalize_cb == nullptr ? nullptr : finalize_hint);
   }
 
-  // [BABYLON-NATIVE-ADDITION]: Increase perf by using internal field instead of private property
-  obj->SetAlignedPointerInInternalField(0, reference);
+  if (!obj->SetPrivate(context, key, NewExternal(env->isolate, reference, ExternalKind::WrappedReference)).FromMaybe(false)) {
+    reference->ResetFinalizer();
+    delete reference;
+    return napi_set_last_error(env, napi_generic_failure);
+  }
+  if (result != nullptr) *result = reinterpret_cast<napi_ref>(reference);
 
   return GET_RETURN_STATUS(env);
 }
@@ -2366,12 +2403,18 @@ napi_status NAPI_CDECL napi_get_value_string_latin1(
     CHECK_ARG(env, result);
     *result = val.As<v8::String>()->Length();
   } else if (bufsize != 0) {
+#if V8_MAJOR_VERSION >= 14
+    auto string = val.As<v8::String>();
+    auto copied = static_cast<uint32_t>(std::min<size_t>(string->Length(), bufsize - 1));
+    string->WriteOneByteV2(env->isolate, 0, copied, reinterpret_cast<uint8_t*>(buf));
+#else
     int copied =
         val.As<v8::String>()->WriteOneByte(env->isolate,
                                            reinterpret_cast<uint8_t*>(buf),
                                            0,
                                            bufsize - 1,
                                            v8::String::NO_NULL_TERMINATION);
+#endif
 
     buf[copied] = '\0';
     if (result != nullptr) {
@@ -2402,14 +2445,23 @@ napi_status NAPI_CDECL napi_get_value_string_utf8(
 
   if (!buf) {
     CHECK_ARG(env, result);
+#if V8_MAJOR_VERSION >= 14
+    *result = val.As<v8::String>()->Utf8LengthV2(env->isolate);
+#else
     *result = val.As<v8::String>()->Utf8Length(env->isolate);
+#endif
   } else if (bufsize != 0) {
+#if V8_MAJOR_VERSION >= 14
+    auto copied = val.As<v8::String>()->WriteUtf8V2(
+        env->isolate, buf, bufsize - 1, v8::String::WriteFlags::kReplaceInvalidUtf8);
+#else
     int copied = val.As<v8::String>()->WriteUtf8(
         env->isolate,
         buf,
         bufsize - 1,
         nullptr,
         v8::String::REPLACE_INVALID_UTF8 | v8::String::NO_NULL_TERMINATION);
+#endif
 
     buf[copied] = '\0';
     if (result != nullptr) {
@@ -2446,11 +2498,17 @@ napi_status NAPI_CDECL napi_get_value_string_utf16(napi_env env,
     // V8 assumes UTF-16 length is the same as the number of characters.
     *result = val.As<v8::String>()->Length();
   } else if (bufsize != 0) {
+#if V8_MAJOR_VERSION >= 14
+    auto string = val.As<v8::String>();
+    auto copied = static_cast<uint32_t>(std::min<size_t>(string->Length(), bufsize - 1));
+    string->WriteV2(env->isolate, 0, copied, reinterpret_cast<uint16_t*>(buf));
+#else
     int copied = val.As<v8::String>()->Write(env->isolate,
                                              reinterpret_cast<uint16_t*>(buf),
                                              0,
                                              bufsize - 1,
                                              v8::String::NO_NULL_TERMINATION);
+#endif
 
     buf[copied] = '\0';
     if (result != nullptr) {
@@ -2531,7 +2589,7 @@ napi_status NAPI_CDECL napi_create_external(napi_env env,
 
   v8::Isolate* isolate = env->isolate;
 
-  v8::Local<v8::Value> external_value = v8::External::New(isolate, data);
+  v8::Local<v8::Value> external_value = v8impl::NewExternal(isolate, data, v8impl::ExternalKind::AddonData);
 
   if (finalize_cb) {
     // The Reference object will delete itself after invoking the finalizer
@@ -2633,7 +2691,7 @@ napi_status NAPI_CDECL napi_get_value_external(napi_env env,
   RETURN_STATUS_IF_FALSE(env, val->IsExternal(), napi_invalid_arg);
 
   v8::Local<v8::External> external_value = val.As<v8::External>();
-  *result = external_value->Value();
+  *result = v8impl::ReadExternal(external_value, v8impl::ExternalKind::AddonData);
 
   return napi_clear_last_error(env);
 }
@@ -2955,6 +3013,18 @@ napi_create_external_arraybuffer(napi_env env,
     CHECK_ARG(env, result);
 
     v8::Isolate* isolate = env->isolate;
+    if (external_data == nullptr) {
+      RETURN_STATUS_IF_FALSE(env, byte_length == 0, napi_invalid_arg);
+      // V8 does not invoke a backing store deleter for a null pointer.
+      auto buffer = v8::ArrayBuffer::New(isolate, 0);
+      RETURN_STATUS_IF_FALSE(env, v8impl::DetachBuffer(buffer), napi_generic_failure);
+      if (finalize_cb != nullptr) {
+        v8impl::Reference::New(env, buffer, 0, v8impl::Ownership::kRuntime,
+                               finalize_cb, nullptr, finalize_hint);
+      }
+      *result = v8impl::JsValueFromV8LocalValue(buffer);
+      return GET_RETURN_STATUS(env);
+    }
 
 #ifdef V8_ENABLE_SANDBOX
     // TODO: We should error out like what happens with node.js. For now, we will copy the buffer instead.
@@ -3489,7 +3559,7 @@ napi_status NAPI_CDECL napi_detach_arraybuffer(napi_env env,
   RETURN_STATUS_IF_FALSE(
       env, it->IsDetachable(), napi_detachable_arraybuffer_expected);
 
-  it->Detach();
+  RETURN_STATUS_IF_FALSE(env, v8impl::DetachBuffer(it), napi_generic_failure);
 
   return napi_clear_last_error(env);
 }

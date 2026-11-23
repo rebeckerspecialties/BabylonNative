@@ -22,6 +22,8 @@ if (project.hasProperty("UNITY_BUILD")) {
 }
 
 def arcore_libpath = layout.buildDirectory.dir("arcore-native").get().asFile.absolutePath
+def v8IntlRoot = providers.gradleProperty("NAPI_ANDROID_V8_INTL_ROOT").orNull
+def v8Monolith = v8IntlRoot && new File(v8IntlRoot, "lib/libv8_monolith.a").isFile()
 
 def cmakeArguments = [
     "-DANDROID_STL=c++_shared",
@@ -37,6 +39,15 @@ def cmakeArguments = [
 ]
 if (project.hasProperty("ENABLE_SANITIZERS")) {
     cmakeArguments.add("-DENABLE_SANITIZERS=${project.property('ENABLE_SANITIZERS')}")
+}
+if (v8IntlRoot) {
+    if (jsEngine != "V8") {
+        throw new GradleException("NAPI_ANDROID_V8_INTL_ROOT requires -PjsEngine=V8")
+    }
+    if (v8Monolith && !project.hasProperty("ARM64Only")) {
+        throw new GradleException("The Android Intl monolith is arm64-v8a only; specify -PARM64Only")
+    }
+    cmakeArguments.add("-DNAPI_ANDROID_V8_INTL_ROOT=${new File(v8IntlRoot).canonicalPath}")
 }
 // Hermes for Android needs HOST hermesc/shermes (they emit bytecode at build
 // time and can't run as NDK-cross-compiled binaries). JsRuntimeHost's CMake
@@ -63,7 +74,7 @@ android {
     compileSdk = 34
 
     defaultConfig {
-        minSdk = 25
+        minSdk = v8Monolith ? 29 : 25
         buildConfigField "boolean", "BABYLON_NATIVE_XR_OPENXR", "true"
 
         testInstrumentationRunner = "android.support.test.runner.AndroidJUnitRunner"

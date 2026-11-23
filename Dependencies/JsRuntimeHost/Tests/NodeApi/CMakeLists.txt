@@ -54,7 +54,8 @@ function(node_api_copy_test_sources TARGET_NAME)
 endfunction()
 
 if(ANDROID)
-    set(NODE_LITE_PLATFORM_SRC node_lite_posix.cpp)
+    # The Android addon targets below produce lib<name>.so, not build/Release/<name>.node.
+    set(NODE_LITE_PLATFORM_SRC node_lite_android.cpp)
     set(NODE_LITE_CHILD_PROCESS_SRC child_process_posix.cpp)
 elseif(APPLE)
     set(NODE_LITE_PLATFORM_SRC node_lite_posix.cpp)

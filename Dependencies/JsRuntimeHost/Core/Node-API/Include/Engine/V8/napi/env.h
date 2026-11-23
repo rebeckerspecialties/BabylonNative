@@ -5,7 +5,7 @@
 #include <functional>
 #include <stdint.h>
 
-#if INTPTR_MAX == INT64_MAX
+#if INTPTR_MAX == INT64_MAX && !defined(V8_GN_HEADER)
 #ifndef V8_COMPRESS_POINTERS
 #define V8_COMPRESS_POINTERS 1
 #endif

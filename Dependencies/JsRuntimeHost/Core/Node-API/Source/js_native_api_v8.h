@@ -98,8 +98,9 @@ class Finalizer;
 struct napi_env__ {
   explicit napi_env__(v8::Local<v8::Context> context,
                       int32_t module_api_version)
-      : isolate(context->GetIsolate()),
+      : isolate(v8::Isolate::GetCurrent()),
         context_persistent(isolate, context),
+        wrap_key(isolate, v8::Private::ForApi(isolate, v8::String::NewFromUtf8Literal(isolate, "jsruntimehost:napi_wrap"))),
         module_api_version(module_api_version) {
     napi_clear_last_error(this);
   }
@@ -191,8 +192,9 @@ struct napi_env__ {
     }
   }
 
-  v8::Isolate* const isolate;  // Shortcut for context()->GetIsolate()
+  v8::Isolate* const isolate;
   v8impl::Persistent<v8::Context> context_persistent;
+  v8::Global<v8::Private> wrap_key;
 
   v8impl::Persistent<v8::Value> last_exception;
 

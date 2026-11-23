@@ -18,6 +18,11 @@
 #include <sstream>
 #include <utility>
 #include "child_process.h"
+#if defined(JSR_NAPI_ENGINE_V8)
+#include <napi/env.h>
+#include <libplatform/libplatform.h>
+#include <v8-initialization.h>
+#endif
 
 namespace fs = std::filesystem;
 
@@ -1455,6 +1460,16 @@ ProcessResult RunNodeLiteScript(const std::filesystem::path& js_root,
 }  // namespace node_api_tests
 
 int main(int argc, char* argv[]) {
+#if defined(JSR_NAPI_ENGINE_V8)
+  // The in-process mobile test runner uses AppRuntime's platform and does not enter main.
+  auto platform = v8::platform::NewDefaultPlatform();
+  v8::V8::InitializePlatform(platform.get());
+  v8::V8::Initialize();
+#endif
   node_api_tests::NodeLiteRuntime::Run(
       std::vector<std::string>(argv, argv + argc));
+#if defined(JSR_NAPI_ENGINE_V8)
+  v8::V8::Dispose();
+  v8::V8::DisposePlatform();
+#endif
 }

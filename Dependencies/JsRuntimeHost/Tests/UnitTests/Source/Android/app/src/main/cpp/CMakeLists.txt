@@ -69,6 +69,10 @@ if(NAPI_JAVASCRIPT_ENGINE STREQUAL "JSI")
     target_compile_definitions(UnitTestsJNI PRIVATE JSRUNTIMEHOST_NAPI_ENGINE_JSI)
 endif()
 
+if(NAPI_JAVASCRIPT_ENGINE STREQUAL "V8" AND NAPI_ANDROID_V8_INTL_ROOT)
+    target_sources(UnitTestsJNI PRIVATE ${UNIT_TESTS_DIR}/Source/Tests.Intl.cpp)
+endif()
+
 target_include_directories(UnitTestsJNI
     PRIVATE ${UNIT_TESTS_DIR}
     PRIVATE ${TESTS_DIR}/NodeApi

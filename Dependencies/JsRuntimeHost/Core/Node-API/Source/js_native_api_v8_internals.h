@@ -17,7 +17,7 @@
 #include <stdint.h>
 
 // [BABYLON-NATIVE-ADDITION]: Enable V8 Pointer Compression and Sandbox for 64-bit architecture
-#if INTPTR_MAX == INT64_MAX
+#if INTPTR_MAX == INT64_MAX && !defined(V8_GN_HEADER)
 #ifndef V8_COMPRESS_POINTERS
 #define V8_COMPRESS_POINTERS 1
 #endif
