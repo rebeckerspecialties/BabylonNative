@@ -303,7 +303,17 @@ namespace Babylon
             auto sessionInit = info.Length() > 1 && info[1].IsObject()
                 ? info[1].As<Napi::Object>()
                 : Napi::Object::New(info.Env());
-            auto jsSession{ Napi::Persistent(info.Env().Global().Get(JS_CLASS_NAME).As<Napi::Function>().New({info[0], sessionInit})) };
+            auto deferred{ Napi::Promise::Deferred::New(info.Env()) };
+            Napi::ObjectReference jsSession;
+            try
+            {
+                jsSession = Napi::Persistent(info.Env().Global().Get(JS_CLASS_NAME).As<Napi::Function>().New({info[0], sessionInit}));
+            }
+            catch (const Napi::Error& error)
+            {
+                deferred.Reject(error.Value());
+                return deferred.Promise();
+            }
             auto& session{ *XRSession::Unwrap(jsSession.Value()) };
             session.m_xr = std::move(nativeXr);
 
@@ -320,7 +330,6 @@ namespace Babylon
                 }
             }
 
-            auto deferred{ Napi::Promise::Deferred::New(info.Env()) };
             LogSessionStage("starting platform session");
             session.m_xr->BeginSessionAsync()
                 .then(session.m_runtimeScheduler, arcana::cancellation::none(),
@@ -360,7 +369,17 @@ namespace Babylon
         {
             // Currently only immersive VR and immersive AR are supported.
             const auto sessionMode = ParseXRSessionMode(info[0].As<Napi::String>().Utf8Value());
-            assert(sessionMode == XRSessionMode::ImmersiveVr || sessionMode == XRSessionMode::ImmersiveAr);
+            if (!sessionMode) throw Napi::TypeError::New(info.Env(), "Unknown XR session mode");
+            if (sessionMode == XRSessionMode::Inline
+#if defined(__ANDROID__) && defined(BABYLON_NATIVE_XR_OPENXR)
+                || sessionMode != XRSessionMode::ImmersiveVr
+#endif
+            )
+            {
+                auto error = Napi::Error::New(info.Env(), "XR session mode unavailable on this backend");
+                error.Value().Set("name", "NotSupportedError");
+                throw error;
+            }
             const bool immersiveAr = sessionMode == XRSessionMode::ImmersiveAr;
 
             auto performance = info.Env().Global().Get("performance");
@@ -414,9 +433,23 @@ namespace Babylon
                         }
 
                         const auto feature = featureList.Get(index).As<Napi::String>().Utf8Value();
-                        if (!IsXRFeatureDescriptor(feature))
+                        bool supported = IsXRFeatureDescriptor(feature);
+#if defined(__ANDROID__) && defined(BABYLON_NATIVE_XR_OPENXR)
+                        // Only grant features delivered by this OpenXR backend.
+                        // An advertised runtime extension alone is insufficient.
+                        supported = feature == "viewer" || feature == "local" || feature == "local-floor" ||
+                            feature == "layers" || feature == "webgpu";
+#else
+                        supported = supported || (immersiveAr && feature == "image-tracking");
+#endif
+                        if (!supported)
                         {
-                            // Not a descriptor the WebXR specifications define: nothing to enable.
+                            if (std::string_view{featureListName} == "requiredFeatures")
+                            {
+                                auto error = Napi::Error::New(info.Env(), "Required XR session feature unavailable: " + feature);
+                                error.Value().Set("name", "NotSupportedError");
+                                throw error;
+                            }
                             continue;
                         }
 
