@@ -363,6 +363,17 @@ namespace Babylon
             assert(sessionMode == XRSessionMode::ImmersiveVr || sessionMode == XRSessionMode::ImmersiveAr);
             const bool immersiveAr = sessionMode == XRSessionMode::ImmersiveAr;
 
+            auto performance = info.Env().Global().Get("performance");
+            if (performance.IsObject())
+            {
+                auto now = performance.As<Napi::Object>().Get("now");
+                if (now.IsFunction())
+                {
+                    m_originMilliseconds = now.As<Napi::Function>().Call(performance, {}).ToNumber().DoubleValue();
+                    m_clockOrigin = std::chrono::steady_clock::now();
+                }
+            }
+
             m_renderState.Set("depthNear", Napi::Number::New(info.Env(), m_depthNear));
             m_renderState.Set("depthFar", Napi::Number::New(info.Env(), m_depthFar));
             m_renderState.Set("baseLayer", info.Env().Null());
@@ -889,6 +900,8 @@ namespace Babylon
                 if (m_renderStateFrame.lock() != frame)
                 {
                     m_renderStateFrame = frame;
+                    const auto displayTime = frame->PredictedDisplayTime.value_or(std::chrono::steady_clock::now());
+                    m_frameMilliseconds = m_originMilliseconds + std::chrono::duration<double, std::milli>(displayTime - m_clockOrigin).count();
                     if (!m_pendingRenderState.IsEmpty())
                     {
                         m_renderState = std::move(m_pendingRenderState);
@@ -898,7 +911,7 @@ namespace Babylon
                     }
                 }
                 NotifyFrameRateChange(sessionPtr->Value());
-                m_xrFrame.Update(Env(), frame, m_timestamp);
+                m_xrFrame.Update(Env(), frame, m_frameMilliseconds);
                 m_xrFrame.SetPoseAccess(true);
                 const auto endPoseAccess = gsl::finally([this] { m_xrFrame.SetPoseAccess(false); });
                 ProcessEyeInputSource(*frame.get(), Env());
@@ -915,7 +928,7 @@ namespace Babylon
 
                 m_inAnimationCallback = true;
                 const auto resetCallback = gsl::finally([this] { m_inAnimationCallback = false; });
-                callbackPtr->Value().Call({ Napi::Value::From(Env(), m_timestamp), m_jsXRFrame.Value() });
+                callbackPtr->Value().Call({ Napi::Number::New(Env(), m_frameMilliseconds), m_jsXRFrame.Value() });
 #if defined(__ANDROID__) && defined(BABYLON_NATIVE_XR_OPENXR)
                 if (auto platform = PlatformSession(); platform && m_renderState.Get("layers").IsArray())
                 {
@@ -936,8 +949,7 @@ namespace Babylon
             });
 
             // The return value should be a request ID to allow for requesting cancellation, this is unused in Babylon.js currently.
-            // For now just pass our "timestamp" as that uniquely identifies the frame.
-            return Napi::Value::From(info.Env(), m_timestamp++);
+            return Napi::Value::From(info.Env(), m_nextAnimationHandle++);
         }
 
         void XRSession::UpdateWorldTrackingState(const Napi::CallbackInfo& info)
@@ -1156,15 +1168,24 @@ namespace Babylon
                         return;
                     }
 
+                    auto session = jsSession.Value();
+                    auto event = Napi::Object::New(Env());
+                    event.Set("type", JS_EVENT_NAME_END);
+                    event.Set("session", session);
+                    event.Set("target", session);
+                    event.Set("currentTarget", session);
+                    std::vector<Napi::Function> callbacks;
                     for (const auto& [name, callback] : m_eventNamesAndCallbacks)
                     {
                         if (name == JS_EVENT_NAME_END)
                         {
-                            callback.Call({});
+                            callbacks.push_back(callback.Value());
                         }
                     }
-
+                    auto onEnd = session.Get("onend");
+                    if (onEnd.IsFunction()) callbacks.push_back(onEnd.As<Napi::Function>());
                     deferred.Resolve(Env().Undefined());
+                    for (const auto& callback : callbacks) callback.Call(session, {event});
                 });
 
             return deferred.Promise();

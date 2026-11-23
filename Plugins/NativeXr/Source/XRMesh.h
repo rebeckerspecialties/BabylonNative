@@ -49,7 +49,7 @@ namespace Babylon
                 m_jsNormals.Reset();
             }
 
-            void SetLastUpdatedTime(uint32_t timestamp)
+            void SetLastUpdatedTime(double timestamp)
             {
                 m_lastUpdatedTimestamp = timestamp;
             }
@@ -180,10 +180,10 @@ namespace Babylon
             const Napi::External<xr::Space> m_jsMeshSpace;
 
             // The last timestamp when this frame was updated (Pulled in from RequestAnimationFrame).
-            uint32_t m_lastUpdatedTimestamp{0};
-            uint32_t m_lastPositionsUpdatedTimestamp{0};
-            uint32_t m_lastIndicesUpdatedTimestamp{0};
-            uint32_t m_lastNormalsUpdatedTimestamp{0};
+            double m_lastUpdatedTimestamp{0};
+            double m_lastPositionsUpdatedTimestamp{0};
+            double m_lastIndicesUpdatedTimestamp{0};
+            double m_lastNormalsUpdatedTimestamp{0};
 
             size_t m_numJsPositions{0};
             Napi::Reference<Napi::Float32Array> m_jsPositions{};

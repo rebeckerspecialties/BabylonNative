@@ -14,7 +14,7 @@ namespace Babylon
             static Napi::Object WrapForScript(const Napi::Object& frame);
 
             XRFrame(const Napi::CallbackInfo& info);
-            void Update(const Napi::Env& env, const std::shared_ptr<const xr::System::Session::Frame>& frame, uint32_t timestamp);
+            void Update(const Napi::Env& env, const std::shared_ptr<const xr::System::Session::Frame>& frame, double timestamp);
             void SetPoseAccess(bool active) { m_poseAccess = active; }
             Napi::Promise CreateNativeAnchor(const Napi::CallbackInfo& info, xr::Pose pose, xr::NativeTrackablePtr nativeTrackable);
             Napi::Value DeclareNativeAnchor(const Napi::Env& env, xr::NativeAnchorPtr nativeAnchor);
@@ -76,8 +76,8 @@ namespace Babylon
             Napi::Value GetWorldInformation(const Napi::CallbackInfo& info);
             Napi::Value GetFeaturePointCloud(const Napi::CallbackInfo& info);
             void UpdateSceneObjects(const Napi::Env& env);
-            void UpdatePlanes(const Napi::Env& env, uint32_t timestamp);
-            void UpdateMeshes(const Napi::Env& env, uint32_t timestamp);
+            void UpdatePlanes(const Napi::Env& env, double timestamp);
+            void UpdateMeshes(const Napi::Env& env, double timestamp);
             void UpdateImageTrackingResults(const Napi::Env& env);
         };
     } // Plugins
