@@ -13,6 +13,7 @@
 
 #import "Include/IXrContextARKit.h"
 #include "CompositorCoordinates.h"
+#include "CameraTextureSnapshot.h"
 #include "ImageTrackingData.h"
 #include "ImageTrackingValidationState.h"
 
@@ -388,34 +389,16 @@ namespace {
     CVMetalTextureRef _cameraTextureCbCr;
     CGSize _viewportSize;
 
-    UIInterfaceOrientation cameraUVReferenceOrientation;
-    CGSize cameraUVReferenceSize;
-
     NSString* sessionFailureDescription;
 }
 
 /**
- Returns the camera Y texture, the caller is responsible for freeing this texture.
+ Snapshots both Core Video texture owners while the camera frame cannot change.
  */
-- (id<MTLTexture>)GetCameraTextureY {
-    if (_cameraTextureY != nil) {
-        id<MTLTexture> mtlTexture = CVMetalTextureGetTexture(_cameraTextureY);
-        return mtlTexture;
+- (xr::CameraTextureSnapshot)GetCameraTextures {
+    @synchronized(self) {
+        return {_cameraTextureY, _cameraTextureCbCr};
     }
-
-    return nil;
-}
-
-/**
- Returns the camera CbCr texture, the caller is responsible for freeing this texture.
- */
-- (id<MTLTexture>)GetCameraTextureCbCr {
-    if (_cameraTextureCbCr != nil) {
-        id<MTLTexture> mtlTexture = CVMetalTextureGetTexture(_cameraTextureCbCr);
-        return mtlTexture;
-    }
-
-    return nil;
 }
 
 /**
@@ -564,7 +547,7 @@ namespace {
 //}
 
 /**
- Updates the AR Camera texture, and Camera pose. If a size change is detected also sets the UVs, and FoV values.
+ Updates camera textures, display transform, calibration and pose from one AR frame.
  */
 - (void)session:(ARSession *)__unused session didUpdateFrameInternal:(ARFrame *)frame {
     // Update both metal textures used by the renderer to display the camera image.
@@ -578,11 +561,9 @@ namespace {
         _cameraTextureCbCr = newCameraTextureCbCr;
     }
 
-    // Check if our orientation or size has changed and update camera UVs if necessary.
-    if ([self checkAndUpdateCameraUVs:frame]) {
-        // If our camera UVs updated, then also update the projection matrix to match the updated UVs.
-        [self updateProjectionMatrix:frame.camera];
-    }
+    // Camera calibration can change without a viewport/orientation change.
+    [self updateCameraUVs:frame];
+    [self updateProjectionMatrix:frame.camera];
 
     // Finally update the XR pose based on the current camera-to-world transform from ARKit.
     [self updatePose:(frame.camera)];
@@ -603,12 +584,12 @@ namespace {
 
         // Plane 0 is the Y plane, which is in R8Unorm format, and the second plane is the CBCR plane which is RG8Unorm format.
         auto pixelFormat = planeIndex ? MTLPixelFormatRG8Unorm : MTLPixelFormatR8Unorm;
-        CVMetalTextureRef texture;
+        CVMetalTextureRef texture{};
 
         // Create a texture from the corresponding plane.
         auto status = CVMetalTextureCacheCreateTextureFromImage(kCFAllocatorDefault, textureCache, pixelBuffer, nil, pixelFormat, planeWidth, planeHeight, planeIndex, &texture);
         if (status != kCVReturnSuccess) {
-            CVBufferRelease(texture);
+            if (texture) CVBufferRelease(texture);
             return nil;
         }
 
@@ -620,30 +601,18 @@ namespace {
 }
 
 /**
- Checks whether the camera UVs need to be updated based on the orientation and size of the view port, and updates them if necessary.
- @return True if the camera UVs were updated, false otherwise.
+ Updates camera UVs from this frame's display transform.
 */
-- (Boolean)checkAndUpdateCameraUVs:(ARFrame *)frame {
-    // When the orientation or viewport size changes loop over triangleVerts, apply transform to the UV to generate camera UVs.
+- (void)updateCameraUVs:(ARFrame *)frame {
     auto orientation = [self orientation];
     CGSize viewportSize = [self viewportSize];
-    if (cameraUVReferenceOrientation != orientation || cameraUVReferenceSize.height != viewportSize.height || cameraUVReferenceSize.width != viewportSize.width) {
-        // The default transform is for converting normalized image coordinates to UVs, we want the inverse as we are converting
-        // UVs to normalized image coordinates.
-        auto transform = CGAffineTransformInvert([frame displayTransformForOrientation:orientation viewportSize:[self viewportSize]]);
-        for(size_t i = 0; i < sizeof(vertices) / sizeof(*vertices); i++) {
-            CGPoint transformedPoint = CGPointApplyAffineTransform(cameraViewportUVs[i], transform);
-            vertices[i].cameraUV[0] = transformedPoint.x;
-            vertices[i].cameraUV[1] = transformedPoint.y;
-        }
-
-        // Keep track of the last known orientation and viewport size.
-        cameraUVReferenceOrientation = orientation;
-        cameraUVReferenceSize = viewportSize;
-        return true;
+    // The display transform maps image to viewport coordinates; sampling needs its inverse.
+    auto transform = CGAffineTransformInvert([frame displayTransformForOrientation:orientation viewportSize:viewportSize]);
+    for(size_t i = 0; i < sizeof(vertices) / sizeof(*vertices); i++) {
+        CGPoint transformedPoint = CGPointApplyAffineTransform(cameraViewportUVs[i], transform);
+        vertices[i].cameraUV[0] = transformedPoint.x;
+        vertices[i].cameraUV[1] = transformedPoint.y;
     }
-
-    return false;
 }
 
 /**
@@ -698,10 +667,16 @@ namespace {
         const auto viewportSize = [self viewportSize];
         const auto interfaceOrientation = [self orientation];
         const CGPoint projected = [camera projectPoint:simd_make_float3(0.0f, -1.0f, -2.0f) orientation:interfaceOrientation viewportSize:viewportSize];
-        NSLog(@"[NativeXR] registration orientation=%ld viewport=%.0fx%.0f position=%.4f,%.4f,%.4f arkit=%.1f,%.1f projection=%.4f,%.4f,%.4f,%.4f",
+        const auto currentProjection = [camera projectionMatrixForOrientation:interfaceOrientation viewportSize:viewportSize zNear:frameView.DepthNearZ zFar:frameView.DepthFarZ];
+        float projectionDelta = 0.0f;
+        for (size_t index = 0; index < frameView.ProjectionMatrix.size(); ++index) {
+            projectionDelta = std::max(projectionDelta, std::abs(frameView.ProjectionMatrix[index] - currentProjection.columns[index / 4][index % 4]));
+        }
+        NSLog(@"[NativeXR] registration orientation=%ld viewport=%.0fx%.0f position=%.4f,%.4f,%.4f arkit=%.1f,%.1f projection=%.4f,%.4f,%.4f,%.4f currentProjectionDelta=%.7f tracking=%ld",
             static_cast<long>(interfaceOrientation), viewportSize.width, viewportSize.height,
             transform.columns[3][0], transform.columns[3][1], transform.columns[3][2], projected.x, projected.y,
-            frameView.ProjectionMatrix[0], frameView.ProjectionMatrix[5], frameView.ProjectionMatrix[8], frameView.ProjectionMatrix[9]);
+            frameView.ProjectionMatrix[0], frameView.ProjectionMatrix[5], frameView.ProjectionMatrix[8], frameView.ProjectionMatrix[9],
+            projectionDelta, static_cast<long>(camera.trackingState));
     }
 }
 
@@ -1192,8 +1167,6 @@ namespace xr {
 
             UpdateXRView();
 
-            [sessionDelegate session:SystemImpl.XrContext->Session didUpdateFrameInternal:SystemImpl.XrContext->Frame];
-
             auto viewSize = [sessionDelegate viewSize];
             viewportSize.x = ResolveDrawableDimension(viewSize.width, 0, 0, 1);
             viewportSize.y = ResolveDrawableDimension(viewSize.height, 0, 0, 1);
@@ -1254,6 +1227,11 @@ namespace xr {
                 }
             }
 
+            ActiveFrameViews[0].DepthNearZ = DepthNearZ;
+            ActiveFrameViews[0].DepthFarZ = DepthFarZ;
+            // Initialize dimensions before deriving the first frame's projection/UVs.
+            [sessionDelegate session:SystemImpl.XrContext->Session didUpdateFrameInternal:SystemImpl.XrContext->Frame];
+
             // Browser WebXR AR compositors render the app layer over camera
             // passthrough. Preserve that model here: Babylon clears/renders an
             // alpha layer, and DrawFrame composites it over the latest ARKit
@@ -1265,12 +1243,9 @@ namespace xr {
                 currentCommandBuffer.label = @"XRCameraCommandBuffer";
                 MTLRenderPassDescriptor *renderPassDescriptor = [MTLRenderPassDescriptor renderPassDescriptor];
 
-                id<MTLTexture> cameraTextureY = nil;
-                id<MTLTexture> cameraTextureCbCr = nil;
-                @synchronized(sessionDelegate) {
-                    cameraTextureY = [sessionDelegate GetCameraTextureY];
-                    cameraTextureCbCr = [sessionDelegate GetCameraTextureCbCr];
-                }
+                const auto cameraTextures = [sessionDelegate GetCameraTextures];
+                id<MTLTexture> cameraTextureY = cameraTextures.Luma();
+                id<MTLTexture> cameraTextureCbCr = cameraTextures.Chroma();
 
                 if(renderPassDescriptor != nil) {
                     renderPassDescriptor.colorAttachments[0].texture = (__bridge id<MTLTexture>)ActiveFrameViews[0].ColorTexturePointer;
@@ -1296,6 +1271,9 @@ namespace xr {
                     [renderEncoder endEncoding];
                 }
 
+                [currentCommandBuffer addCompletedHandler:^(id<MTLCommandBuffer>) {
+                    (void)cameraTextures;
+                }];
                 [currentCommandBuffer commit];
             }
 
@@ -1327,12 +1305,9 @@ namespace xr {
                 MTLRenderPassDescriptor *renderPassDescriptor = [MTLRenderPassDescriptor renderPassDescriptor];
 
                 if (renderPassDescriptor != nil) {
-                    id<MTLTexture> cameraTextureY = nil;
-                    id<MTLTexture> cameraTextureCbCr = nil;
-                    @synchronized(sessionDelegate) {
-                        cameraTextureY = [sessionDelegate GetCameraTextureY];
-                        cameraTextureCbCr = [sessionDelegate GetCameraTextureCbCr];
-                    }
+                    const auto cameraTextures = [sessionDelegate GetCameraTextures];
+                    id<MTLTexture> cameraTextureY = cameraTextures.Luma();
+                    id<MTLTexture> cameraTextureCbCr = cameraTextures.Chroma();
 
                     renderPassDescriptor.colorAttachments[0].texture = drawable.texture;
                     renderPassDescriptor.colorAttachments[0].loadAction = MTLLoadActionDontCare;
@@ -1392,8 +1367,7 @@ namespace xr {
                     }
 
                     [currentCommandBuffer addCompletedHandler:^(id<MTLCommandBuffer>) {
-                        (void)cameraTextureY;
-                        (void)cameraTextureCbCr;
+                        (void)cameraTextures;
                     }];
 
                     // Schedule a present once the framebuffer is complete using the current drawable.
