@@ -115,6 +115,11 @@ namespace Babylon::Polyfills::Internal
         if (context.IsUndefined())
         {
             context = Context::CreateInstance(info.Env(), info.This());
+            if (!Context::Unwrap(context.As<Napi::Object>())->GetNVGContext())
+            {
+                // An early request can precede graphics initialization. Do not cache a failed context.
+                return Env().Null();
+            }
             thisObj.Set(contextPropertyName, context);
             m_contextObject = Napi::Persistent(context.As<Napi::Object>());
         }
@@ -252,6 +257,10 @@ namespace Babylon::Polyfills::Internal
     {
 #if defined(BABYLON_NATIVE_CANVAS_TO_DATA_URL)
         auto contextValue = GetContext(info);
+        if (!contextValue.IsObject())
+        {
+            throw Napi::Error::New(info.Env(), "Canvas.toDataURL could not create the 2D rendering context.");
+        }
         auto* context = Context::Unwrap(contextValue.As<Napi::Object>());
         if (context == nullptr)
         {
