@@ -1006,7 +1006,12 @@ namespace xr
             auto endInfo = MakeXr<XrFrameEndInfo>(XR_TYPE_FRAME_END_INFO);
             endInfo.displayTime = FrameState.predictedDisplayTime;
             endInfo.environmentBlendMode = System.BlendMode;
-            Layers.Finish(Session, AppSpace, HeadSpace, endInfo, layerHeader, renderLayer && FrameShouldRender, System.Equirect2, System.MaxLayers);
+            const bool submittedProjection = Layers.Finish(Session, AppSpace, HeadSpace, endInfo, layerHeader, renderLayer && FrameShouldRender, System.Equirect2, System.MaxLayers);
+            if (submittedProjection && projectionViews.size() == 2 && !LoggedStereoSubmission)
+            {
+                __android_log_print(ANDROID_LOG_INFO, "BabylonNative", "Submitted stereo frame to OpenXR compositor");
+                LoggedStereoSubmission = true;
+            }
 #ifndef NDEBUG
             if (projectionViews.size() == 2 && ++StereoFrames % 240 == 1)
             {
@@ -1026,6 +1031,7 @@ namespace xr
         }
 
         System::Impl& System;
+        bool LoggedStereoSubmission{};
 #ifndef NDEBUG
         uint32_t StereoFrames{};
 #endif

@@ -144,7 +144,7 @@ namespace xr
             for (auto& [_, chain] : m_chains) Destroy(chain);
             m_chains.clear();
         }
-        void Finish(XrSession session, XrSpace space, XrSpace viewerSpace, XrFrameEndInfo& end,
+        bool Finish(XrSession session, XrSpace space, XrSpace viewerSpace, XrFrameEndInfo& end,
             const XrCompositionLayerBaseHeader* projection, bool render, bool equirect2, uint32_t maxLayers)
         {
             std::scoped_lock lock{m_mutex};
@@ -158,9 +158,18 @@ namespace xr
             m_headers.clear();
             m_storage.clear();
             m_storage.reserve(m_order.size() * 2);
+            bool submittedProjection{};
             if (render) for (const auto& p : m_order)
             {
-                if (!p.Id) { if (projection) m_headers.push_back(projection); continue; }
+                if (!p.Id)
+                {
+                    if (projection)
+                    {
+                        m_headers.push_back(projection);
+                        submittedProjection = true;
+                    }
+                    continue;
+                }
                 const auto it = m_chains.find(p.Id);
                 if (it == m_chains.end() || it->second.Retiring) continue;
                 auto& c = it->second;
@@ -232,6 +241,7 @@ namespace xr
                 Destroy(it->second);
                 it = m_chains.erase(it);
             }
+            return submittedProjection;
         }
     private:
         static void Destroy(ImageChain& chain)
