@@ -5,6 +5,20 @@ comparison uses Quest Browser 112 and the Vulkan fork, not Babylon's bgfx render
 Keep runtime implementation, portable conformance, app policy and replay tooling in
 separate commits. Do not export the dirty fork as one patch.
 
+## November 23: compositor and Android application
+
+These drafts are in Rebecker repositories. The fork's runtime can be built
+without a sibling checkout. Keep OpenXR/Vulkan implementation details out of
+the portable WebXR API proposals.
+
+| Scope | Review and revision | Verification |
+| --- | --- | --- |
+| Portable WebXR | [Rigid transform dictionaries](https://github.com/rebeckerspecialties/BabylonNative/pull/30) `f7017ba1`; [moving reference spaces](https://github.com/rebeckerspecialties/BabylonNative/pull/31) `96f0cf07`; [animation timestamps and end events](https://github.com/rebeckerspecialties/BabylonNative/pull/32) `755c3f06`; [required feature negotiation](https://github.com/rebeckerspecialties/BabylonNative/pull/33) `3400b309` | Separate candidates for BabylonNative, independent of the wgpu renderer. |
+| Android video | [Native fork #34](https://github.com/rebeckerspecialties/BabylonNative/pull/34) `b22d6035` | With the same packed video, 42 XR callbacks in 8 s before versus 549/552/552 in three repeated streaming texture runs. One transition delivered 382; preserve it when investigating variance. Direct media uses compositor surfaces instead. |
+| Projection foveation and space warp | [Native fork #35](https://github.com/rebeckerspecialties/BabylonNative/pull/35) `70c3b1e3`, `496e6514`, `fc3903db`; [wgpu fork #5](https://github.com/rebeckerspecialties/wgpu/pull/5) `b1e25a650`, `c5e0db1da`; downstream carry `e1ccd8a8` | Quest checkerboard at the recommended eye extent: 240 center and peripheral edges per eye when off, 240 center / 0 peripheral at maximum, 240 / 240 restored. Combined warp and media: 145/141/144 application frames over four seconds for quad/cylinder/equirect. No optical synthesized-frame count. |
+| Reproducible samples | [Samples #1](https://github.com/rebeckerspecialties/babylonnative-webxr-samples/pull/1) `960645e`, pinned to `fc3903db` | [Clean arm64 APK build](https://github.com/rebeckerspecialties/babylonnative-webxr-samples/actions/runs/45270798538) includes the assets and runs the host tests. See the sample repository's QUEST-VALIDATION.md for fixture IDs and physical measurements. |
+| Application and CI | [Webapp shaders #1342](https://github.com/rebeckerspecialties/webapp/pull/1342) `34249fbc`; [native education application #1341](https://github.com/rebeckerspecialties/webapp/pull/1341) | Build the application from its real sources. The visual CI gate requires a focused native Activity, an accepted OpenXR stereo submission and a single display capture containing the welcome title, Start Story, and the independent About menu label. A successful APK build or a uniform Android capture does not pass it. |
+
 ## Babylon.js
 
 | Patch | Destination/status | Acceptance boundary |
