@@ -1,10 +1,22 @@
 #include <gtest/gtest.h>
 #include <napi/env.h>
 #include <JavaScriptCore/JavaScript.h>
+#include <array>
+#include <atomic>
 #include "../../../Core/Node-API/Source/js_native_api_javascriptcore.h"
 
 namespace
 {
+    JSValueRef SentinelPrototype(napi_env env, napi_value value, JSValueRef key)
+    {
+        JSValueRef exception{};
+        const auto sentinelValue = JSObjectGetPropertyForKey(env->context, reinterpret_cast<JSObjectRef>(value), key, &exception);
+        EXPECT_EQ(exception, nullptr);
+        const auto sentinel = JSValueToObject(env->context, sentinelValue, &exception);
+        EXPECT_EQ(exception, nullptr);
+        return JSObjectGetPrototype(env->context, sentinel);
+    }
+
     class JscNodeApi : public testing::Test
     {
     protected:
@@ -77,6 +89,115 @@ TEST(NodeApi, JscRegistryRetainsReplacementOwner)
     }
     EXPECT_EQ(napi_env__::get(context), nullptr);
     JSGlobalContextRelease(context);
+}
+
+TEST_F(JscNodeApi, FunctionSentinelsReuseClassButKeepCallbackDataIndependent)
+{
+    std::array<int32_t, 64> data{};
+    auto functions = Napi::Array::New(env, data.size());
+    JSValueRef prototype{};
+    for (size_t i = 0; i < data.size(); ++i)
+    {
+        data[i] = static_cast<int32_t>(i);
+        napi_value function{};
+        ASSERT_EQ(napi_create_function(env, "callback", NAPI_AUTO_LENGTH, [](napi_env env, napi_callback_info info) -> napi_value {
+            void* data{};
+            EXPECT_EQ(napi_get_cb_info(env, info, nullptr, nullptr, nullptr, &data), napi_ok);
+            napi_value result{};
+            EXPECT_EQ(napi_create_int32(env, *static_cast<int32_t*>(data), &result), napi_ok);
+            return result;
+        }, &data[i], &function), napi_ok);
+        functions.Set(static_cast<uint32_t>(i), Napi::Value(env, function));
+        const auto current = SentinelPrototype(env, function, env->function_info_symbol);
+        if (i == 0)
+        {
+            prototype = current;
+        }
+        EXPECT_EQ(current, prototype);
+    }
+    for (size_t i = 0; i < data.size(); ++i)
+    {
+        EXPECT_EQ(functions.Get(static_cast<uint32_t>(i)).As<Napi::Function>().Call({}).As<Napi::Number>().Int32Value(), data[i]);
+    }
+}
+
+TEST_F(JscNodeApi, NativePayloadClassesAreReusedWithinButNotAcrossKinds)
+{
+    auto first = Napi::Object::New(env);
+    auto second = Napi::Object::New(env);
+    int firstData{1};
+    int secondData{2};
+    ASSERT_EQ(napi_wrap(env, first, &firstData, nullptr, nullptr, nullptr), napi_ok);
+    ASSERT_EQ(napi_wrap(env, second, &secondData, nullptr, nullptr, nullptr), napi_ok);
+    auto wrapper = SentinelPrototype(env, first, env->wrapper_info_symbol);
+    EXPECT_EQ(wrapper, SentinelPrototype(env, second, env->wrapper_info_symbol));
+    void* data{};
+    ASSERT_EQ(napi_unwrap(env, first, &data), napi_ok);
+    EXPECT_EQ(data, &firstData);
+    ASSERT_EQ(napi_unwrap(env, second, &data), napi_ok);
+    EXPECT_EQ(data, &secondData);
+
+    napi_ref firstRef{}, secondRef{};
+    ASSERT_EQ(napi_create_reference(env, first, 0, &firstRef), napi_ok);
+    ASSERT_EQ(napi_create_reference(env, second, 0, &secondRef), napi_ok);
+    auto reference = SentinelPrototype(env, first, env->reference_info_symbol);
+    EXPECT_EQ(reference, SentinelPrototype(env, second, env->reference_info_symbol));
+    EXPECT_NE(reference, wrapper);
+    ASSERT_EQ(napi_delete_reference(env, firstRef), napi_ok);
+    ASSERT_EQ(napi_delete_reference(env, secondRef), napi_ok);
+
+    napi_value firstExternal{}, secondExternal{};
+    ASSERT_EQ(napi_create_external(env, &firstData, nullptr, nullptr, &firstExternal), napi_ok);
+    ASSERT_EQ(napi_create_external(env, &secondData, nullptr, nullptr, &secondExternal), napi_ok);
+    napi_value firstPrototype{}, secondPrototype{};
+    ASSERT_EQ(napi_get_prototype(env, firstExternal, &firstPrototype), napi_ok);
+    ASSERT_EQ(napi_get_prototype(env, secondExternal, &secondPrototype), napi_ok);
+    EXPECT_EQ(firstPrototype, secondPrototype);
+    EXPECT_NE(reinterpret_cast<JSValueRef>(firstPrototype), wrapper);
+    EXPECT_NE(reinterpret_cast<JSValueRef>(firstPrototype), reference);
+    ASSERT_EQ(napi_get_value_external(env, firstExternal, &data), napi_ok);
+    EXPECT_EQ(data, &firstData);
+    ASSERT_EQ(napi_get_value_external(env, secondExternal, &data), napi_ok);
+    EXPECT_EQ(data, &secondData);
+}
+
+TEST_F(JscNodeApi, ConstructorPrototypesRemainIndependent)
+{
+    napi_value first{}, second{};
+    const auto constructor = [](napi_env, napi_callback_info) -> napi_value { return nullptr; };
+    ASSERT_EQ(napi_define_class(env, "First", NAPI_AUTO_LENGTH, constructor, nullptr, 0, nullptr, &first), napi_ok);
+    ASSERT_EQ(napi_define_class(env, "Second", NAPI_AUTO_LENGTH, constructor, nullptr, 0, nullptr, &second), napi_ok);
+    napi_value firstPrototype{}, secondPrototype{};
+    ASSERT_EQ(napi_get_named_property(env, first, "prototype", &firstPrototype), napi_ok);
+    ASSERT_EQ(napi_get_named_property(env, second, "prototype", &secondPrototype), napi_ok);
+    EXPECT_NE(firstPrototype, secondPrototype);
+}
+
+TEST(NodeApi, SharedSentinelClassesFinalizeInEachContext)
+{
+    for (int iteration = 0; iteration < 3; ++iteration)
+    {
+        auto context = JSGlobalContextCreate(nullptr);
+        auto env = Napi::Attach(context);
+        std::atomic<unsigned> finalized{};
+        const auto finalizer = [](napi_env, void* data, void* hint) {
+            EXPECT_EQ(data, hint);
+            ++*static_cast<std::atomic<unsigned>*>(data);
+        };
+        for (unsigned i = 0; i < 64; ++i)
+        {
+            napi_value external{}, object{}, function{};
+            ASSERT_EQ(napi_create_external(env, &finalized, finalizer, &finalized, &external), napi_ok);
+            ASSERT_EQ(napi_create_object(env, &object), napi_ok);
+            ASSERT_EQ(napi_wrap(env, object, &finalized, finalizer, &finalized, nullptr), napi_ok);
+            ASSERT_EQ(napi_create_function(env, "callback", NAPI_AUTO_LENGTH,
+                [](napi_env, napi_callback_info) -> napi_value { return nullptr; }, nullptr, &function), napi_ok);
+            ASSERT_EQ(napi_add_finalizer(env, function, &finalized, finalizer, &finalized, nullptr), napi_ok);
+        }
+        JSGlobalContextRelease(context);
+        Napi::Detach(env);
+        EXPECT_EQ(finalized.load(), 3u * 64u);
+    }
 }
 
 TEST_F(JscNodeApi, BigIntIgnoresPatchedIntrinsics)

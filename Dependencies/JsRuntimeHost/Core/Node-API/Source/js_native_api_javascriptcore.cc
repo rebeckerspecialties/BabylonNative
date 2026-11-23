@@ -267,6 +267,30 @@ namespace {
     return napi_ok;
   }
 
+  class NativeClass {
+   public:
+    NativeClass(const char* name, JSObjectFinalizeCallback finalize) {
+      JSClassDefinition definition{kJSClassDefinitionEmpty};
+      definition.className = name;
+      definition.finalize = finalize;
+      _class = JSClassCreate(&definition);
+    }
+
+    ~NativeClass() {
+      JSClassRelease(_class);
+    }
+
+    NativeClass(const NativeClass&) = delete;
+    NativeClass& operator=(const NativeClass&) = delete;
+
+    JSClassRef Retain() const {
+      return JSClassRetain(_class);
+    }
+
+   private:
+    JSClassRef _class;
+  };
+
   enum class NativeType {
     Constructor,
     External,
@@ -490,10 +514,10 @@ namespace {
       , _env{env}
       , _cb{cb}
       , _data{data} {
-      JSClassDefinition definition{kJSClassDefinitionEmpty};
-      definition.className = "Native";
-      definition.finalize = Finalize;
-      _class = JSClassCreate(&definition);
+      // JSC retains per-class context metadata even after the instances are collected.
+      // Callback state is per sentinel, so only the immutable class needs sharing.
+      static const NativeClass type{"Native", Finalize};
+      _class = type.Retain();
     }
 
     ~FunctionInfo() {
@@ -581,10 +605,8 @@ namespace {
     BaseInfoT(napi_env env, const char* className)
       : NativeInfo{TType}
       , _env{env} {
-      JSClassDefinition definition{kJSClassDefinitionEmpty};
-      definition.className = className;
-      definition.finalize = Finalize;
-      _class = JSClassCreate(&definition);
+      static const NativeClass type{className, Finalize};
+      _class = type.Retain();
     }
 
     // JSObjectFinalizeCallback
