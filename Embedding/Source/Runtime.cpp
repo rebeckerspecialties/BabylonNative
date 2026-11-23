@@ -273,7 +273,18 @@ namespace Babylon::Embedding
             Babylon::Polyfills::WebSocket::Initialize(env);
 #endif
 #if BABYLON_NATIVE_POLYFILL_WORKER
-            Babylon::Polyfills::Worker::Initialize(env);
+            Babylon::Polyfills::Worker::Options workerOptions{};
+            workerOptions.InitializeWorkerGlobal = [](Napi::Env workerEnv) {
+                Babylon::Polyfills::Streams::Initialize(workerEnv);
+                Babylon::Polyfills::Compression::Initialize(workerEnv);
+            };
+            workerOptions.ConsoleCallback = [log = implPtr->m_options.log](const char* message) {
+                if (log && message)
+                {
+                    log(LogLevel::Log, message);
+                }
+            };
+            Babylon::Polyfills::Worker::Initialize(env, std::move(workerOptions));
 #endif
 
 #if BABYLON_NATIVE_POLYFILL_CANVAS
