@@ -2164,8 +2164,12 @@ pub extern "C" fn nvgTextBounds(
                 if !bounds.is_null() {
                     let left = metrics.x;
                     let right = metrics.x + metrics.width();
-                    let top = metrics.y - metrics.height();
-                    let bottom = metrics.y;
+                    // femtovg reports the top of the ink, not the pen's baseline.
+                    let (top, bottom) = if metrics.height() > 0.0 {
+                        (metrics.y, metrics.y + metrics.height())
+                    } else {
+                        (y, y)
+                    };
                     // SAFETY: The caller passes writable storage for four floats.
                     unsafe {
                         *bounds.add(0) = left;
