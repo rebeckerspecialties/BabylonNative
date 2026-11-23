@@ -10,6 +10,7 @@
 #include <Shared/Diagnostics.h>
 #include <Shared/PlaygroundScripts.h>
 #include <napi/napi.h>
+#include <pthread.h>
 
 #include <cstdlib>
 #include <string>
@@ -77,7 +78,25 @@ namespace
     void QueuePlaygroundOptions(Babylon::Embedding::Runtime& runtime, PlaygroundOptions options)
     {
         runtime.RunOnJsThread([options = std::move(options)](Napi::Env env) {
+            // Profiling-only scheduling hint. Instruments must confirm actual core residency.
+            if (const char* requestedQos = std::getenv("BABYLON_PLAYGROUND_PROFILE_JS_QOS"))
+            {
+                const std::string_view name{requestedQos};
+                const auto qos = name == "background" ? QOS_CLASS_BACKGROUND :
+                    name == "utility" ? QOS_CLASS_UTILITY : QOS_CLASS_UNSPECIFIED;
+                if (qos == QOS_CLASS_UNSPECIFIED || pthread_set_qos_class_self_np(qos, 0) != 0)
+                {
+                    throw Napi::Error::New(env, "Invalid or unsupported BABYLON_PLAYGROUND_PROFILE_JS_QOS; expected background or utility.");
+                }
+                uint64_t threadId{};
+                pthread_threadid_np(nullptr, &threadId);
+                NSLog(@"Playground profiling JS QoS=%s thread=%llu", requestedQos, static_cast<unsigned long long>(threadId));
+            }
             auto js = Napi::Object::New(env);
+            if (const char* size = std::getenv("BABYLON_NATIVE_PLAYGROUND_PROFILE_RENDER_SIZE"))
+            {
+                js.Set("profileRenderSize", Napi::String::New(env, size));
+            }
             js.Set("listTests", Napi::Boolean::New(env, options.ListTests));
             js.Set("headless", Napi::Boolean::New(env, options.Headless));
             js.Set("hdr10", Napi::Boolean::New(env, options.Hdr10));

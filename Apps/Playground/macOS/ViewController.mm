@@ -449,7 +449,8 @@ namespace
     if (HasValidationIntent(playgroundOptions))
     {
         __weak ViewController* weakSelf = self;
-        _validationFrameTimer = [NSTimer timerWithTimeInterval:(1.0 / 60.0) repeats:YES block:^(NSTimer* timer) {
+        const auto validationFramesPerSecond = std::max<NSInteger>(1, _mtkView.preferredFramesPerSecond);
+        _validationFrameTimer = [NSTimer timerWithTimeInterval:(1.0 / validationFramesPerSecond) repeats:YES block:^(NSTimer* timer) {
             ViewController* strongSelf = weakSelf;
             if (strongSelf == nil || strongSelf->_mtkView == nil || strongSelf->_bnView == nil)
             {

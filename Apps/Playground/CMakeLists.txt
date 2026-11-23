@@ -13,6 +13,12 @@ set(BABYLON_SCRIPTS
     "../node_modules/babylonjs-procedural-textures/babylonjs.proceduralTextures.js"
     "../node_modules/earcut/dist/earcut.min.js")
 
+if(BABYLON_NATIVE_PLUGIN_NATIVEWEBGPU)
+    list(APPEND BABYLON_SCRIPTS
+        "../node_modules/babylonjs/babylon.native-build.json"
+        "../node_modules/babylonjs/babylon.accessor-report.json")
+endif()
+
 set(DEPENDENCIES
     "../Dependencies/Arimo-Regular.ttf"
     "../Dependencies/Arimo-OFL.txt"
@@ -47,11 +53,27 @@ set(SCRIPTS
     "Scripts/validation_dawn_webgpu.js"
     "Scripts/native_xr_babylon_portal_demo.js"
     "Scripts/native_xr_portal_moving_benchmark.js"
+    "Scripts/native_xr_portal_jsc_sampling.js"
+    "Scripts/native_xr_portal_ao_ign_validation.js"
+    "Scripts/native_xr_portal_ao_slope_blur_validation.js"
     "Scripts/native_xr_portal_resolution_validation.js"
     "Scripts/native_xr_portal_benchmark_bounded.js"
     "Scripts/native_xr_portal_sustained_benchmark.js"
+    "Scripts/native_xr_portal_thermal_idle.js"
+    "Scripts/native_xr_portal_moving_profile.js"
+    "Scripts/native_xr_portal_fallback_validation.js"
+    "Scripts/native_xr_portal_hillvalley_stress.js"
+    "Scripts/native_xr_portal_manual_validation.js"
+    "Scripts/native_xr_portal_profile.js"
+    "Scripts/native_xr_portal_profile_calls.js"
+    "Scripts/native_xr_portal_profile_ao.js"
     "Scripts/native_xr_portal_profile_workload.js"
+    "Scripts/native_xr_portal_profile_materials.js"
+    "Scripts/native_xr_portal_profile_prepass.js"
+    "Scripts/native_xr_portal_registration_validation.js"
+    "Scripts/native_xr_portal_profile_gbuffer.js"
     "Scripts/native_xr_portal_profile_estimated_placement.js"
+    "Scripts/native_xr_portal_ao_diagnostics.js"
     "Scripts/native_xr_portal_ao_projection_validation.js"
     "Scripts/native_xr_portal_gtvbao_validation.js"
     "Scripts/native_xr_portal_ao_bilinear_upsample.js"
@@ -68,14 +90,26 @@ set(SCRIPTS
     "Scripts/native_xr_portal_stability_capture.js"
     "Scripts/native_xr_portal_gpu_comparison.js"
     "Scripts/native_xr_portal_f16_material_validation.js"
+    "Scripts/native_xr_portal_prepass_varying_validation.js"
     "Scripts/native_xr_portal_world_normals_validation.js"
+    "Scripts/native_xr_portal_uv_matrix_validation.js"
     "Scripts/native_xr_portal_ao_r8_validation.js"
     "Scripts/native_xr_portal_color_reuse_validation.js"
+    "Scripts/native_xr_portal_ao_algebra_validation.js"
+    "Scripts/native_xr_portal_ao_f16_validation.js"
     "Scripts/native_xr_portal_render_bundle_validation.js"
     "Scripts/webgpu_spill_probe.js"
-    "Scripts/native_xr_portal_fallback_validation.js"
-    "Scripts/native_xr_portal_hillvalley_stress.js"
-    "Scripts/native_xr_portal_manual_validation.js"
+    "Scripts/webgpu_direct_presentation_probe.js"
+    "Scripts/webgpu_canvas_color_probe.js"
+    "Scripts/webgpu_gtvbao_plane_probe.js"
+    "Scripts/webgpu_ao_spatial_probe.js"
+    "Scripts/native_xr_portal_shimmer_diagnostic.js"
+    "Scripts/native_xr_portal_depth_precision_validation.js"
+    "Scripts/native_xr_portal_ao_quality_validation.js"
+    "Scripts/native_xr_portal_reverse_depth_validation.js"
+    "Scripts/native_xr_portal_foliage_alpha_validation.js"
+    "Scripts/native_xr_portal_irradiance_f16_validation.js"
+    "Scripts/native_xr_portal_ao_contact_validation.js"
     "Scripts/native_xr_wgpu_capture.js"
     "Scripts/native_xr_wgpu_smoke.js"
     "Scripts/webgpu_smoke.js"
@@ -436,6 +470,12 @@ if(APPLE)
             FOLDER "Playground")
     endif()
     enable_objc_arc(Playground)
+    set(BABYLON_NATIVE_PLAYGROUND_BUNDLE_IDENTIFIER "" CACHE STRING "Optional Apple Playground bundle identifier override")
+    if(BABYLON_NATIVE_PLAYGROUND_BUNDLE_IDENTIFIER)
+        set_target_properties(Playground PROPERTIES
+            XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER "${BABYLON_NATIVE_PLAYGROUND_BUNDLE_IDENTIFIER}"
+            MACOSX_BUNDLE_GUI_IDENTIFIER "${BABYLON_NATIVE_PLAYGROUND_BUNDLE_IDENTIFIER}")
+    endif()
     set_property(TARGET Playground PROPERTY XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED YES)
 endif()
 
@@ -469,3 +509,19 @@ source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${REFERENCE_IMAGES})
 source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${SCRIPTS})
 source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${SOURCES})
 set_property(DIRECTORY ${CMAKE_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT Playground)
+
+if(APPLE AND TARGET BabylonBundleVerified)
+    if(CMAKE_GENERATOR STREQUAL "Xcode")
+        set(BABYLON_NATIVE_PACKAGED_SCRIPTS "--xcode-resources")
+    elseif(IOS OR VISIONOS)
+        set(BABYLON_NATIVE_PACKAGED_SCRIPTS "$<TARGET_BUNDLE_DIR:Playground>/Scripts")
+    else()
+        set(BABYLON_NATIVE_PACKAGED_SCRIPTS "$<TARGET_BUNDLE_DIR:Playground>/Contents/Resources/Scripts")
+    endif()
+    add_custom_command(TARGET Playground POST_BUILD
+        COMMAND "${BABYLON_NATIVE_BUNDLE_NODE_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/verifyBabylonBundle.mjs"
+            "${BABYLON_NATIVE_PACKAGED_SCRIPTS}"
+            "${BABYLON_NATIVE_BABYLON_BUNDLE_VARIANT}" --packaged
+        VERBATIM)
+endif()
