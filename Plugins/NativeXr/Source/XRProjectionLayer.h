@@ -27,6 +27,7 @@ namespace Babylon
         const std::string& DepthStencilFormat() const;
         uint32_t TextureUsage() const;
         double ScaleFactor() const { return m_scaleFactor; }
+        double Foveation() const { return m_foveation; }
         xr::Pose DeltaPose() const;
 
     private:
@@ -37,6 +38,7 @@ namespace Babylon
         std::string m_depthStencilFormat{};
         uint32_t m_textureUsage{};
         double m_scaleFactor{1.0};
+        double m_foveation{};
         bool m_ignoreDepthValues{};
 
         Plugins::XRSession& GetSession() const;

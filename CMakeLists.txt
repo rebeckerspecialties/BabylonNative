@@ -109,6 +109,9 @@ FetchContent_Declare(wgpu_shader_codegen
         COMMAND ${CMAKE_COMMAND}
         "-DPATCH_FILE=${CMAKE_CURRENT_LIST_DIR}/Patches/wgpu/0005-preserve-vulkan-instance-flags.patch"
         -P "${CMAKE_CURRENT_LIST_DIR}/Patches/apply_patch_if_needed.cmake"
+        COMMAND ${CMAKE_COMMAND}
+        "-DPATCH_FILE=${CMAKE_CURRENT_LIST_DIR}/Patches/wgpu/0006-vulkan-fragment-density-eye-attachments.patch"
+        -P "${CMAKE_CURRENT_LIST_DIR}/Patches/apply_patch_if_needed.cmake"
     EXCLUDE_FROM_ALL)
 FetchContent_Declare(metal-cpp
     GIT_REPOSITORY https://github.com/bkaradzic/metal-cpp.git
@@ -432,7 +435,7 @@ if(BABYLON_NATIVE_WGPU_USE_UPSTREAM_NATIVE)
     # there too instead of silently building a different shader compiler.
     foreach(_shader_patch IN ITEMS 0001-metal-snorm16-vertex-unpacking.patch 0002-explicit-shader-workspace.patch
             0003-adreno-5xx-empty-descriptor-layout.patch 0004-explicit-hal-workspace.patch
-            0005-preserve-vulkan-instance-flags.patch)
+            0005-preserve-vulkan-instance-flags.patch 0006-vulkan-fragment-density-eye-attachments.patch)
         set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_LIST_DIR}/Patches/wgpu/${_shader_patch}")
         execute_process(
             COMMAND git apply --reverse --check "${CMAKE_CURRENT_LIST_DIR}/Patches/wgpu/${_shader_patch}"

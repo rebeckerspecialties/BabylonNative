@@ -6,6 +6,8 @@
 #include "XRSession.h"
 
 #include <stdexcept>
+#include <algorithm>
+#include <cmath>
 
 namespace Babylon
 {
@@ -128,12 +130,25 @@ namespace Babylon
 
     Napi::Value XRProjectionLayer::GetFixedFoveation(const Napi::CallbackInfo& info)
     {
+#if defined(__ANDROID__) && defined(BABYLON_NATIVE_XR_OPENXR)
+        if (auto platform = GetSession().PlatformSession(); platform && platform->SupportsFoveation(m_scaleFactor))
+            return Napi::Number::New(info.Env(), m_foveation);
+#endif
         return info.Env().Null();
     }
 
-    void XRProjectionLayer::SetFixedFoveation(const Napi::CallbackInfo&, const Napi::Value&)
+    void XRProjectionLayer::SetFixedFoveation(const Napi::CallbackInfo& info, const Napi::Value& value)
     {
-        // No renderer currently attaches a density map to the application eye pass.
+        const double amount = value.ToNumber().DoubleValue();
+        if (!std::isfinite(amount)) throw Napi::TypeError::New(info.Env(), "fixedFoveation must be finite");
+#if defined(__ANDROID__) && defined(BABYLON_NATIVE_XR_OPENXR)
+        auto& session = GetSession();
+        if (auto platform = session.PlatformSession(); platform && platform->SupportsFoveation(m_scaleFactor))
+        {
+            m_foveation = std::clamp(amount, 0.0, 1.0);
+            session.UpdateProjectionFoveation(*this);
+        }
+#endif
     }
 
     xr::Pose XRProjectionLayer::DeltaPose() const
@@ -148,6 +163,7 @@ namespace Babylon
 
     void XRProjectionLayer::SetDeltaPose(const Napi::CallbackInfo& info, const Napi::Value& value)
     {
+        if (!GetSession().IsSpaceWarpEnabled()) return;
         if (value.IsNull() || value.IsUndefined()) { m_deltaPose.Reset(); return; }
         if (!value.IsObject() || !IsInstanceOfGlobalClass(value.As<Napi::Object>(), "XRRigidTransform"))
             throw Napi::TypeError::New(info.Env(), "deltaPose must be an XRRigidTransform or null");

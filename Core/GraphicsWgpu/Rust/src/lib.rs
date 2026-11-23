@@ -913,6 +913,12 @@ pub extern "C" fn babylon_wgpu_native_openxr_vk_format(webgpu_format: *const c_c
 
 #[cfg(target_os = "android")]
 #[no_mangle]
+pub extern "C" fn babylon_wgpu_native_set_eye_density_map(color: u64, map: u64) -> bool {
+    run_with_active_backend("NativeWebGPU.setEyeDensityMap", false, |backend| backend.set_eye_density_map(color, map))
+}
+
+#[cfg(target_os = "android")]
+#[no_mangle]
 pub extern "C" fn babylon_wgpu_native_watch_warp_images(motion: u64, depth: u64) -> bool {
     run_with_active_backend("NativeWebGPU.watchWarpImages", false, |backend| {
         backend.warp_writes = Some(xr_warp_writes::Writes::new(motion, depth));
@@ -4789,6 +4795,17 @@ mod upstream_wgpu_native {
             _descriptor_json: &str,
         ) -> Result<u64, String> {
             Err("native Metal texture import is only available on Apple platforms".to_string())
+        }
+
+        #[cfg(target_os = "android")]
+        pub fn set_eye_density_map(&self, color: u64, map: u64) -> Result<bool, String> {
+            use ash::vk::Handle;
+            let texture = &self.resources.textures.get(&color).ok_or("Unknown eye color texture")?.texture;
+            let hal = unsafe { texture.as_hal::<wgpu::hal::api::Vulkan>() }.ok_or("Eye texture is not Vulkan")?;
+            // The swapchain supplies a fixed pairing per acquired image. This
+            // wrapper is not reused across changes of application extent or map.
+            unsafe { hal.set_fragment_density_image(ash::vk::Image::from_raw(map)); }
+            Ok(true)
         }
 
         #[cfg(target_os = "android")]
@@ -10149,6 +10166,9 @@ mod upstream_wgpu_native {
                 .map_err(|error| {
                     format!("failed to create XR-compatible Vulkan device: {error}")
                 })?;
+                if enable_density {
+                    unsafe { hal_device.device.enable_fragment_density_pipelines(); }
+                }
                 unsafe {
                     selected_adapter
                         .create_device_from_hal::<wgpu::hal::api::Vulkan>(hal_device, &descriptor)

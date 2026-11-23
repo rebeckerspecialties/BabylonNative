@@ -565,6 +565,9 @@ namespace Babylon
                 const bool useDepth = *depthFormat != '\0';
 
                 if (it == m_sessionState->TextureToViewConfigurationMap.end() ||
+#if defined(__ANDROID__) && defined(BABYLON_NATIVE_XR_OPENXR)
+                    it->second.DensityImage != view.DensityMapImage ||
+#endif
                     it->second.ViewTextureSize.Width != view.ColorTextureSize.Width ||
                     it->second.ViewTextureSize.Height != view.ColorTextureSize.Height ||
                     it->second.ViewTextureSize.Depth != view.ColorTextureSize.Depth ||
@@ -626,6 +629,9 @@ namespace Babylon
                         static_cast<uint64_t>(reinterpret_cast<uintptr_t>(view.ColorTexturePointer)),
                         view.SwapchainWidth, view.SwapchainHeight, view.SwapchainFormat,
                         colorDescriptor.c_str());
+                    viewConfig.DensityImage = view.DensityMapImage;
+                    if (viewConfig.DensityImage && !babylon_wgpu_native_set_eye_density_map(colorTextureId, viewConfig.DensityImage))
+                        throw std::runtime_error{"Could not attach the acquired projection density map: " + GetLastWgpuError()};
 #else
 #error NativeXR requires an explicit platform texture import path.
 #endif

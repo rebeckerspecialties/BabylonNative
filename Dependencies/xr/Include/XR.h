@@ -449,6 +449,8 @@ namespace xr
             uint64_t CreateMediaLayer(LayerShape shape, uint32_t width, uint32_t height, LayerLayout layout, std::shared_ptr<MediaSurfaceProducer> source);
             bool SupportsMediaLayers() const;
             bool SupportsWarpDepth(int64_t format) const;
+            bool SupportsFoveation(double scale) const;
+            void SetFoveation(double amount);
             WarpImages AcquireWarpImages(int64_t format);
             void MarkWarpImagesSubmitted(const Pose& delta);
             LayerImage AcquireLayer(uint64_t id);

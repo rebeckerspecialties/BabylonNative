@@ -625,6 +625,9 @@ namespace xr
                     const auto& maps = viewSwapchain.DensityMaps;
                     if (std::all_of(maps.begin(), maps.end(), [](const auto& map) { return map.image && map.width && map.height; }))
                     {
+                        CheckXr(xrGetInstanceProcAddr(System.Instance, "xrCreateFoveationProfileFB", reinterpret_cast<PFN_xrVoidFunction*>(&CreateProfile)), "get create foveation profile");
+                        CheckXr(xrGetInstanceProcAddr(System.Instance, "xrUpdateSwapchainFB", reinterpret_cast<PFN_xrVoidFunction*>(&UpdateSwapchain)), "get update swapchain");
+                        CheckXr(xrGetInstanceProcAddr(System.Instance, "xrDestroyFoveationProfileFB", reinterpret_cast<PFN_xrVoidFunction*>(&DestroyProfile)), "get destroy foveation profile");
                         __android_log_print(ANDROID_LOG_INFO, "BabylonNative", "OpenXR supplied %u paired Vulkan density maps, first %ux%u",
                             static_cast<unsigned>(maps.size()), maps.front().width, maps.front().height);
                     }
@@ -950,6 +953,23 @@ namespace xr
             {
                 for (auto& viewSwapchain : ViewSwapchains)
                 {
+                    const int level = RequestedFoveation.load();
+                    if (CreateProfile && ActiveFoveation != level)
+                    {
+                        auto config = MakeXr<XrFoveationLevelProfileCreateInfoFB>(XR_TYPE_FOVEATION_LEVEL_PROFILE_CREATE_INFO_FB);
+                        config.level = static_cast<XrFoveationLevelFB>(level);
+                        config.dynamic = XR_FOVEATION_DYNAMIC_DISABLED_FB;
+                        auto info = MakeXr<XrFoveationProfileCreateInfoFB>(XR_TYPE_FOVEATION_PROFILE_CREATE_INFO_FB);
+                        info.next = &config;
+                        XrFoveationProfileFB profile{};
+                        CheckXr(CreateProfile(Session, &info, &profile), "create foveation profile");
+                        auto state = MakeXr<XrSwapchainStateFoveationFB>(XR_TYPE_SWAPCHAIN_STATE_FOVEATION_FB);
+                        state.profile = profile;
+                        const auto result = UpdateSwapchain(viewSwapchain.Handle, reinterpret_cast<const XrSwapchainStateBaseHeaderFB*>(&state));
+                        DestroyProfile(profile);
+                        CheckXr(result, "apply projection foveation profile");
+                        ActiveFoveation = level;
+                    }
                     auto acquireInfo =
                         MakeXr<XrSwapchainImageAcquireInfo>(XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO);
                     CheckXr(
@@ -992,7 +1012,8 @@ namespace xr
                 activeView.SwapchainWidth = viewSwapchain.Width;
                 activeView.SwapchainHeight = viewSwapchain.Height;
                 activeView.SwapchainFormat = ColorFormat;
-                if (FrameShouldRender && !viewSwapchain.DensityMaps.empty())
+                if (FrameShouldRender && ActiveFoveation > 0 && !viewSwapchain.DensityMaps.empty() &&
+                    extent.Width == viewSwapchain.Width && extent.Height == viewSwapchain.Height)
                 {
                     const auto& map = viewSwapchain.DensityMaps[viewSwapchain.ImageIndex];
                     activeView.DensityMapImage = reinterpret_cast<uint64_t>(map.image);
@@ -1132,6 +1153,11 @@ namespace xr
         XrPosef WarpDelta{};
         bool WarpSubmitted{};
         std::atomic<double> ProjectionScale{1.0};
+        std::atomic<int> RequestedFoveation{};
+        int ActiveFoveation{};
+        PFN_xrCreateFoveationProfileFB CreateProfile{};
+        PFN_xrUpdateSwapchainFB UpdateSwapchain{};
+        PFN_xrDestroyFoveationProfileFB DestroyProfile{};
         std::vector<XrView> LocatedViews{};
         std::vector<Session::Frame::View> ActiveFrameViews{};
         std::vector<Session::Frame::InputSource> InputSources{};
@@ -1290,6 +1316,19 @@ namespace xr
     }
     uint32_t System::Session::MaxLayerCount() const { return m_impl->System.MaxLayers; }
     bool System::Session::SupportsMediaLayers() const { return m_impl->System.AndroidSurface; }
+    bool System::Session::SupportsFoveation(double scale) const
+    {
+        if (!m_impl->CreateProfile || m_impl->ViewSwapchains.empty()) return false;
+        const auto& chain = m_impl->ViewSwapchains.front();
+        const auto extent = ScaleProjectionExtent({chain.Width, chain.Height}, chain.MaxApplicationExtent, scale);
+        return extent.Width == chain.Width && extent.Height == chain.Height;
+    }
+
+    void System::Session::SetFoveation(double amount)
+    {
+        m_impl->RequestedFoveation.store(amount <= 0 ? 0 : amount <= 1.0/3 ? 1 : amount <= 2.0/3 ? 2 : 3);
+    }
+
     bool System::Session::SupportsWarpDepth(int64_t format) const
     {
         return std::find(m_impl->WarpDepths.begin(), m_impl->WarpDepths.end(), format) != m_impl->WarpDepths.end();

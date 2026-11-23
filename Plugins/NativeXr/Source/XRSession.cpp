@@ -529,6 +529,18 @@ namespace Babylon
             return m_activeProjectionLayer == &layer;
         }
 
+#if defined(__ANDROID__) && defined(BABYLON_NATIVE_XR_OPENXR)
+        void XRSession::UpdateProjectionFoveation(const Babylon::XRProjectionLayer& layer)
+        {
+            const auto* next = m_pendingRenderState.IsEmpty() ? m_activeProjectionLayer :
+                m_pendingProjectionLayer.IsEmpty() ? nullptr : Babylon::XRProjectionLayer::Unwrap(m_pendingProjectionLayer.Value());
+            if (next == &layer)
+            {
+                if (auto platform = PlatformSession()) platform->SetFoveation(layer.Foveation());
+            }
+        }
+#endif
+
         std::optional<XRGPUSubImageData> XRSession::GetWebGPUSubImage(uint32_t viewIndex) const
         {
             auto image = m_xr->GetWebGPUSubImage(viewIndex);
@@ -740,7 +752,8 @@ namespace Babylon
                     auto layer = snapshot.Get(projectionIndex).As<Napi::Object>();
                     m_pendingProjectionLayer = Napi::Persistent(layer);
                 }
-                m_xr->SetProjectionAttachments(projectionLayerCandidate ? std::optional{projectionLayerCandidate->DepthStencilFormat()} : std::nullopt,
+                // The compositor supplies its own motion-sized depth image for warp.
+                m_xr->SetProjectionAttachments(projectionLayerCandidate ? std::optional{m_warpEnabled ? std::string{} : projectionLayerCandidate->DepthStencilFormat()} : std::nullopt,
                     projectionLayerCandidate ? projectionLayerCandidate->TextureUsage() : 0);
                 m_pendingRenderState.Set("layers", snapshot);
                 m_pendingRenderState.Set("baseLayer", info.Env().Null());
@@ -764,6 +777,7 @@ namespace Babylon
                 if (auto session = m_xr->GetPlatformSession().lock())
                 {
                     session->SetProjectionScale(projectionLayerCandidate ? projectionLayerCandidate->ScaleFactor() : 1.0);
+                    session->SetFoveation(projectionLayerCandidate ? projectionLayerCandidate->Foveation() : 0);
                 }
             }
 #endif

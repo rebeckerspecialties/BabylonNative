@@ -123,6 +123,7 @@ namespace Babylon
                 xr::Size ViewTextureSize{};
                 std::string DepthFormat{};
                 uint32_t ColorUsage{};
+                uint64_t DensityImage{};
                 std::vector<RenderTarget> RenderTargets{};
                 bool Initialized{false};
             };
