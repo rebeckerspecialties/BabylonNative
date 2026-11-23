@@ -4,6 +4,10 @@
 
 #include <cstdint>
 #include <string>
+#if defined(__ANDROID__)
+#include <memory>
+struct ANativeWindow;
+#endif
 
 namespace Babylon::Graphics
 {
@@ -11,7 +15,12 @@ namespace Babylon::Graphics
     {
         uint32_t Width{1};
         uint32_t Height{1};
+#if defined(__ANDROID__)
+        // Vulkan acquires its reference only after asynchronous bootstrap reaches surface creation.
+        std::shared_ptr<ANativeWindow> SurfaceLayer;
+#else
         void* SurfaceLayer{nullptr};
+#endif
         bool PreferLowPower{false};
         bool EnableValidation{false};
         bool Hdr10{false};

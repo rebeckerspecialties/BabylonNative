@@ -53,7 +53,11 @@ namespace Babylon::Graphics
         BabylonWgpuConfig nativeConfig{};
         nativeConfig.width = config.Width;
         nativeConfig.height = config.Height;
+#if defined(__ANDROID__)
+        nativeConfig.surface_layer = config.SurfaceLayer.get();
+#else
         nativeConfig.surface_layer = config.SurfaceLayer;
+#endif
         nativeConfig.prefer_low_power = static_cast<uint8_t>(config.PreferLowPower);
         nativeConfig.enable_validation = static_cast<uint8_t>(config.EnableValidation);
         nativeConfig.hdr10 = static_cast<uint8_t>(config.Hdr10);

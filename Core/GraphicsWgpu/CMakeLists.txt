@@ -81,6 +81,11 @@ target_link_libraries(Graphics
 if(APPLE)
     target_link_libraries(Graphics
         PRIVATE metal-cpp)
+elseif(ANDROID)
+    target_link_libraries(Graphics PRIVATE android)
+    add_executable(WgpuAndroidWindowLifetimeTest EXCLUDE_FROM_ALL Tests/AndroidWindowLifetime.cpp)
+    target_include_directories(WgpuAndroidWindowLifetimeTest PRIVATE Source InternalInclude)
+    target_link_libraries(WgpuAndroidWindowLifetimeTest PRIVATE android mediandk vulkan)
 endif()
 
 target_compile_definitions(Graphics

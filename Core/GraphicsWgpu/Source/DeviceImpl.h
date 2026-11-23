@@ -116,7 +116,11 @@ namespace Babylon::Graphics
         {
             mutable std::recursive_mutex Mutex{};
 
+#if defined(__ANDROID__)
+            std::shared_ptr<ANativeWindow> Window;
+#else
             WindowT Window{};
+#endif
             DeviceT Device{};
             bool Hdr10{};
 

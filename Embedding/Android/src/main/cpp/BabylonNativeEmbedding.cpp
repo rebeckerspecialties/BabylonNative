@@ -72,7 +72,22 @@ namespace
 
     AndroidRuntime* AsAndroidRuntime(jlong handle) { return reinterpret_cast<AndroidRuntime*>(handle); }
     Runtime* AsRuntime(jlong handle) { return AsAndroidRuntime(handle)->runtime.get(); }
-    View* AsView(jlong handle) { return reinterpret_cast<View*>(handle); }
+    using OwnedWindow = std::unique_ptr<ANativeWindow, decltype(&ANativeWindow_release)>;
+
+    struct AndroidView
+    {
+        // A suspended or not-yet-sized View can use this window for the first
+        // time long after viewAttach returns. Destroy the View before the window.
+        OwnedWindow window;
+        View view;
+
+        AndroidView(Runtime& runtime, OwnedWindow owner)
+            : window{std::move(owner)}, view{runtime, window.get()}
+        {
+        }
+    };
+
+    View* AsView(jlong handle) { return &reinterpret_cast<AndroidView*>(handle)->view; }
 
     // Set by Babylon::Embedding::Android::SetLogCallback; replaces the
     // default logcat sink for Runtimes created afterwards.
@@ -494,49 +509,33 @@ Java_com_babylonjs_embedding_BabylonNative_viewAttach(
     {
         return 0;
     }
-    ANativeWindow* window = ANativeWindow_fromSurface(env, surface);
-    if (window == nullptr)
+    OwnedWindow window{ANativeWindow_fromSurface(env, surface), &ANativeWindow_release};
+    if (!window)
     {
         return 0;
     }
-    View* view = nullptr;
     try
     {
-        view = new View{*AsRuntime(runtimeHandle), window};
+        auto view = std::make_unique<AndroidView>(*AsRuntime(runtimeHandle), std::move(window));
+        const auto width = ANativeWindow_getWidth(view->window.get());
+        const auto height = ANativeWindow_getHeight(view->window.get());
+        if (width > 0 && height > 0)
+        {
+            view->view.Resize(static_cast<uint32_t>(width), static_cast<uint32_t>(height),
+                              Babylon::Embedding::CoordinateUnits::Physical);
+        }
+        return reinterpret_cast<jlong>(view.release());
     }
     catch (const std::exception&)
     {
-        ANativeWindow_release(window);
         return 0;
     }
-
-    // Kick off the first resize using the surface's current pixel
-    // dimensions. Hosts will typically also wire their SurfaceHolder
-    // callback's `surfaceChanged(holder, format, w, h)` to `viewResize`
-    // for subsequent size changes — this initial call composes cleanly
-    // with that because `View::Resize` past the first call is an
-    // idempotent `Device::UpdateSize`. If the surface reports zero
-    // (rare; surface not fully realized yet), skip and rely on the
-    // host's `surfaceChanged` to deliver the first size.
-    const int32_t surfaceWidth = ANativeWindow_getWidth(window);
-    const int32_t surfaceHeight = ANativeWindow_getHeight(window);
-    if (surfaceWidth > 0 && surfaceHeight > 0)
-    {
-        view->Resize(static_cast<uint32_t>(surfaceWidth),
-                      static_cast<uint32_t>(surfaceHeight),
-                      Babylon::Embedding::CoordinateUnits::Physical);
-    }
-
-    // bgfx retains its own reference on the ANativeWindow for the
-    // surface-binding lifetime, so release our local acquire here.
-    ANativeWindow_release(window);
-    return reinterpret_cast<jlong>(view);
 }
 
 JNIEXPORT void JNICALL
 Java_com_babylonjs_embedding_BabylonNative_viewDetach(JNIEnv*, jclass, jlong handle)
 {
-    delete AsView(handle);
+    delete reinterpret_cast<AndroidView*>(handle);
 }
 
 JNIEXPORT void JNICALL

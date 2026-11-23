@@ -1,5 +1,8 @@
 #include "DeviceImpl.h"
 #include "WgpuInterop.h"
+#if defined(__ANDROID__)
+#include "AndroidWindow.h"
+#endif
 
 #include <Babylon/JsRuntime.h>
 #include <napi/napi.h>
@@ -23,6 +26,13 @@ namespace
 
 namespace Babylon::Graphics
 {
+#if !defined(__ANDROID__)
+    namespace
+    {
+        WindowT RetainWindow(WindowT window) { return window; }
+    }
+#endif
+
     float GetDevicePixelRatio(WindowT window)
     {
 #if defined(__APPLE__)
@@ -44,7 +54,7 @@ namespace Babylon::Graphics
         : m_context{*this}
     {
         std::scoped_lock lock{m_state.Mutex};
-        m_state.Window = config.Window;
+        m_state.Window = RetainWindow(config.Window);
         m_state.Device = config.Device;
         m_state.Hdr10 = config.Hdr10;
         m_state.Resolution.Width = std::max<size_t>(1, config.Width);
@@ -64,7 +74,7 @@ namespace Babylon::Graphics
     void DeviceImpl::UpdateWindow(WindowT window)
     {
         std::scoped_lock lock{m_state.Mutex};
-        m_state.Window = window;
+        m_state.Window = RetainWindow(window);
         m_state.Resolution.DevicePixelRatio = GetDevicePixelRatio(window);
     }
 
