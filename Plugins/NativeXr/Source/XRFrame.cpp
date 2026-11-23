@@ -77,7 +77,7 @@ namespace Babylon
             m_jsJointPose.Set("transform", m_jsTransform.Value());
         }
 
-        void XRFrame::Update(const Napi::Env& env, const std::shared_ptr<const xr::System::Session::Frame>& frame, uint32_t timestamp)
+        void XRFrame::Update(const Napi::Env& env, const std::shared_ptr<const xr::System::Session::Frame>& frame, double timestamp)
         {
             // Store off a pointer to the frame so that the viewer pose can be updated later. We cannot
             // update the viewer pose here because we don't yet know the desired reference space.
@@ -520,7 +520,7 @@ namespace Babylon
             }
         }
 
-        void XRFrame::UpdatePlanes(const Napi::Env& env, uint32_t timestamp)
+        void XRFrame::UpdatePlanes(const Napi::Env& env, double timestamp)
         {
             // First loop over the list of updated planes, check if they exist in our map if not create them otherwise update them.
             for (auto planeID : m_frame->UpdatedPlanes)
@@ -554,7 +554,7 @@ namespace Babylon
             }
         }
 
-        void XRFrame::UpdateMeshes(const Napi::Env& env, uint32_t timestamp)
+        void XRFrame::UpdateMeshes(const Napi::Env& env, double timestamp)
         {
             for (auto meshID : m_frame->UpdatedMeshes)
             {

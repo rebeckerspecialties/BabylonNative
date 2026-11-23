@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
 #include <functional>
 #include <memory>
 #include <string>
@@ -380,6 +381,7 @@ namespace xr
                 
                 std::vector<View>& Views;
                 std::optional<Space> ViewerSpace;
+                std::optional<std::chrono::steady_clock::time_point> PredictedDisplayTime;
                 std::vector<InputSource>& InputSources;
                 std::vector<FeaturePoint>& FeaturePointCloud;
 

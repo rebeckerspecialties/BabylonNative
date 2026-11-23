@@ -49,7 +49,7 @@ namespace Babylon
                 m_frame = frame;
             }
 
-            void Update(uint32_t timestamp)
+            void Update(double timestamp)
             {
                 m_planeSpace.Pose = GetPlane().Center;
                 m_lastUpdatedTimestamp = timestamp;
@@ -106,7 +106,7 @@ namespace Babylon
             const Napi::External<xr::Space> m_jsPlaneSpace;
 
             // The last timestamp when this frame was updated (Pulled in from RequestAnimationFrame).
-            uint32_t m_lastUpdatedTimestamp{0};
+            double m_lastUpdatedTimestamp{0};
 
             // The underlying native plane.
             xr::System::Session::Frame::Plane::Identifier m_nativePlaneID{};

@@ -214,6 +214,7 @@ namespace xr
                 return true;
             };
             Cylinder = enable(XR_KHR_COMPOSITION_LAYER_CYLINDER_EXTENSION_NAME);
+            const bool convertTime = enable(XR_KHR_CONVERT_TIMESPEC_TIME_EXTENSION_NAME);
             AndroidSurface = enable(XR_KHR_ANDROID_SURFACE_SWAPCHAIN_EXTENSION_NAME);
             __android_log_print(ANDROID_LOG_INFO,"BabylonNative","OpenXR mediaSurface=%d spaceWarp=%d",AndroidSurface,HasExtension(extensions,XR_FB_SPACE_WARP_EXTENSION_NAME));
             Cube = enable(XR_KHR_COMPOSITION_LAYER_CUBE_EXTENSION_NAME);
@@ -244,6 +245,11 @@ namespace xr
             systemInfo.formFactor = XR_FORM_FACTOR_HEAD_MOUNTED_DISPLAY;
             CheckXr(xrGetSystem(Instance, &systemInfo, &SystemId), "xrGetSystem");
             auto properties = MakeXr<XrSystemProperties>(XR_TYPE_SYSTEM_PROPERTIES);
+            if (convertTime)
+            {
+                CheckXr(xrGetInstanceProcAddr(Instance, "xrConvertTimeToTimespecTimeKHR",
+                    reinterpret_cast<PFN_xrVoidFunction*>(&ToMonotonicTime)), "load OpenXR time conversion");
+            }
             CheckXr(xrGetSystemProperties(Instance, SystemId, &properties), "xrGetSystemProperties");
             MaxLayers = properties.graphicsProperties.maxLayerCount;
 
@@ -319,6 +325,7 @@ namespace xr
         PFN_xrGetVulkanGraphicsDeviceKHR GetAppVulkanGraphicsDevice{};
         bool AppOwnedVulkan{};
         bool DisplayRefreshRateSupported{};
+        PFN_xrConvertTimeToTimespecTimeKHR ToMonotonicTime{};
         bool Cylinder{}, Cube{}, Equirect{}, Equirect2{}, AndroidSurface{};
         uint32_t MaxLayers{};
     };
@@ -1245,6 +1252,14 @@ namespace xr
         , IsTracking{sessionImpl.FrameShouldRender}
         , m_impl{std::make_unique<System::Session::Frame::Impl>(sessionImpl)}
     {
+        timespec display{}, now{};
+        if (sessionImpl.System.ToMonotonicTime &&
+            XR_SUCCEEDED(sessionImpl.System.ToMonotonicTime(sessionImpl.System.Instance, sessionImpl.FrameState.predictedDisplayTime, &display)) &&
+            clock_gettime(CLOCK_MONOTONIC, &now) == 0)
+        {
+            PredictedDisplayTime = std::chrono::steady_clock::now() + std::chrono::seconds(display.tv_sec - now.tv_sec)
+                + std::chrono::nanoseconds(display.tv_nsec - now.tv_nsec);
+        }
     }
 
     System::Session::Frame::~Frame() = default;

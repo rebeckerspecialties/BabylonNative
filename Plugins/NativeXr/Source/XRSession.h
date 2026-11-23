@@ -82,7 +82,9 @@ namespace Babylon
             Napi::ObjectReference m_endPromise{};
             Plugins::XRFrame& m_xrFrame;
             Napi::ObjectReference m_jsXRFrame{};
-            uint32_t m_timestamp{ 0 };
+            uint32_t m_nextAnimationHandle{};
+            std::chrono::steady_clock::time_point m_clockOrigin{std::chrono::steady_clock::now()};
+            double m_originMilliseconds{}, m_frameMilliseconds{};
             Napi::ObjectReference m_renderState{};
             Napi::ObjectReference m_pendingRenderState{};
             Napi::ObjectReference m_pendingProjectionLayer{};
