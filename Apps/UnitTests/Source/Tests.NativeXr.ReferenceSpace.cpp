@@ -82,6 +82,24 @@ TEST(NativeXrReferenceSpace, PositionOnlyLayerTransformDefaultsAndCopiesItsDicti
     });
 }
 
+TEST(NativeXrReferenceSpace, OffsetViewerOriginTracksTheHeadButOffsetLocalOriginDoesNot)
+{
+    RunReferenceSpaceTest([](Napi::Env env) {
+        const auto offset = MakeTransform(env, {{0, 0, -2}, {}});
+        for (const bool viewer : {false, true})
+        {
+            auto base = Babylon::XRReferenceSpace::FromType(env, Napi::String::New(env, viewer ? "viewer" : "local"));
+            auto space = base.Get("getOffsetReferenceSpace").As<Napi::Function>().Call(base, {offset}).As<Napi::Object>();
+            auto* ref = Babylon::XRReferenceSpace::Unwrap(space);
+            for (const float height : {1.f, 2.f})
+            {
+                xr::Pose head{{0, height, 0}, {0, 1, 0, 0}};
+                ExpectPoseNear(ref->OriginInNativeFrame(head), viewer ? xr::Pose{{0, height, 2}, head.Orientation} : xr::Pose{{0, 0, -2}, {}});
+            }
+        }
+    });
+}
+
 TEST(NativeXrReferenceSpace, HonorsSessionGrantsAndPreservesConversionErrors)
 {
     Babylon::AppRuntime runtime{};

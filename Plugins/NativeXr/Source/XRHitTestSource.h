@@ -38,12 +38,13 @@ namespace Babylon
             {
                 auto spaceValue = options.Get("space");
 
-                if (spaceValue.IsObject())
+                if (spaceValue.IsObject() || spaceValue.IsExternal())
                 {
-                    m_space = Napi::Persistent(spaceValue.As<Napi::Object>());
-                    hasSpace = true;
+                    m_space = Napi::Persistent(spaceValue);
                 }
             }
+
+            if (m_space.IsEmpty()) throw Napi::TypeError::New(info.Env(), "Hit testing requires an XR space.");
 
             if (options.Has("offsetRay"))
             {
@@ -96,9 +97,9 @@ namespace Babylon
             return hasOffsetRay ? XRRay::Unwrap(m_offsetRay.Value()) : nullptr;
         }
 
-        XRReferenceSpace* Space()
+        Napi::Value Space()
         {
-            return hasSpace ? XRReferenceSpace::Unwrap(m_space.Value()) : nullptr;
+            return m_space.Value();
         }
 
         xr::HitTestTrackableType GetEntityTypes()
@@ -112,8 +113,7 @@ namespace Babylon
             // no-op we don't keep a persistent list of active XRHitTestSources..
         }
 
-        bool hasSpace = false;
-        Napi::ObjectReference m_space;
+        Napi::Reference<Napi::Value> m_space;
 
         bool hasOffsetRay = false;
         Napi::ObjectReference m_offsetRay;

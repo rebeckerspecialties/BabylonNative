@@ -120,6 +120,12 @@ namespace Babylon
 
         bool IsViewer() const { return m_viewer; }
 
+        xr::Pose OriginInNativeFrame(const xr::Pose& viewer)
+        {
+            const auto offset = GetPoseInNativeSpace({});
+            return m_viewer ? ComposePoses(viewer, offset) : offset;
+        }
+
         XRRigidTransform* GetTransform()
         {
             return m_jsTransform.IsEmpty() ? nullptr : XRRigidTransform::Unwrap(m_jsTransform.Value());

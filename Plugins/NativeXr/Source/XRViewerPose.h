@@ -44,12 +44,9 @@ namespace Babylon
         void Update(
             const Napi::CallbackInfo& info,
             const std::shared_ptr<const xr::System::Session::Frame>& sourceFrame,
-            const XRRigidTransform* referenceSpaceOffset)
+            std::optional<xr::Pose> referenceSpaceInverse)
         {
             const auto& frame = *sourceFrame;
-            const auto referenceSpaceInverse = referenceSpaceOffset == nullptr
-                ? std::optional<xr::Pose>{}
-                : std::optional<xr::Pose>{InvertPose(referenceSpaceOffset->GetNativePose())};
             const auto adjustSpace = [&referenceSpaceInverse](const xr::Space& space) {
                 return referenceSpaceInverse.has_value()
                     ? xr::Space{ComposePoses(*referenceSpaceInverse, space.Pose)}
