@@ -2,10 +2,7 @@
 
 #include <AndroidExtensions/Globals.h>
 #include <android/bitmap.h>
-#include <android/data_space.h>
-#include <android/native_window_jni.h>
-#include <dlfcn.h>
-#include <media/NdkImageReader.h>
+
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -24,10 +21,10 @@ namespace Babylon
         std::mutex m_mutex;
         jobject m_player{}, m_retriever{};
         std::string m_path;
-        std::unique_ptr<AImageReader, decltype(&AImageReader_delete)> m_reader{nullptr, AImageReader_delete};
+        jobject m_decoder{};
+        jlong m_requestedTime{};
         bool m_compositorSurface{};
         std::vector<uint8_t> m_rgba;
-        std::array<std::vector<uint8_t>, 3> m_planeScratch;
         uint32_t m_width{}, m_height{};
         std::mutex m_frameMutex;
         std::condition_variable m_frameRequested;
@@ -42,7 +39,7 @@ namespace Babylon
             JNIEnv* e{android::global::GetEnvForCurrentThread()};
             Locals()
             {
-                if (e->PushLocalFrame(32))
+                if (e->PushLocalFrame(80))
                     throw std::runtime_error{"Could not allocate JNI local frame"};
             }
             ~Locals() { e->PopLocalFrame(nullptr); }
@@ -104,11 +101,6 @@ namespace Babylon
         }
         void ResetFrames()
         {
-            if (m_reader)
-            {
-                AImageReader_ImageListener listener{};
-                AImageReader_setImageListener(m_reader.get(), &listener);
-            }
             {
                 std::lock_guard lock{m_frameMutex};
                 m_stop = true;
@@ -116,7 +108,7 @@ namespace Babylon
             m_frameRequested.notify_one();
             if (m_worker.joinable())
                 m_worker.join();
-            m_reader.reset();
+            Release(android::global::GetEnvForCurrentThread(), m_decoder);
             m_stop = m_requested = false;
             m_decodeError = nullptr;
             m_front.clear();
@@ -127,43 +119,29 @@ namespace Babylon
         {
             if (m_compositorSurface)
                 return false;
-            // The embedding also runs on API 25. Resolve newer NDK entry points
-            // lazily rather than introducing an unconditional loader dependency.
-            static const auto toSurface = reinterpret_cast<jobject (*)(JNIEnv*, ANativeWindow*)>(dlsym(RTLD_DEFAULT, "ANativeWindow_toSurface"));
-            if (toSurface)
+            if (!m_decoder)
             {
-                if (!m_reader)
-                {
-                    const int w = e->CallIntMethod(m_player, Method(e, m_player, "getVideoWidth", "()I"));
-                    const int h = e->CallIntMethod(m_player, Method(e, m_player, "getVideoHeight", "()I"));
-                    AImageReader* reader{};
-                    if (w <= 0 || h <= 0 || AImageReader_new(w, h, AIMAGE_FORMAT_YUV_420_888, 3, &reader) != AMEDIA_OK)
-                        return false;
-                    m_reader.reset(reader);
-                    AImageReader_ImageListener listener{this, [](void* ctx, AImageReader*) {
-                                                            auto& player = *static_cast<AndroidAssetPlayer*>(ctx);
-                                                            std::lock_guard lock{player.m_frameMutex};
-                                                            player.m_requested = true;
-                                                            player.m_frameRequested.notify_one();
-                                                        }};
-                    if (AImageReader_setImageListener(reader, &listener) != AMEDIA_OK)
-                        throw std::runtime_error{"Cannot observe decoded video frames"};
-                    ANativeWindow* window{};
-                    if (AImageReader_getWindow(reader, &window) != AMEDIA_OK)
-                        throw std::runtime_error{"Cannot get video decoder surface"};
-                    auto surface = toSurface(e, window);
-                    e->CallVoidMethod(m_player, Method(e, m_player, "setSurface", "(Landroid/view/Surface;)V"), surface);
-                    Check(e, "connect streaming video texture");
-                    m_worker = std::thread{[this] { DecodeLoop(); }};
-                }
-                {
-                    std::lock_guard lock{m_frameMutex};
-                    if (m_decodeError)
-                        std::rethrow_exception(m_decodeError);
-                }
-                return true;
+                auto context = android::global::GetAppContext();
+                auto loader = e->CallObjectMethod(context, Method(e, context, "getClassLoader", "()Ljava/lang/ClassLoader;"));
+                auto cls = static_cast<jclass>(e->CallObjectMethod(loader, Method(e, loader, "loadClass", "(Ljava/lang/String;)Ljava/lang/Class;"),
+                    e->NewStringUTF("com.babylonjs.embedding.TextureVideoDecoder")));
+                Check(e, "load video texture decoder");
+                auto assets = android::global::GetAppContext().getAssets();
+                auto decoder = e->NewObject(cls, e->GetMethodID(cls, "<init>", "(Landroid/content/res/AssetManager;Ljava/lang/String;)V"),
+                    static_cast<jobject>(assets), e->NewStringUTF(m_path.c_str()));
+                Check(e, "open video texture decoder");
+                m_decoder = e->NewGlobalRef(decoder);
+                m_worker = std::thread{[this] { DecodeLoop(); }};
             }
-            return false;
+            const auto time = e->CallIntMethod(m_player, Method(e, m_player, "getCurrentPosition", "()I"));
+            Check(e, "get video texture time");
+            std::lock_guard lock{m_frameMutex};
+            if (m_decodeError)
+                std::rethrow_exception(m_decodeError);
+            m_requestedTime = 1000LL * time;
+            m_requested = true;
+            m_frameRequested.notify_one();
+            return true;
         }
         void DecodeLoop()
         {
@@ -176,8 +154,9 @@ namespace Babylon
                     if (m_stop)
                         return;
                     m_requested = false;
+                    const auto timeUs = m_requestedTime;
                     lock.unlock();
-                    const bool decoded = DecodeLatestFrame();
+                    const bool decoded = DecodeLatestFrame(timeUs);
                     lock.lock();
                     if (decoded)
                     {
@@ -195,50 +174,42 @@ namespace Babylon
                 m_frameReady.notify_one();
             }
         }
-        bool DecodeLatestFrame()
+        bool DecodeLatestFrame(jlong timeUs)
         {
-            AImage* image{};
-            const auto status = AImageReader_acquireLatestImage(m_reader.get(), &image);
-            if (status == AMEDIA_IMGREADER_NO_BUFFER_AVAILABLE)
+            Locals locals;
+            auto* e = locals.e;
+            const auto image = e->CallObjectMethod(m_decoder, Method(e, m_decoder, "frameAt", "(J)Landroid/media/Image;"), timeUs);
+            Check(e, "decode linear video image");
+            if (!image)
                 return false;
-            if (status != AMEDIA_OK)
-                throw std::runtime_error{"Cannot acquire video decoder frame: " + std::to_string(status)};
-            std::unique_ptr<AImage, decltype(&AImage_delete)> frame{image, AImage_delete};
-            AImageCropRect crop{};
-            if (AImage_getCropRect(image, &crop) != AMEDIA_OK || crop.left < 0 || crop.top < 0 ||
-                crop.right <= crop.left || crop.bottom <= crop.top)
-                throw std::runtime_error{"Invalid video crop rectangle"};
-            struct Plane
-            {
-                uint8_t* data;
-                int length, row, step;
-            } planes[3]{};
+            const auto rect = e->CallObjectMethod(image, Method(e, image, "getCropRect", "()Landroid/graphics/Rect;"));
+            auto coordinate = [&](const char* name) { return e->GetIntField(rect, e->GetFieldID(e->GetObjectClass(rect), name, "I")); };
+            struct { int left, top, right, bottom; } crop{coordinate("left"), coordinate("top"), coordinate("right"), coordinate("bottom")};
+            const auto array = static_cast<jobjectArray>(e->CallObjectMethod(image, Method(e, image, "getPlanes", "()[Landroid/media/Image$Plane;")));
+            Check(e, "get video image planes");
+            if (crop.left < 0 || crop.top < 0 || crop.right <= crop.left || crop.bottom <= crop.top || e->GetArrayLength(array) != 3)
+                throw std::runtime_error{"Invalid flexible YUV video image"};
+            struct Plane { const uint8_t* data; int row, step; } planes[3]{};
             for (int i = 0; i < 3; ++i)
             {
                 auto& p = planes[i];
-                if (AImage_getPlaneData(image, i, &p.data, &p.length) != AMEDIA_OK ||
-                    AImage_getPlaneRowStride(image, i, &p.row) != AMEDIA_OK ||
-                    AImage_getPlanePixelStride(image, i, &p.step) != AMEDIA_OK ||
-                    !p.data || p.length <= 0 || p.row <= 0 || p.step <= 0 ||
-                    int64_t((crop.bottom - 1) >> (i != 0)) * p.row + int64_t((crop.right - 1) >> (i != 0)) * p.step >= p.length)
-                    throw std::runtime_error{"Invalid decoder YUV plane"};
-                // On Adreno the flexible YUV planes can be mapped uncached.
-                // Bulk reads avoid a bus transaction per component per pixel.
-                auto& cached = m_planeScratch[i];
-                cached.resize(static_cast<size_t>(p.length));
-                std::memcpy(cached.data(), p.data, cached.size());
-                p.data = cached.data();
+                const auto plane = e->GetObjectArrayElement(array, i);
+                const auto buffer = e->CallObjectMethod(plane, Method(e, plane, "getBuffer", "()Ljava/nio/ByteBuffer;"));
+                p.row = e->CallIntMethod(plane, Method(e, plane, "getRowStride", "()I"));
+                p.step = e->CallIntMethod(plane, Method(e, plane, "getPixelStride", "()I"));
+                const int position = e->CallIntMethod(buffer, Method(e, buffer, "position", "()I"));
+                const int limit = e->CallIntMethod(buffer, Method(e, buffer, "limit", "()I"));
+                Check(e, "get video plane layout");
+                p.data = static_cast<const uint8_t*>(e->GetDirectBufferAddress(buffer));
+                if (!p.data || position < 0 || limit > e->GetDirectBufferCapacity(buffer) || p.row <= 0 || p.step <= 0 ||
+                    position + int64_t((crop.bottom - 1) >> (i != 0)) * p.row + int64_t((crop.right - 1) >> (i != 0)) * p.step >= limit)
+                    throw std::runtime_error{"Invalid decoder YUV plane bounds"};
+                p.data += position;
             }
-            int space = 0;
-            static const auto getSpace = reinterpret_cast<int32_t (*)(ANativeWindow*)>(dlsym(RTLD_DEFAULT, "ANativeWindow_getBuffersDataSpace"));
-            if (getSpace)
-            {
-                ANativeWindow* window{};
-                if (AImageReader_getWindow(m_reader.get(), &window) == AMEDIA_OK)
-                    space = getSpace(window);
-            }
-            const bool hd = (space & ADATASPACE_STANDARD_MASK) == ADATASPACE_STANDARD_BT709;
-            const bool full = (space & ADATASPACE_RANGE_MASK) == ADATASPACE_RANGE_FULL;
+            // Android MediaFormat: COLOR_STANDARD_BT709 and COLOR_RANGE_FULL.
+            const bool hd = e->CallIntMethod(m_decoder, Method(e, m_decoder, "colorStandard", "()I")) == 1;
+            const bool full = e->CallIntMethod(m_decoder, Method(e, m_decoder, "colorRange", "()I")) == 1;
+            Check(e, "get video color format");
             const int rv = hd ? (full ? 403 : 459) : (full ? 359 : 409);
             const int gu = hd ? (full ? 48 : 55) : (full ? 88 : 100);
             const int gv = hd ? (full ? 120 : 136) : (full ? 183 : 208);
