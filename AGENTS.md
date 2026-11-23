@@ -1,5 +1,10 @@
 # BabylonNative wgpu Branch Notes
 
+For the Quest 1 Vulkan / Factotum / WebXR Samples stack, start with
+[the runtime handoff](Documentation/QuestRuntimeHandoff.md): exact source pins, APK qualification,
+the Home/passthrough isolation sequence, upstream N-API/Worker gaps and fork PR ownership.
+Keep simulator screenshots opt-in; validate the ARM64 artifacts on a physical headset.
+
 This branch is a durable WebGPU/wgpu-native fork, not an upstream bgfx replacement. Keep changes mergeable with upstream BabylonNative and Babylon.js 9.x, and avoid adding JS-visible nonstandard hooks unless they are hidden behind browser-shaped APIs or validation-only internals.
 
 ## Local Workspace
