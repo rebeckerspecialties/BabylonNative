@@ -216,7 +216,7 @@ namespace xr
             Cylinder = enable(XR_KHR_COMPOSITION_LAYER_CYLINDER_EXTENSION_NAME);
             const bool convertTime = enable(XR_KHR_CONVERT_TIMESPEC_TIME_EXTENSION_NAME);
             AndroidSurface = enable(XR_KHR_ANDROID_SURFACE_SWAPCHAIN_EXTENSION_NAME);
-            __android_log_print(ANDROID_LOG_INFO,"BabylonNative","OpenXR mediaSurface=%d spaceWarp=%d",AndroidSurface,HasExtension(extensions,XR_FB_SPACE_WARP_EXTENSION_NAME));
+            const bool querySpaceWarp = enable(XR_FB_SPACE_WARP_EXTENSION_NAME);
             Cube = enable(XR_KHR_COMPOSITION_LAYER_CUBE_EXTENSION_NAME);
             Equirect2 = enable(XR_KHR_COMPOSITION_LAYER_EQUIRECT2_EXTENSION_NAME);
             Equirect = Equirect2 || enable(XR_KHR_COMPOSITION_LAYER_EQUIRECT_EXTENSION_NAME);
@@ -245,6 +245,11 @@ namespace xr
             systemInfo.formFactor = XR_FORM_FACTOR_HEAD_MOUNTED_DISPLAY;
             CheckXr(xrGetSystem(Instance, &systemInfo, &SystemId), "xrGetSystem");
             auto properties = MakeXr<XrSystemProperties>(XR_TYPE_SYSTEM_PROPERTIES);
+            auto warp = MakeXr<XrSystemSpaceWarpPropertiesFB>(XR_TYPE_SYSTEM_SPACE_WARP_PROPERTIES_FB);
+            if (querySpaceWarp)
+            {
+                properties.next = &warp;
+            }
             if (convertTime)
             {
                 CheckXr(xrGetInstanceProcAddr(Instance, "xrConvertTimeToTimespecTimeKHR",
@@ -252,6 +257,11 @@ namespace xr
             }
             CheckXr(xrGetSystemProperties(Instance, SystemId, &properties), "xrGetSystemProperties");
             MaxLayers = properties.graphicsProperties.maxLayerCount;
+            MotionWidth = warp.recommendedMotionVectorImageRectWidth;
+            MotionHeight = warp.recommendedMotionVectorImageRectHeight;
+            __android_log_print(ANDROID_LOG_INFO, "BabylonNative",
+                "OpenXR mediaSurface=%d spaceWarpExtension=%d recommended motion image=%ux%u",
+                AndroidSurface, querySpaceWarp, MotionWidth, MotionHeight);
 
             CheckXr(
                 xrGetInstanceProcAddr(
@@ -328,6 +338,7 @@ namespace xr
         PFN_xrConvertTimeToTimespecTimeKHR ToMonotonicTime{};
         bool Cylinder{}, Cube{}, Equirect{}, Equirect2{}, AndroidSurface{};
         uint32_t MaxLayers{};
+        uint32_t MotionWidth{}, MotionHeight{};
     };
 
     struct System::Session::Impl
@@ -488,6 +499,16 @@ namespace xr
             CheckXr(
                 xrEnumerateSwapchainFormats(Session, formatCount, &formatCount, formats.data()),
                 "xrEnumerateSwapchainFormats");
+            if (System.MotionWidth && System.MotionHeight)
+            {
+                const auto offered = [&formats](VkFormat format) {
+                    return std::find(formats.begin(), formats.end(), format) != formats.end();
+                };
+                __android_log_print(ANDROID_LOG_INFO, "BabylonNative",
+                    "OpenXR advertised warp swapchain formats: RGBA16F=%d D16=%d D24S8=%d D32F=%d",
+                    offered(VK_FORMAT_R16G16B16A16_SFLOAT), offered(VK_FORMAT_D16_UNORM),
+                    offered(VK_FORMAT_D24_UNORM_S8_UINT), offered(VK_FORMAT_D32_SFLOAT));
+            }
 #ifdef BABYLON_NATIVE_OPENXR_PREFER_LINEAR_SWAPCHAIN
             ColorFormat = SelectColorFormat(formats, true, true);
 #else
