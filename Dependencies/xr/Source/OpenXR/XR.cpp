@@ -1084,7 +1084,7 @@ namespace xr
     arcana::task<bool, std::exception_ptr> System::IsSessionSupportedAsync(SessionType sessionType)
     {
         return arcana::task_from_result<std::exception_ptr>(
-            sessionType == SessionType::IMMERSIVE_VR || sessionType == SessionType::IMMERSIVE_AR);
+            sessionType == SessionType::IMMERSIVE_VR);
     }
 
     uintptr_t System::GetNativeXrContext()
