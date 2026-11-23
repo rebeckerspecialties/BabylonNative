@@ -144,7 +144,11 @@ function hintMaterial(material) {
     pbr.metallicFactor = Number(pbr.metallicFactor || 0);
     pbr.roughnessFactor = Number(pbr.roughnessFactor || 0.72);
 
-    if (/metal|carrosserie|chrome|wheel|wheels|reactor|cable|cables|plate|vents|grill|grid|delorean|volant|convecteur/.test(lowerName)) {
+    // Keep the authored asphalt/concrete textures; painted markings are separate materials.
+    if (material.name === "New road" || material.name === "Trottoir" || material.name === "Trottoir3") {
+        pbr.metallicFactor = 0;
+        pbr.roughnessFactor = material.name === "New road" ? 0.95 : 0.9;
+    } else if (/metal|carrosserie|chrome|wheel|wheels|reactor|cable|cables|plate|vents|grill|grid|delorean|volant|convecteur/.test(lowerName)) {
         pbr.metallicFactor = /glass|vitre|seat|cable|grid|volant|convecteur/.test(lowerName) ? 0.35 : 0.82;
         pbr.roughnessFactor = Math.min(pbr.roughnessFactor, /carrosserie|chrome|plate/.test(lowerName) ? 0.22 : 0.36);
     } else {

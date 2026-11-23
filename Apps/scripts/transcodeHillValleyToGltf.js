@@ -370,6 +370,17 @@ function addTexture(state, texture) {
     return info;
 }
 
+function applyMaterialAlphaMode(materialJson, material) {
+    // An alpha-bearing diffuse texture is not sufficient to require blending:
+    // StandardMaterial uses cutouts unless alpha blending is explicitly needed.
+    if (material.needAlphaBlending()) {
+        materialJson.alphaMode = "BLEND";
+    } else if (material.needAlphaTesting()) {
+        materialJson.alphaMode = "MASK";
+        materialJson.alphaCutoff = material.alphaCutOff;
+    }
+}
+
 function addMaterial(state, material) {
     if (!material) {
         return undefined;
@@ -396,6 +407,7 @@ function addMaterial(state, material) {
         materialJson.pbrMetallicRoughness.baseColorTexture = addTexture(state, baseTexture);
     }
 
+    applyMaterialAlphaMode(materialJson, material);
     applyRealtimeMaterialHints(materialJson, material, name);
     if (isBackdropMaterialName(name)) {
         pushExtensionUsed(state.json, "KHR_materials_unlit");
@@ -403,11 +415,6 @@ function addMaterial(state, material) {
 
     if (material.backFaceCulling === false) {
         materialJson.doubleSided = true;
-    }
-
-    const usesAlphaTexture = Boolean(material.opacityTexture || (material.diffuseTexture && material.diffuseTexture.hasAlpha));
-    if (alpha < 0.999 || usesAlphaTexture) {
-        materialJson.alphaMode = "BLEND";
     }
 
     const index = state.json.materials.length;
