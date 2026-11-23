@@ -58,6 +58,7 @@ set(SOURCES
     "Source/App.h"
     "Source/App.cpp"
     "Source/Tests.JavaScript.cpp"
+    "Source/Tests.Embedding.AnimationFrameGate.cpp"
     "Source/Tests.NativeXr.Compositor.cpp"
     "Source/Tests.NativeXr.ReferenceSpace.cpp"
     "Source/Tests.NativeXr.ProjectionExtent.cpp"
@@ -179,6 +180,7 @@ elseif(TARGET NativeWebGPU)
         "Source/Tests.GraphicsWgpu.FrameCompletion.cpp")
     if(APPLE)
         list(APPEND SOURCES
+            "Source/Tests.GraphicsWgpu.Resolution.mm"
             "Source/MetalCppImplementation.cpp")
     endif()
     list(APPEND UNITTEST_LIBRARIES NativeWebGPU)
@@ -188,14 +190,15 @@ else()
 endif()
 
 if(APPLE)
-    set(SOURCES ${SOURCES} "Source/App.Apple.mm")
+    set(SOURCES ${SOURCES} "Source/App.Apple.mm" "Source/Tests.NativeXr.CameraTexture.mm")
+    set_source_files_properties("Source/Tests.NativeXr.CameraTexture.mm" PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
     if(BABYLON_NATIVE_TESTS_USE_NOOP_METAL_DEVICE)
         list(APPEND ADDITIONAL_COMPILE_DEFINITIONS
             USE_NOOP_METAL_DEVICE
             SKIP_EXTERNAL_TEXTURE_TESTS)
     endif()
     find_library(JAVASCRIPTCORE_LIBRARY JavaScriptCore)
-    set(ADDITIONAL_LIBRARIES ${JAVASCRIPTCORE_LIBRARY} "-framework CoreGraphics")
+    set(ADDITIONAL_LIBRARIES ${JAVASCRIPTCORE_LIBRARY} "-framework CoreGraphics" "-framework CoreVideo" "-framework Metal")
 elseif(UNIX AND NOT ANDROID)
     set(SOURCES ${SOURCES} "Source/App.X11.cpp")
 elseif(WIN32)
