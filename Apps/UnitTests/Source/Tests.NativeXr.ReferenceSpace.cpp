@@ -68,6 +68,20 @@ TEST(NativeXrReferenceSpace, MissingAndIdentityOffsetsLeaveNativePosesUnchanged)
     });
 }
 
+TEST(NativeXrReferenceSpace, PositionOnlyLayerTransformDefaultsAndCopiesItsDictionary)
+{
+    RunReferenceSpaceTest([](Napi::Env env) {
+        auto position = Napi::Object::New(env);
+        position.Set("z", -2);
+        auto transform = env.Global().Get("XRRigidTransform").As<Napi::Function>().New({position});
+        position.Set("z", 4);
+        ExpectPoseNear(Babylon::XRRigidTransform::Unwrap(transform)->GetNativePose(),
+            {{0, 0, -2}, {0, 0, 0, 1}});
+        EXPECT_FLOAT_EQ(transform.Get("matrix").As<Napi::Float32Array>()[14], -2.f);
+        EXPECT_FLOAT_EQ(transform.Get("inverse").As<Napi::Object>().Get("matrix").As<Napi::Float32Array>()[14], 2.f);
+    });
+}
+
 TEST(NativeXrReferenceSpace, HonorsSessionGrantsAndPreservesConversionErrors)
 {
     Babylon::AppRuntime runtime{};
