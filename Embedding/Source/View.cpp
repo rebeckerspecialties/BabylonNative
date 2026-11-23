@@ -5,8 +5,11 @@
 
 #if BABYLON_NATIVE_PLUGIN_NATIVEWEBGPU
 #include <Babylon/Plugins/NativeWebGPU.h>
+#include <Babylon/JsRuntime.h>
+#include <Babylon/Graphics/DeviceContext.h>
 #endif
 
+#include <cstdlib>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -15,6 +18,53 @@ namespace Babylon::Embedding
 {
     namespace
     {
+#if BABYLON_NATIVE_PLUGIN_NATIVEWEBGPU
+        void RunAnimationFrame(const std::shared_ptr<AnimationFrameGate>& gate, Napi::Env env)
+        {
+            if (!gate->Begin())
+            {
+                return;
+            }
+            try
+            {
+                static const bool protectFrame = [] {
+                    const char* scope = std::getenv("BABYLON_NATIVE_WEBGPU_PROFILE_FRAME_SCOPE");
+                    const char* direct = std::getenv("BABYLON_NATIVE_WEBGPU_PROFILE_DIRECT_PRESENT");
+                    return (scope && std::string{scope} == "1") || (direct && std::string{direct} == "1");
+                }();
+                // Presentation cannot expire a canvas texture in the middle of
+                // the callback that is still encoding/submitting work to it.
+                auto frameScope = protectFrame
+                    ? Graphics::DeviceContext::GetFromJavaScript(env).TryAcquireFrameCompletionScope()
+                    : std::nullopt;
+                if (protectFrame && !frameScope)
+                {
+                    // Leave the JS callback list intact for a later display tick.
+                    // Blocking here would prevent suspension from joining JS.
+                    gate->Abort();
+                    return;
+                }
+                Babylon::Plugins::NativeWebGPU::TickAnimationFrame(env);
+                if (env.IsExceptionPending())
+                {
+                    throw env.GetAndClearPendingException();
+                }
+                if (gate->Complete())
+                {
+                    // Yield to other JS tasks. Never recurse into another frame
+                    // or retain a pointer to the embedding host across dispatch.
+                    Babylon::JsRuntime::GetFromJavaScript(env).Dispatch([gate](Napi::Env nextEnv) {
+                        RunAnimationFrame(gate, nextEnv);
+                    });
+                }
+            }
+            catch (...)
+            {
+                gate->Abort();
+                throw;
+            }
+        }
+#endif
         // Convert (width, height) in `units` to logical pixels.
         std::pair<uint32_t, uint32_t> ToLogicalSize(uint32_t width, uint32_t height,
                                                     CoordinateUnits units, float dpr)
@@ -66,6 +116,9 @@ namespace Babylon::Embedding
 
     ViewImpl::~ViewImpl()
     {
+#if BABYLON_NATIVE_PLUGIN_NATIVEWEBGPU
+        m_runtime.m_webGpuAnimationFrameGate->Stop();
+#endif
         // Close the in-flight frame iff one is currently open: i.e. the
         // view is initialized and the Runtime is not externally suspended
         // (Suspend already closed the frame). The Device persists on the
@@ -86,6 +139,9 @@ namespace Babylon::Embedding
     // missing precondition.
     void ViewImpl::Suspend()
     {
+#if BABYLON_NATIVE_PLUGIN_NATIVEWEBGPU
+        m_runtime.m_webGpuAnimationFrameGate->Stop();
+#endif
         if (!m_initialized)
         {
             return;
@@ -95,6 +151,9 @@ namespace Babylon::Embedding
 
     void ViewImpl::Resume()
     {
+#if BABYLON_NATIVE_PLUGIN_NATIVEWEBGPU
+        m_runtime.m_webGpuAnimationFrameGate = std::make_shared<AnimationFrameGate>();
+#endif
         if (!m_initialized)
         {
             // Suspend precondition just cleared. Succeeds if `Resize` has
@@ -148,6 +207,9 @@ namespace Babylon::Embedding
         // lambda always sees an open frame on the JS thread.
         m_runtime.m_device->StartRenderingCurrentFrame();
         m_initialized = true;
+#if BABYLON_NATIVE_PLUGIN_NATIVEWEBGPU
+        m_runtime.m_webGpuAnimationFrameGate = std::make_shared<AnimationFrameGate>();
+#endif
 
         if (firstAttachEver)
         {
@@ -180,27 +242,22 @@ namespace Babylon::Embedding
         impl.m_device->StartRenderingCurrentFrame();
 
 #if BABYLON_NATIVE_PLUGIN_NATIVEWEBGPU
-        auto animationFrameInFlight = impl.m_webGpuAnimationFrameInFlight;
-        if (!animationFrameInFlight->exchange(true, std::memory_order_relaxed))
+        static const bool coalesce = [] {
+            const char* value = std::getenv("BABYLON_NATIVE_WEBGPU_PROFILE_COALESCE_RAF");
+            return value && std::string{value} == "1";
+        }();
+        auto gate = impl.m_webGpuAnimationFrameGate;
+        if (gate->Request(coalesce))
         {
             try
             {
-                impl.m_appRuntime->Dispatch([animationFrameInFlight](Napi::Env env) {
-                    try
-                    {
-                        Babylon::Plugins::NativeWebGPU::TickAnimationFrame(env);
-                    }
-                    catch (...)
-                    {
-                        animationFrameInFlight->store(false, std::memory_order_relaxed);
-                        throw;
-                    }
-                    animationFrameInFlight->store(false, std::memory_order_relaxed);
+                impl.m_appRuntime->Dispatch([gate](Napi::Env env) {
+                    RunAnimationFrame(gate, env);
                 });
             }
             catch (...)
             {
-                animationFrameInFlight->store(false, std::memory_order_relaxed);
+                gate->Abort();
                 throw;
             }
         }

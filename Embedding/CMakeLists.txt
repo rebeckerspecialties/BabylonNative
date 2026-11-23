@@ -7,6 +7,7 @@ set(SOURCES
     "${EMBEDDING_SHARED_INCLUDE_ROOT}/Babylon/Embedding/View.h"
     "Source/Runtime.cpp"
     "Source/RuntimeImpl.h"
+    "Source/AnimationFrameGate.h"
     "Source/View.cpp")
 
 add_library(Embedding ${SOURCES})

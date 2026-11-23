@@ -7,6 +7,10 @@
 #include <Babylon/Graphics/Device.h>
 #include <Babylon/ScriptLoader.h>
 
+#if BABYLON_NATIVE_PLUGIN_NATIVEWEBGPU
+#include "AnimationFrameGate.h"
+#endif
+
 #if BABYLON_NATIVE_POLYFILL_CANVAS
 #include <Babylon/Polyfills/Canvas.h>
 #endif
@@ -93,7 +97,7 @@ namespace Babylon::Embedding
         // Prevent host display ticks from flooding the JS queue when a frame
         // takes longer than the display interval. The shared state outlives a
         // queued callback if the embedding Runtime begins teardown first.
-        std::shared_ptr<std::atomic_bool> m_webGpuAnimationFrameInFlight{std::make_shared<std::atomic_bool>(false)};
+        std::shared_ptr<AnimationFrameGate> m_webGpuAnimationFrameGate{std::make_shared<AnimationFrameGate>()};
 #endif
 
         // 0..1 — enforces "at most one View attached at a time". Points

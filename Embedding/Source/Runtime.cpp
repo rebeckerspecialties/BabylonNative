@@ -137,6 +137,9 @@ namespace Babylon::Embedding
     {
         // Host owns the ordering: destroy Views before their Runtime.
         assert(m_currentView == nullptr && "View must be destroyed before its Runtime.");
+#if BABYLON_NATIVE_PLUGIN_NATIVEWEBGPU
+        m_webGpuAnimationFrameGate->Stop();
+#endif
 
         // Teardown order:
         //   1. SaveShaderCache: ~ViewImpl already ran ViewImpl::Suspend, so
