@@ -84,6 +84,7 @@ namespace Babylon
             JS_CLASS_NAME,
             {
                 InstanceAccessor("nativeProjectionScaleFactor", &XRGPUBinding::GetNativeProjectionScaleFactor, nullptr),
+                InstanceAccessor("usesDepthValues", &XRGPUBinding::GetUsesDepthValues, nullptr),
                 InstanceMethod("getPreferredColorFormat", &XRGPUBinding::GetPreferredColorFormat),
                 InstanceMethod("createProjectionLayer", &XRGPUBinding::CreateProjectionLayer),
                 InstanceMethod("getSubImage", &XRGPUBinding::GetSubImage),
@@ -115,6 +116,12 @@ namespace Babylon
         return Napi::String::New(info.Env(), m_preferredColorFormat);
     }
 
+    Napi::Value XRGPUBinding::GetUsesDepthValues(const Napi::CallbackInfo& info)
+    {
+        // Depth is application-local; neither platform compositor receives a depth swapchain.
+        return Napi::Boolean::New(info.Env(), false);
+    }
+
     Napi::Value XRGPUBinding::CreateProjectionLayer(const Napi::CallbackInfo& info)
     {
         auto init = info.Length() > 0 && info[0].IsObject() ? info[0].As<Napi::Object>() : Napi::Object::New(info.Env());
@@ -128,16 +135,15 @@ namespace Babylon
 
         resolved.Set("colorFormat", colorFormat);
         const auto requestedDepth = init.Get("depthStencilFormat");
-        auto depthStencilFormat = std::string{SUPPORTED_DEPTH_STENCIL_FORMAT};
-        if (!requestedDepth.IsUndefined())
+        if (!requestedDepth.IsUndefined() && !requestedDepth.IsNull())
         {
-            depthStencilFormat = requestedDepth.As<Napi::String>().Utf8Value();
+            const auto depthStencilFormat = requestedDepth.As<Napi::String>().Utf8Value();
             if (depthStencilFormat != SUPPORTED_DEPTH_STENCIL_FORMAT && depthStencilFormat != "depth24plus")
             {
                 throw std::runtime_error{"Expected depth24plus or depth24plus-stencil8 for the WebGPU projection layer."};
             }
+            resolved.Set("depthStencilFormat", depthStencilFormat);
         }
-        resolved.Set("depthStencilFormat", depthStencilFormat);
 
         const auto textureUsage = init.Has("textureUsage") ? init.Get("textureUsage").As<Napi::Number>().Uint32Value() : GPU_TEXTURE_USAGE_RENDER_ATTACHMENT;
         if ((textureUsage & GPU_TEXTURE_USAGE_RENDER_ATTACHMENT) == 0)
@@ -152,7 +158,7 @@ namespace Babylon
             throw std::runtime_error{"XRGPUBinding.createProjectionLayer scaleFactor must be a finite positive number."};
         }
         resolved.Set("scaleFactor", Napi::Number::New(info.Env(), scaleFactor));
-        resolved.Set("ignoreDepthValues", init.Get("ignoreDepthValues"));
+        resolved.Set("ignoreDepthValues", Napi::Boolean::New(info.Env(), true));
 
         return XRProjectionLayer::New(info.Env(), m_sessionReference.Value(), resolved, m_deviceReference.Value());
     }

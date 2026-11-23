@@ -24,6 +24,7 @@ namespace Babylon
         const char* m_preferredColorFormat{};
 
         Napi::Value GetNativeProjectionScaleFactor(const Napi::CallbackInfo& info);
+        Napi::Value GetUsesDepthValues(const Napi::CallbackInfo& info);
         Napi::Value GetPreferredColorFormat(const Napi::CallbackInfo& info);
         Napi::Value CreateProjectionLayer(const Napi::CallbackInfo& info);
         Napi::Value GetSubImage(const Napi::CallbackInfo& info);

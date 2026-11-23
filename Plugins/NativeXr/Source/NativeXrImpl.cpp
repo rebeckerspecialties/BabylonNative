@@ -231,14 +231,14 @@ namespace Babylon
             }
 
             const auto& renderTarget = viewConfig->RenderTargets[renderTargetIndex];
-            if (renderTarget.JsColorTexture.IsEmpty() || renderTarget.JsDepthTexture.IsEmpty())
+            if (renderTarget.JsColorTexture.IsEmpty())
             {
                 return std::nullopt;
             }
 
             return XRGPUSubImageData{
                 renderTarget.JsColorTexture.Value(),
-                renderTarget.JsDepthTexture.Value(),
+                renderTarget.JsDepthTexture.IsEmpty() ? m_env.Null() : Napi::Value{renderTarget.JsDepthTexture.Value()},
                 static_cast<uint32_t>(viewConfig->ViewTextureSize.Width),
                 static_cast<uint32_t>(viewConfig->ViewTextureSize.Height),
                 renderTargetIndex};
@@ -557,9 +557,10 @@ namespace Babylon
                 m_sessionState->LastTextureArrayLength = std::max<uint32_t>(1, static_cast<uint32_t>(view.ColorTextureSize.Depth));
                 const auto& it{m_sessionState->TextureToViewConfigurationMap.find(view.ColorTexturePointer)};
                 const auto colorUsage = WEBGPU_TEXTURE_USAGE_TEXTURE_BINDING | WEBGPU_TEXTURE_USAGE_RENDER_ATTACHMENT | m_sessionState->ProjectionColorUsage;
-                const auto* depthFormat = m_sessionState->ProjectionDepthFormat.empty()
-                    ? XrDepthTextureFormatToWebGpuFormat(view.DepthTextureFormat)
-                    : m_sessionState->ProjectionDepthFormat.c_str();
+                const auto* depthFormat = m_sessionState->ProjectionDepthFormat
+                    ? m_sessionState->ProjectionDepthFormat->c_str()
+                    : XrDepthTextureFormatToWebGpuFormat(view.DepthTextureFormat);
+                const bool useDepth = *depthFormat != '\0';
 
                 if (it == m_sessionState->TextureToViewConfigurationMap.end() ||
                     it->second.ViewTextureSize.Width != view.ColorTextureSize.Width ||
@@ -616,7 +617,6 @@ namespace Babylon
                     // wgpu-hal returns an error there, this can become a
                     // capability check that keeps the bandwidth win on the GPUs
                     // that support it.
-                    const auto depthDescriptor = MakeTextureDescriptorJson("NativeXR.depth", textureWidth, textureHeight, textureLayers, depthFormat, depthUsage, /* transient */ false);
 #if defined(__APPLE__)
                     const auto colorTextureId = babylon_wgpu_native_import_metal_texture(view.ColorTexturePointer, colorDescriptor.c_str());
 #elif defined(__ANDROID__) && defined(BABYLON_NATIVE_XR_OPENXR)
@@ -627,9 +627,10 @@ namespace Babylon
 #else
 #error NativeXR requires an explicit platform texture import path.
 #endif
-                    const auto depthTextureId = babylon_wgpu_native_create_texture(depthDescriptor.c_str());
+                    const auto depthTextureId = useDepth ? babylon_wgpu_native_create_texture(
+                        MakeTextureDescriptorJson("NativeXR.depth", textureWidth, textureHeight, textureLayers, depthFormat, depthUsage, /* transient */ false).c_str()) : 0;
 
-                    if (colorTextureId == 0 || depthTextureId == 0)
+                    if (colorTextureId == 0 || (useDepth && depthTextureId == 0))
                     {
                         std::ostringstream error{};
                         error << "NativeXR failed to create WebGPU render targets for XR frame"
@@ -647,14 +648,21 @@ namespace Babylon
                     viewConfig.RenderTargets.resize(eyeCount);
                     auto jsColorTexture = Plugins::NativeWebGPU::CreateTextureFromNativeId(
                         m_env, colorTextureId, "NativeXR.color", colorFormat, textureWidth, textureHeight, textureLayers, colorUsage);
-                    auto jsDepthTexture = Plugins::NativeWebGPU::CreateTextureFromNativeId(
-                        m_env, depthTextureId, "NativeXR.depth", depthFormat, textureWidth, textureHeight, textureLayers, depthUsage);
+                    Napi::Value jsDepthTexture = m_env.Null();
+                    if (useDepth)
+                    {
+                        jsDepthTexture = Plugins::NativeWebGPU::CreateTextureFromNativeId(
+                            m_env, depthTextureId, "NativeXR.depth", depthFormat, textureWidth, textureHeight, textureLayers, depthUsage);
+                    }
                     for (auto& renderTarget : viewConfig.RenderTargets)
                     {
                         renderTarget.ColorTextureId = colorTextureId;
                         renderTarget.DepthTextureId = depthTextureId;
                         renderTarget.JsColorTexture = Napi::Persistent(jsColorTexture);
-                        renderTarget.JsDepthTexture = Napi::Persistent(jsDepthTexture);
+                        if (useDepth)
+                        {
+                            renderTarget.JsDepthTexture = Napi::Persistent(jsDepthTexture.As<Napi::Object>());
+                        }
                         if (!m_sessionState->CreateRenderTexture.IsEmpty())
                         {
                             auto jsWidth{Napi::Value::From(m_env, textureWidth)};

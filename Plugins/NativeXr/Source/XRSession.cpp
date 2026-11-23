@@ -620,7 +620,7 @@ namespace Babylon
                     snapshot.Set(uint32_t{0}, layer);
                     m_pendingProjectionLayer = Napi::Persistent(layer);
                 }
-                m_xr->SetProjectionAttachments(projectionLayerCandidate ? projectionLayerCandidate->DepthStencilFormat() : "",
+                m_xr->SetProjectionAttachments(projectionLayerCandidate ? std::optional{projectionLayerCandidate->DepthStencilFormat()} : std::nullopt,
                     projectionLayerCandidate ? projectionLayerCandidate->TextureUsage() : 0);
                 m_pendingRenderState.Set("layers", snapshot);
                 m_pendingRenderState.Set("baseLayer", info.Env().Null());
@@ -631,7 +631,7 @@ namespace Babylon
                 m_pendingRenderState.Set("baseLayer", baseLayer.IsUndefined() ? info.Env().Null() : baseLayer);
                 m_pendingRenderState.Set("layers", Napi::Array::New(info.Env()));
                 m_pendingProjectionLayer.Reset();
-                m_xr->SetProjectionAttachments("", 0);
+                m_xr->SetProjectionAttachments(std::nullopt, 0);
             }
 
             if (update.Has("inlineVerticalFieldOfView"))

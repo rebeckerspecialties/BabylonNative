@@ -221,6 +221,11 @@ target_link_libraries(UnitTests
 
 target_compile_definitions(UnitTests PRIVATE ${ADDITIONAL_COMPILE_DEFINITIONS})
 
+if(TARGET NativeXr AND TARGET NativeWebGPU)
+    target_sources(UnitTests PRIVATE "Source/Tests.NativeXr.SubImage.cpp")
+    target_link_libraries(UnitTests PRIVATE NativeXr)
+endif()
+
 if(BABYLON_NATIVE_PLUGIN_TESTUTILS)
     target_link_libraries(UnitTests PRIVATE TestUtils)
     target_compile_definitions(UnitTests PRIVATE HAS_TEST_UTILS)

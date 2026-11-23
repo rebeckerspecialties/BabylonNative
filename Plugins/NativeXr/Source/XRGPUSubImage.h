@@ -9,7 +9,7 @@ namespace Babylon
     struct XRGPUSubImageData final
     {
         Napi::Object ColorTexture;
-        Napi::Object DepthStencilTexture;
+        Napi::Value DepthStencilTexture;
         uint32_t Width{};
         uint32_t Height{};
         uint32_t ArrayLayer{};
@@ -34,6 +34,7 @@ namespace Babylon
 
         Napi::Value GetColorTexture(const Napi::CallbackInfo& info);
         Napi::Value GetDepthStencilTexture(const Napi::CallbackInfo& info);
+        Napi::Value GetMotionVectorTexture(const Napi::CallbackInfo& info);
         Napi::Value GetColorTextureWidth(const Napi::CallbackInfo& info);
         Napi::Value GetColorTextureHeight(const Napi::CallbackInfo& info);
         Napi::Value GetDepthStencilTextureWidth(const Napi::CallbackInfo& info);

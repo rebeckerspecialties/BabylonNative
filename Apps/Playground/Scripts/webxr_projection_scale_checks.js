@@ -7,10 +7,13 @@ async function checkXRProjectionScale() {
         const binding = new XRGPUBinding(session, device);
         const space = await session.requestReferenceSpace("local-floor");
         let reference;
-        for (const scale of [1, 0.5, 1.25, 1]) {
+        for (const [scale, format] of [[1,"depth24plus-stencil8"], [1,undefined], [1,null], [1,"depth24plus"], [0.5,"depth24plus-stencil8"], [1.25,"depth24plus-stencil8"], [1,"depth24plus-stencil8"]]) {
             const layer = binding.createProjectionLayer({
-                colorFormat: binding.getPreferredColorFormat(), depthStencilFormat: "depth24plus-stencil8", scaleFactor: scale,
+                colorFormat: binding.getPreferredColorFormat(), ...(format !== undefined ? {depthStencilFormat: format} : {}), scaleFactor: scale,
             });
+            if (typeof binding.usesDepthValues !== "boolean" || (!binding.usesDepthValues && !layer.ignoreDepthValues)) {
+                throw Error("Inconsistent compositor depth capabilities");
+            }
             session.updateRenderState({ layers: [layer] });
             for (let n = 0; n < 5; ++n) {
                 await new Promise((resolve, reject) => session.requestAnimationFrame((_time, frame) => {
@@ -24,13 +27,17 @@ async function checkXRProjectionScale() {
                             const color = sub.colorTexture, depth = sub.depthStencilTexture;
                             if (!reference) reference = [color.width, color.height];
                             const width = Math.floor(reference[0] * scale), height = Math.floor(reference[1] * scale);
-                            if (color.width !== width || depth.width !== width || color.height !== height || depth.height !== height ||
+                            if (sub.motionVectorTexture !== null || (format == null ? depth !== null : !depth || depth.format !== format ||
+                                depth.width !== width || depth.height !== height)) {
+                                throw Error("Wrong depth/motion attachment for format " + format);
+                            }
+                            if (color.width !== width || color.height !== height ||
                                 sub.viewport.width !== width || sub.viewport.height !== height || layer.textureWidth !== width || layer.textureHeight !== height) {
                                 throw Error("Wrong color/depth/viewport/layer extent at scale " + scale + ": " + color.width + "x" + color.height);
                             }
                             const colorValue = view.eye === "left" ? [0.25, 0, 0, 1] : [0, 0.5, 0, 1];
                             const pass = encoder.beginRenderPass({ colorAttachments: [{
-                                view: color.createView(), clearValue: colorValue, loadOp: "clear", storeOp: "store",
+                                view: color.createView(sub.getViewDescriptor()), clearValue: colorValue, loadOp: "clear", storeOp: "store",
                             }] });
                             pass.end();
                         }
