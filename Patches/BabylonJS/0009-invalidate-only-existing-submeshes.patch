@@ -1,0 +1,55 @@
+diff --git a/packages/dev/core/src/Meshes/geometry.ts b/packages/dev/core/src/Meshes/geometry.ts
+index 270f4e3..9fdb700 100644
+--- a/packages/dev/core/src/Meshes/geometry.ts
++++ b/packages/dev/core/src/Meshes/geometry.ts
+@@ -840,6 +840,9 @@ export class Geometry implements IGetSetVerticesData {
+ 
+         // Render bundles retain buffer bindings even when the vertex layout does not change.
+         for (const mesh of this._meshes) {
++            if (!mesh.subMeshes) {
++                continue;
++            }
+             for (const subMesh of mesh.subMeshes) {
+                 subMesh._invalidateVertexBuffers();
+             }
+diff --git a/packages/dev/core/test/unit/Meshes/babylon.geometry.test.ts b/packages/dev/core/test/unit/Meshes/babylon.geometry.test.ts
+index b4a3e78..c306441 100644
+--- a/packages/dev/core/test/unit/Meshes/babylon.geometry.test.ts
++++ b/packages/dev/core/test/unit/Meshes/babylon.geometry.test.ts
+@@ -1,6 +1,6 @@
+ import { VertexBuffer } from "core/Buffers";
+ import { Engine, NullEngine } from "core/Engines";
+-import { Geometry } from "core/Meshes";
++import { Geometry, Mesh, SubMesh } from "core/Meshes";
+ import { Scene } from "core/scene";
+ import { Buffer } from "core/Buffers/buffer";
+ 
+@@ -23,6 +23,28 @@ describe("Babylon Geometry", () => {
+         });
+     });
+ 
++    it.each([false, true])("accepts a non-position buffer before a shared mesh has submeshes (WebGPU=%s)", (isWebGPU) => {
++        const scene = new Scene(subject);
++        const geometry = new Geometry("shared", scene);
++        const newMesh = new Mesh("new", scene);
++        const cachedMesh = new Mesh("cached", scene);
++        geometry.applyToMesh(newMesh);
++        geometry.applyToMesh(cachedMesh);
++        cachedMesh.subMeshes = [];
++        const subMesh = new SubMesh(0, 0, 0, 0, 0, cachedMesh, undefined, false);
++        const invalidate = vi.spyOn(subMesh, "_invalidateVertexBuffers");
++        const engineKind = vi.spyOn(subject, "isWebGPU", "get").mockReturnValue(isWebGPU);
++        try {
++            expect(newMesh.subMeshes).toBeUndefined();
++            geometry.setVerticesData(VertexBuffer.NormalKind, [0, 1, 0]);
++            expect(invalidate).toHaveBeenCalledTimes(isWebGPU ? 1 : 0);
++        } finally {
++            engineKind.mockRestore();
++            invalidate.mockRestore();
++            scene.dispose();
++        }
++    });
++
+     describe("#Geometry get vertices data", () => {
+         it("vec3 float color tightly packed", () => {
+             const scene = new Scene(subject);

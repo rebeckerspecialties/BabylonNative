@@ -10,3 +10,5 @@
 0006-uniform-loop-invariant.patch
 0007-accessor-state-expressions.patch
 0008-fast-snapshot-rendering-group-clears.patch
+0009-invalidate-only-existing-submeshes.patch
+0010-no-mirror-parent-clear.patch

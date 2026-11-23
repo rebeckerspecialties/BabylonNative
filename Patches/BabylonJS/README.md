@@ -6,6 +6,12 @@ reporting contract (#19084), and snapshot recorded-draw reuse with the
 pre-replay command-stream flush (#19089). It also retains #19076 direct-draw
 fallback and the earlier NativeXR, KTX, SSAO2 and font-offset fixes.
 
+`0009-invalidate-only-existing-submeshes.patch` handles a new mesh sharing
+geometry with a mesh that already has draw caches. Until positions have been
+uploaded, the new mesh can have no submesh list. Updating another attribute
+must still invalidate existing submeshes on the other mesh. The original
+unguarded loop interrupted portfolio rendering on Quest 1 Vulkan.
+
 `0001-uniform-buffer-comparison-loop.patch` is a separate, API-neutral CPU
 optimization: cache the Float32Array length once while comparing uniform-buffer
 shadows. Interpreter-only Hill Valley profiling identified repeated comparisons
@@ -254,3 +260,13 @@ The bundle contract additionally rejects a series without the accessor patch.
 Use the published ES2015+ UMD bundles directly. Do not downlevel them or use the
 published ES5 bundles on this branch; see AGENTS.md for the texture-layout
 failure. Generated bundles are validation inputs and are never source patches.
+# Projection-only stereo
+
+`0010-no-mirror-parent-clear.patch` adds an opt-in for the unused parent canvas
+clear. Set `xr.camera.skipUnusedParentFramebufferClear = true` only when there is
+no canvas mirror or readback consumer. The render loop checks the active cameras,
+rig targets, currently bound framebuffer and prepass state at the point of the
+clear; adding a spectator restores normal clearing. Eye clears are unchanged.
+
+The pinned-release integration fixture can be run with
+`node Apps/scripts/questMenuLadder/spectator.cjs /path/to/babylonjs-9.37.1.tgz`.
