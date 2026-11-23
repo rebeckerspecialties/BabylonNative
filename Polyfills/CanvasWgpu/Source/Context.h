@@ -135,7 +135,7 @@ namespace Babylon::Polyfills::Internal
 
         std::map<std::string, int> m_fonts;
 #ifdef __ANDROID__
-        std::optional<int> m_systemFaces[2];
+        std::optional<int> m_systemFaces[2][2];
 #endif
         int m_currentFontId{-1};
 

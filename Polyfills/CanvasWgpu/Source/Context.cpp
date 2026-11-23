@@ -204,9 +204,9 @@ namespace Babylon::Polyfills::Internal
     }
 
 #ifdef __ANDROID__
-    std::vector<uint8_t> ReadSystemFace(const char* roboto, const char* droid)
+    std::vector<uint8_t> ReadSystemFace(const char* preferred, const char* fallback)
     {
-        for (const char* path : {roboto, droid})
+        for (const char* path : {preferred, fallback})
         {
             std::ifstream file{path, std::ios::binary | std::ios::ate};
             const std::streamoff size = file.tellg();
@@ -222,8 +222,24 @@ namespace Babylon::Polyfills::Internal
         return {};
     }
 
-    int LoadSystemFace(NVGcontext* context, bool bold)
+    int LoadSystemFace(NVGcontext* context, bool bold, bool serif)
     {
+        if (serif)
+        {
+            if (bold)
+            {
+                static auto boldBytes = ReadSystemFace("/system/fonts/NotoSerif-Bold.ttf", "/system/fonts/DroidSerif-Bold.ttf");
+                if (!boldBytes.empty())
+                {
+                    return nvgCreateFontMem(context, "serif-bold", boldBytes.data(), static_cast<int>(boldBytes.size()), 0);
+                }
+            }
+            static auto bytes = ReadSystemFace("/system/fonts/NotoSerif-Regular.ttf", "/system/fonts/DroidSerif-Regular.ttf");
+            if (!bytes.empty())
+            {
+                return nvgCreateFontMem(context, "serif", bytes.data(), static_cast<int>(bytes.size()), 0);
+            }
+        }
         if (bold)
         {
             static auto bytes = ReadSystemFace("/system/fonts/Roboto-Bold.ttf", "/system/fonts/DroidSans-Bold.ttf");
@@ -443,8 +459,10 @@ namespace Babylon::Polyfills::Internal
         m_transientImageIndices.clear();
         m_fonts.clear();
 #ifdef __ANDROID__
-        m_systemFaces[0].reset();
-        m_systemFaces[1].reset();
+        for (auto& family : m_systemFaces)
+        {
+            for (auto& face : family) face.reset();
+        }
 #endif
         m_currentFontId = -1;
         m_frameActive = false;
@@ -1199,10 +1217,11 @@ namespace Babylon::Polyfills::Internal
             nvgFontFaceId(*m_nvg, requested->second);
             return true;
         }
-        auto& face = m_systemFaces[m_font.IsBold() ? 1 : 0];
+        const bool serif = m_font.Family() == "serif";
+        auto& face = m_systemFaces[serif][m_font.IsBold()];
         if (!face.has_value())
         {
-            face = LoadSystemFace(*m_nvg, m_font.IsBold());
+            face = LoadSystemFace(*m_nvg, m_font.IsBold(), serif);
         }
         if (*face >= 0)
         {
