@@ -18,7 +18,7 @@ target_link_libraries(NativeXr
 
 set_property(TARGET NativeXr PROPERTY FOLDER Plugins)
 if(ANDROID AND BABYLON_NATIVE_XR_OPENXR)
-    target_link_libraries(NativeXr PRIVATE AndroidExtensions jnigraphics)
+    target_link_libraries(NativeXr PRIVATE AndroidExtensions jnigraphics mediandk android)
 endif()
 source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${SOURCES})
 
