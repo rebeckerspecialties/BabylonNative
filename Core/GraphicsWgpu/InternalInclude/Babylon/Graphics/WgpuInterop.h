@@ -72,6 +72,7 @@ struct BabylonWgpuVulkanBinding final
     uint32_t queue_family_index{};
     uint32_t queue_index{};
     uint32_t max_texture_dimension_2d{};
+    uint32_t fragment_density_map{};
 };
 
 extern "C"

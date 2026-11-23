@@ -217,6 +217,14 @@ namespace xr
             const bool convertTime = enable(XR_KHR_CONVERT_TIMESPEC_TIME_EXTENSION_NAME);
             AndroidSurface = enable(XR_KHR_ANDROID_SURFACE_SWAPCHAIN_EXTENSION_NAME);
             const bool querySpaceWarp = enable(XR_FB_SPACE_WARP_EXTENSION_NAME);
+            constexpr const char* densityExtensions[] = {XR_FB_SWAPCHAIN_UPDATE_STATE_EXTENSION_NAME,
+                XR_FB_FOVEATION_EXTENSION_NAME, XR_FB_FOVEATION_CONFIGURATION_EXTENSION_NAME, XR_FB_FOVEATION_VULKAN_EXTENSION_NAME};
+            Foveation = std::all_of(std::begin(densityExtensions), std::end(densityExtensions),
+                [&](const char* name) { return HasExtension(extensions, name); });
+            if (Foveation)
+            {
+                enabledExtensions.insert(enabledExtensions.end(), std::begin(densityExtensions), std::end(densityExtensions));
+            }
             Cube = enable(XR_KHR_COMPOSITION_LAYER_CUBE_EXTENSION_NAME);
             Equirect2 = enable(XR_KHR_COMPOSITION_LAYER_EQUIRECT2_EXTENSION_NAME);
             Equirect = Equirect2 || enable(XR_KHR_COMPOSITION_LAYER_EQUIRECT_EXTENSION_NAME);
@@ -339,6 +347,7 @@ namespace xr
         bool Cylinder{}, Cube{}, Equirect{}, Equirect2{}, AndroidSurface{};
         uint32_t MaxLayers{};
         uint32_t MotionWidth{}, MotionHeight{};
+        bool Foveation{};
     };
 
     struct System::Session::Impl
@@ -347,6 +356,7 @@ namespace xr
         {
             XrSwapchain Handle{XR_NULL_HANDLE};
             std::vector<XrSwapchainImageVulkan2KHR> Images{};
+            std::vector<XrSwapchainImageFoveationVulkanFB> DensityMaps{};
             uint32_t Width{};
             uint32_t Height{};
             uint32_t ImageIndex{};
@@ -547,7 +557,19 @@ namespace xr
                 // view. Tell OpenXR to decode those bytes as sRGB at composition.
                 const bool srgb = ColorFormat == VK_FORMAT_R8G8B8A8_SRGB || ColorFormat == VK_FORMAT_B8G8R8A8_SRGB;
                 if (srgb) swapchainCreateInfo.usageFlags |= XR_SWAPCHAIN_USAGE_MUTABLE_FORMAT_BIT;
+                auto foveation = MakeXr<XrSwapchainCreateInfoFoveationFB>(XR_TYPE_SWAPCHAIN_CREATE_INFO_FOVEATION_FB);
+                if (System.Foveation && graphicsBinding.SupportsNonSubsampledDensityMaps)
+                {
+                    foveation.flags = XR_SWAPCHAIN_CREATE_FOVEATION_FRAGMENT_DENSITY_MAP_BIT_FB;
+                    swapchainCreateInfo.next = &foveation;
+                }
                 auto result = xrCreateSwapchain(Session, &swapchainCreateInfo, &viewSwapchain.Handle);
+                if (swapchainCreateInfo.next && (result == XR_ERROR_FEATURE_UNSUPPORTED ||
+                    result == XR_ERROR_SWAPCHAIN_FORMAT_UNSUPPORTED || result == XR_ERROR_LIMIT_REACHED))
+                {
+                    swapchainCreateInfo.next = nullptr;
+                    result = xrCreateSwapchain(Session, &swapchainCreateInfo, &viewSwapchain.Handle);
+                }
                 if (ColorFormat == VK_FORMAT_R16G16B16A16_SFLOAT &&
                     (result == XR_ERROR_FEATURE_UNSUPPORTED || result == XR_ERROR_SWAPCHAIN_FORMAT_UNSUPPORTED))
                 {
@@ -578,6 +600,14 @@ namespace xr
                 viewSwapchain.Images.assign(
                     imageCount,
                     MakeXr<XrSwapchainImageVulkan2KHR>(XR_TYPE_SWAPCHAIN_IMAGE_VULKAN2_KHR));
+                if (swapchainCreateInfo.next)
+                {
+                    viewSwapchain.DensityMaps.assign(imageCount, MakeXr<XrSwapchainImageFoveationVulkanFB>(XR_TYPE_SWAPCHAIN_IMAGE_FOVEATION_VULKAN_FB));
+                    for (uint32_t i = 0; i < imageCount; ++i)
+                    {
+                        viewSwapchain.Images[i].next = &viewSwapchain.DensityMaps[i];
+                    }
+                }
                 CheckXr(
                     xrEnumerateSwapchainImages(
                         viewSwapchain.Handle,
@@ -585,6 +615,20 @@ namespace xr
                         &imageCount,
                         reinterpret_cast<XrSwapchainImageBaseHeader*>(viewSwapchain.Images.data())),
                     "xrEnumerateSwapchainImages");
+                if (!viewSwapchain.DensityMaps.empty())
+                {
+                    const auto& maps = viewSwapchain.DensityMaps;
+                    if (std::all_of(maps.begin(), maps.end(), [](const auto& map) { return map.image && map.width && map.height; }))
+                    {
+                        __android_log_print(ANDROID_LOG_INFO, "BabylonNative", "OpenXR supplied %u paired Vulkan density maps, first %ux%u",
+                            static_cast<unsigned>(maps.size()), maps.front().width, maps.front().height);
+                    }
+                    else
+                    {
+                        for (auto& image : viewSwapchain.Images) image.next = nullptr;
+                        viewSwapchain.DensityMaps.clear();
+                    }
+                }
             }
 
             LocatedViews.assign(viewCount, MakeXr<XrView>(XR_TYPE_VIEW));
@@ -942,6 +986,18 @@ namespace xr
                 activeView.SwapchainWidth = viewSwapchain.Width;
                 activeView.SwapchainHeight = viewSwapchain.Height;
                 activeView.SwapchainFormat = ColorFormat;
+                if (FrameShouldRender && !viewSwapchain.DensityMaps.empty())
+                {
+                    const auto& map = viewSwapchain.DensityMaps[viewSwapchain.ImageIndex];
+                    activeView.DensityMapImage = reinterpret_cast<uint64_t>(map.image);
+                    activeView.DensityMapWidth = map.width;
+                    activeView.DensityMapHeight = map.height;
+                }
+                else
+                {
+                    activeView.DensityMapImage = 0;
+                    activeView.DensityMapWidth = activeView.DensityMapHeight = 0;
+                }
                 activeView.DepthTextureFormat = TextureFormat::D24S8;
                 activeView.DepthTexturePointer = nullptr;
                 activeView.DepthTextureSize = activeView.ColorTextureSize;

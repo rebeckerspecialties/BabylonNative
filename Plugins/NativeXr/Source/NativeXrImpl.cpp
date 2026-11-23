@@ -317,7 +317,8 @@ namespace Babylon
                         nativeVulkanBinding.queue_family_index,
                         nativeVulkanBinding.queue_index,
                         nativeVulkanBinding.max_texture_dimension_2d,
-                        babylon_wgpu_native_queue_wait_submitted_work});
+                        babylon_wgpu_native_queue_wait_submitted_work,
+                        nativeVulkanBinding.fragment_density_map != 0});
                     void* graphicsDevice = vulkanBinding.get();
                     void* graphicsQueue = nullptr;
                     std::shared_ptr<void> graphicsBindingLifetime = vulkanBinding;

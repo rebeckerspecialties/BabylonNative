@@ -92,6 +92,7 @@ namespace xr
         uint32_t QueueIndex{};
         uint32_t MaxTextureDimension2D{};
         bool (*WaitForSubmittedWork)(){};
+        bool SupportsNonSubsampledDensityMaps{};
     };
 
     struct Vector3f
@@ -287,6 +288,8 @@ namespace xr
                     uint32_t SwapchainWidth{};
                     uint32_t SwapchainHeight{};
                     int64_t SwapchainFormat{};
+                    uint64_t DensityMapImage{};
+                    uint32_t DensityMapWidth{}, DensityMapHeight{};
 #endif
 
                     TextureFormat DepthTextureFormat{};

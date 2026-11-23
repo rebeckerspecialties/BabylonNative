@@ -234,6 +234,7 @@ pub struct BabylonWgpuVulkanBinding {
     pub queue_family_index: u32,
     pub queue_index: u32,
     pub max_texture_dimension_2d: u32,
+    pub fragment_density_map: u32,
 }
 
 struct BackendContext {
@@ -4999,6 +5000,7 @@ mod upstream_wgpu_native {
                 queue_family_index: hal_device.queue_family_index(),
                 queue_index: hal_device.queue_index(),
                 max_texture_dimension_2d: self.runtime.device.limits().max_texture_dimension_2d,
+                fragment_density_map: u32::from(hal_device.enabled_device_extensions().contains(&ash::ext::fragment_density_map::NAME)),
             })
         }
 
@@ -9991,12 +9993,29 @@ mod upstream_wgpu_native {
                     }
                 }
 
+                // XR application render targets are ordinary WebGPU images, not Vulkan
+                // subsampled images. Both bits must be present to use a density map.
+                let density_extension = ash::ext::fragment_density_map::NAME;
+                let instance = hal_adapter.shared_instance();
+                let mut density = ash::vk::PhysicalDeviceFragmentDensityMapFeaturesEXT::default();
+                if instance.instance_api_version() >= ash::vk::API_VERSION_1_1
+                    && hal_adapter.physical_device_capabilities().supports_extension(density_extension)
+                {
+                    let mut features = ash::vk::PhysicalDeviceFeatures2::default().push_next(&mut density);
+                    unsafe { instance.raw_instance().get_physical_device_features2(hal_adapter.raw_physical_device(), &mut features) };
+                }
+                let enable_density = density.fragment_density_map != 0 && density.fragment_density_map_non_subsampled_images != 0;
+                density.fragment_density_map_dynamic = ash::vk::FALSE;
                 let hal_device = unsafe {
                     hal_adapter.open_with_callback(
                         required_features,
                         limits,
                         &descriptor.memory_hints,
                         Some(Box::new(|args| {
+                            if enable_density {
+                                args.extensions.push(density_extension);
+                                *args.create_info = args.create_info.push_next(&mut density);
+                            }
                             for name in xr_extensions.into_iter().chain([ash::khr::external_memory::NAME, ash::khr::get_memory_requirements2::NAME]) {
                                 if hal_adapter.physical_device_capabilities().supports_extension(name) && !args.extensions.contains(&name) {
                                     args.extensions.push(name);
