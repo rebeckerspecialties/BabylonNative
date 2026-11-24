@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstring>
+#include <cmath>
 
 namespace Babylon
 {
@@ -166,12 +167,6 @@ namespace Babylon
             : Napi::ObjectWrap<XRRigidTransform>{info}
             , m_matrix{Napi::Persistent(Napi::Float32Array::New(info.Env(), MATRIX_SIZE))}
         {
-            if (info.Length() == 2)
-            {
-                m_position = Napi::Persistent(info[0].As<Napi::Object>());
-                m_orientation = Napi::Persistent(info[1].As<Napi::Object>());
-            }
-            else
             {
                 auto position{Napi::Object::New(info.Env())};
                 position.Set("x", 0.f);
@@ -186,6 +181,24 @@ namespace Babylon
                 orientation.Set("z", 0.f);
                 orientation.Set("w", 1.f);
                 m_orientation = Napi::Persistent(orientation);
+                if (info[0].IsObject())
+                {
+                    auto input=info[0].As<Napi::Object>();
+                    for (const char* key : {"x","y","z","w"})
+                        if (!input.Get(key).IsUndefined()) position.Set(key,input.Get(key).ToNumber());
+                    if (position.Get("w").ToNumber().DoubleValue()!=1)
+                        throw Napi::TypeError::New(info.Env(),"XRRigidTransform position.w must equal 1");
+                }
+                if (info[1].IsObject())
+                {
+                    auto input=info[1].As<Napi::Object>();
+                    for (const char* key : {"x","y","z","w"})
+                        if (!input.Get(key).IsUndefined()) orientation.Set(key,input.Get(key).ToNumber());
+                    double norm{};
+                    for (const char* key : {"x","y","z","w"}) { const auto n=orientation.Get(key).ToNumber().DoubleValue(); norm+=n*n; }
+                    if (!(norm>0) || !std::isfinite(norm)) throw Napi::TypeError::New(info.Env(),"Invalid orientation quaternion");
+                    for (const char* key : {"x","y","z","w"}) orientation.Set(key,orientation.Get(key).ToNumber().DoubleValue()/std::sqrt(norm));
+                }
             }
             const auto matrix = CreateTransformMatrix(xr::Space{GetNativePose()});
             std::memcpy(m_matrix.Value().Data(), matrix.data(), sizeof(matrix));
