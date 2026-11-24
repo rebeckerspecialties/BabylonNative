@@ -478,3 +478,13 @@ Open NativeXR portal questions for the next optimization session:
 - NativeWebGPU does not ship glslang/twgsl. If Babylon.js code asks WebGPU to compile GLSL, surface an actionable JS error that names the shader/effect and says the path needs WGSL or an explicit NativeWebGPU exclusion.
 - Async shader preparation rejection must propagate into Babylon.js effect compilation errors with a useful stack. Do not let readiness pumps turn those into anonymous timeouts.
 - Keep screenshot validation failures diagnostic-first: capture the scene readiness state, native backend stats, and saved result/error images instead of adding sleeps or broad thresholds.
+
+<!-- quest-qualification-handoff -->
+## Quest runtime qualification
+
+XR animation timing and end events must follow session lifecycle, not request-handle numbering.
+
+Start with the [shared Quest handoff](https://github.com/rebeckerspecialties/BabylonNative/blob/wgpu/Documentation/QuestRuntimeHandoff.md) for verified artifact pins, the camera ownership audit, and links to related PRs. Use normal logging, confirm both eyes on the physical display, and verify Home passthrough before and after a single test. Do not use compositor submission count as visual evidence or trigger hosted simulator screenshots for this handoff.
+
+- Implementation: Audit cancellation, repeated sessions and exactly-once end delivery with queued callbacks.
+- Device: Run enter/end/re-enter, background/resume and normal Home handoff; check the clock stays monotonic.
