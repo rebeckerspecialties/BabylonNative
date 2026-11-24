@@ -405,7 +405,7 @@ namespace Babylon
             m_sessionState->ActiveViewConfigurations.clear();
             m_sessionState->ViewConfigurationStartViewIdx.clear();
             m_sessionState->TextureToViewConfigurationMap.clear();
-            m_sessionState->ScheduleFrameCallbacks.clear();
+            m_sessionState->ScheduleFrameCallbacks.ClearPending();
             m_sessionState->CreateRenderTexture.Reset();
             m_sessionState->DestroyRenderTexture.Reset();
 
@@ -450,7 +450,7 @@ namespace Babylon
             // Queue callbacks even while a frame is in progress. WebXR render
             // loops request the next frame from inside the current frame
             // callback; starting it immediately races BeginFrame/EndFrame.
-            m_sessionState->ScheduleFrameCallbacks.emplace_back(std::move(callback));
+            m_sessionState->ScheduleFrameCallbacks.Enqueue(std::move(callback));
 
             if (m_sessionState->FrameScheduled)
             {
@@ -466,9 +466,9 @@ namespace Babylon
 
             XrTrace("SchedulePendingFrame scheduled=%d callbacks=%zu",
                 m_sessionState->FrameScheduled ? 1 : 0,
-                m_sessionState->ScheduleFrameCallbacks.size());
+                m_sessionState->ScheduleFrameCallbacks.PendingCount());
 
-            if (m_sessionState->FrameScheduled || m_sessionState->ScheduleFrameCallbacks.empty())
+            if (m_sessionState->FrameScheduled || m_sessionState->ScheduleFrameCallbacks.PendingCount() == 0)
             {
                 return;
             }
@@ -506,11 +506,7 @@ namespace Babylon
 
                     {
                         arcana::trace_region scheduleRegion{"NativeXR::ScheduleFrame invoke JS callbacks"};
-                        auto callbacks{std::move(m_sessionState->ScheduleFrameCallbacks)};
-                        for (auto& callback : callbacks)
-                        {
-                            callback(m_sessionState->Frame);
-                        }
+                        m_sessionState->ScheduleFrameCallbacks.Dispatch(m_sessionState->Frame);
                     }
 
                     EndUpdate();

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "XRGPUSubImage.h"
+#include "FrameCallbackQueue.h"
 
 #include <gsl/util>
 #include <optional>
@@ -163,7 +164,7 @@ namespace Babylon
                 std::shared_ptr<xr::System::Session::Frame> Frame{};
                 arcana::cancellation_source CancellationSource{};
                 bool FrameScheduled{false};
-                std::vector<std::function<void(const std::shared_ptr<const xr::System::Session::Frame>&)>> ScheduleFrameCallbacks{};
+                FrameCallbackQueue<std::function<void(const std::shared_ptr<const xr::System::Session::Frame>&)>> ScheduleFrameCallbacks{};
                 arcana::task<void, std::exception_ptr> FrameTask{arcana::task_from_result<std::exception_ptr>()};
             };
 

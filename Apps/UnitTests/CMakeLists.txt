@@ -60,6 +60,7 @@ set(SOURCES
     "Source/Tests.JavaScript.cpp"
     "Source/Tests.Embedding.AnimationFrameGate.cpp"
     "Source/Tests.NativeXr.Compositor.cpp"
+    "Source/Tests.NativeXr.FrameCallbackQueue.cpp"
     "Source/Tests.NativeXr.VideoClock.cpp"
     "Source/Tests.NativeXr.VideoPixels.cpp"
     "Source/Tests.NativeXr.ReferenceSpace.cpp"
