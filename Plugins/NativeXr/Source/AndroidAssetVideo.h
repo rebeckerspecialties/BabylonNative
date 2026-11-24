@@ -3,11 +3,13 @@
 #include <AndroidExtensions/Globals.h>
 #include <Babylon/Graphics/ExternalImagePixels.h>
 #include <android/bitmap.h>
+#include "VideoPlaybackClock.h"
 
 #include <algorithm>
 #include <array>
 #include <chrono>
 #include <condition_variable>
+#include <cstring>
 #include <exception>
 #include <memory>
 #include <mutex>
@@ -25,6 +27,8 @@ namespace Babylon
         jobject m_decoder{};
         jlong m_requestedTime{};
         bool m_compositorSurface{};
+        bool m_videoOnly{};
+        VideoPlaybackClock m_clock;
         std::vector<uint8_t> m_rgba;
         uint32_t m_width{}, m_height{};
         std::mutex m_frameMutex;
@@ -116,6 +120,14 @@ namespace Babylon
             m_rgba.clear();
             m_width = m_height = 0;
         }
+        int Position(JNIEnv* e)
+        {
+            if (m_videoOnly && !m_compositorSurface)
+                return m_clock.Position(std::chrono::steady_clock::now());
+            const auto time = e->CallIntMethod(m_player, Method(e, m_player, "getCurrentPosition", "()I"));
+            Check(e, "get video playback time");
+            return time;
+        }
         bool RequestStreamingFrame(JNIEnv* e)
         {
             if (m_compositorSurface)
@@ -134,8 +146,7 @@ namespace Babylon
                 m_decoder = e->NewGlobalRef(decoder);
                 m_worker = std::thread{[this] { DecodeLoop(); }};
             }
-            const auto time = e->CallIntMethod(m_player, Method(e, m_player, "getCurrentPosition", "()I"));
-            Check(e, "get video texture time");
+            const auto time = Position(e);
             std::lock_guard lock{m_frameMutex};
             if (m_decodeError)
                 std::rethrow_exception(m_decodeError);
@@ -270,12 +281,25 @@ namespace Babylon
                 e->CallVoidMethod(obj, Method(e, obj, "prepare", "()V"));
                 Check(e, "prepare video");
                 m_player = e->NewGlobalRef(obj);
+                auto tracks = static_cast<jobjectArray>(e->CallObjectMethod(obj, Method(e, obj, "getTrackInfo", "()[Landroid/media/MediaPlayer$TrackInfo;")));
+                Check(e, "read media tracks");
+                m_videoOnly = tracks && e->GetArrayLength(tracks) > 0;
+                for (jsize i = 0; m_videoOnly && i < e->GetArrayLength(tracks); ++i)
+                {
+                    auto track = e->GetObjectArrayElement(tracks, i);
+                    m_videoOnly = e->CallIntMethod(track, Method(e, track, "getTrackType", "()I")) != 2; // MEDIA_TRACK_TYPE_AUDIO
+                    Check(e, "read media track type");
+                    e->DeleteLocalRef(track);
+                }
+                m_clock.Reset(e->CallIntMethod(obj, Method(e, obj, "getDuration", "()I")));
+                Check(e, "read video duration");
                 m_path = path;
             }
             e->CallVoidMethod(m_player, Method(e, m_player, "setLooping", "(Z)V"), static_cast<jboolean>(loop));
             e->CallVoidMethod(m_player, Method(e, m_player, "setVolume", "(FF)V"), muted ? 0.f : 1.f, muted ? 0.f : 1.f);
             e->CallVoidMethod(m_player, Method(e, m_player, "start", "()V"));
             Check(e, "start video");
+            m_clock.Play(loop, std::chrono::steady_clock::now());
         }
         void SetSurface(void* surface) override
         {
@@ -283,10 +307,20 @@ namespace Babylon
             Locals l;
             if (m_player)
             {
+                const int position = m_videoOnly ? Position(l.e) : 0;
                 l.e->CallVoidMethod(m_player, Method(l.e, m_player, "setSurface", "(Landroid/view/Surface;)V"), static_cast<jobject>(surface));
                 Check(l.e, "connect video to OpenXR surface");
                 ResetFrames();
                 m_compositorSurface = surface != nullptr;
+                if (m_videoOnly)
+                {
+                    m_clock.SetPosition(position, std::chrono::steady_clock::now());
+                    if (surface)
+                    {
+                        l.e->CallVoidMethod(m_player, Method(l.e, m_player, "seekTo", "(I)V"), static_cast<jint>(position));
+                        Check(l.e, "synchronize silent video surface");
+                    }
+                }
             }
         }
         void Pause()
@@ -297,6 +331,7 @@ namespace Babylon
             {
                 l.e->CallVoidMethod(m_player, Method(l.e, m_player, "pause", "()V"));
                 Check(l.e, "pause");
+                m_clock.Pause(std::chrono::steady_clock::now());
             }
         }
         int Property(const char* name)
@@ -305,6 +340,7 @@ namespace Babylon
             Locals l;
             if (!m_player)
                 return 0;
+            if (std::strcmp(name, "getCurrentPosition") == 0) return Position(l.e);
             auto n = l.e->CallIntMethod(m_player, Method(l.e, m_player, name, "()I"));
             Check(l.e, name);
             return n;
@@ -348,7 +384,7 @@ namespace Babylon
             }
             if (!m_retriever)
                 m_retriever = e->NewGlobalRef(Open(e, "android/media/MediaMetadataRetriever", m_path));
-            const jlong us = 1000LL * e->CallIntMethod(m_player, Method(e, m_player, "getCurrentPosition", "()I"));
+            const jlong us = 1000LL * Position(e);
             auto bitmap = e->CallObjectMethod(m_retriever, Method(e, m_retriever, "getFrameAtTime", "(JI)Landroid/graphics/Bitmap;"), us, 3);
             Check(e, "decode current video frame");
             AndroidBitmapInfo info{};

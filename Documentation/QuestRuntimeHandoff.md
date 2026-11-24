@@ -110,5 +110,14 @@ Factotum uses a different V8 build (Intl, linked into its N-API library).
 One opening-menu major collection took 47 ms; the JS wait was 46 ms and the
 next headset reporting windows contained 12 stale frames. Other education
 stalls occurred without a contemporaneous JS collection. A common 4-second
-GC timer has not been established. Never replace its V8 adapter with the one
+GC timer has not been established. A separate 307 ms major GC in the settled
+menu blocked the waiting XR task for 300 ms; the headset then reported 29/60
+FPS with 7.9 ms app GPU time. Never replace its V8 adapter with the one
 from Samples when profiling; verify DT_NEEDED for the actual installed library.
+
+Silent texture movies have a second requirement: MediaPlayer on Quest Android
+does not advance a playback clock without an audio track or attached Surface.
+Drive the independent texture decoder from monotonic playing time in that case
+only. Preserve the MediaPlayer position for audio-bearing clips and direct
+compositor surfaces. Samples cases 109/110 run a real, silent 24 fps stereo
+remux at 72 Hz; verify actual left/right source content, not just currentTime.
