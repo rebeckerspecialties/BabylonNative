@@ -109,6 +109,11 @@ time after JS, and frame submission; `wait` belongs to the *next* frame.
 These are elapsed intervals, not CPU samples or GPU timestamps. On the Quad
 image with controller/HUD, three of five missed refreshes included 16–22 ms
 inside the JS task; the other two included 4.5–7.3 ms of JS queue delay.
+To correlate GC, enable `debug.babylon.gc=1` for a separate run, retain
+`BabylonNative` and `BabylonGC` logcat tags with threadtime timestamps, and run
+`node Apps/scripts/summarizeQuestFrameGaps.mjs LOG APP_PID`. Disable both flags
+and restart before timing. A 24/72 direct VP9 run had nine steady render-isolate
+collections but none overlapping its four late callbacks or dispatch waits.
 There was no decoder. Do not launch Factotum over a still-active Samples
 session for the education check: Android can resume Factotum and advance the
 tour while the display continues showing Samples. Test normal app handoff
