@@ -61,6 +61,7 @@ set(SOURCES
     "Source/Tests.Embedding.AnimationFrameGate.cpp"
     "Source/Tests.NativeXr.Compositor.cpp"
     "Source/Tests.NativeXr.VideoClock.cpp"
+    "Source/Tests.NativeXr.VideoPixels.cpp"
     "Source/Tests.NativeXr.ReferenceSpace.cpp"
     "Source/Tests.NativeXr.ProjectionExtent.cpp"
     "Source/Tests.NativeXr.ImageTracking.cpp")

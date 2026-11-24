@@ -14,6 +14,7 @@
 #include <memory>
 #include <mutex>
 #include <thread>
+#include "VideoYuv420.h"
 
 namespace Babylon
 {
@@ -222,31 +223,18 @@ namespace Babylon
             const bool hd = e->CallIntMethod(m_decoder, Method(e, m_decoder, "colorStandard", "()I")) == 1;
             const bool full = e->CallIntMethod(m_decoder, Method(e, m_decoder, "colorRange", "()I")) == 1;
             Check(e, "get video color format");
-            const int rv = hd ? (full ? 403 : 459) : (full ? 359 : 409);
-            const int gu = hd ? (full ? 48 : 55) : (full ? 88 : 100);
-            const int gv = hd ? (full ? 120 : 136) : (full ? 183 : 208);
-            const int bu = hd ? (full ? 475 : 541) : (full ? 454 : 516);
+            const auto matrix = VideoYuv420::ColorMatrix(hd, full);
             m_width = static_cast<uint32_t>(crop.right - crop.left);
             m_height = static_cast<uint32_t>(crop.bottom - crop.top);
             m_rgba.resize(size_t(m_width) * m_height * 4);
             uint8_t* dst = m_rgba.data();
-            auto channel = [](int v) { return static_cast<uint8_t>(std::clamp((v + 128) >> 8, 0, 255)); };
             for (int y = crop.top; y < crop.bottom; ++y)
             {
                 const auto* yRow = planes[0].data + size_t(y) * planes[0].row;
                 const auto* uRow = planes[1].data + size_t(y / 2) * planes[1].row;
                 const auto* vRow = planes[2].data + size_t(y / 2) * planes[2].row;
-                for (int x = crop.left; x < crop.right; ++x)
-                {
-                    int luma = yRow[x * planes[0].step];
-                    luma = full ? 256 * luma : 298 * (luma - 16);
-                    const int u = uRow[(x / 2) * planes[1].step] - 128;
-                    const int v = vRow[(x / 2) * planes[2].step] - 128;
-                    *dst++ = channel(luma + rv * v);
-                    *dst++ = channel(luma - gu * u - gv * v);
-                    *dst++ = channel(luma + bu * u);
-                    *dst++ = 255;
-                }
+                VideoYuv420::Row(dst, yRow, uRow, vRow, crop.left, crop.right, planes[0].step, planes[1].step, planes[2].step, matrix);
+                dst += size_t(m_width) * 4;
             }
             return true;
         }
