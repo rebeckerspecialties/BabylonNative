@@ -94,3 +94,21 @@ See the [patch inventory](FactotumQuestPatchInventory.md) for upstream equivalen
 Factotum's two-view startup log and a submitted OpenXR frame both occurred with the entire left eye black. Its sky disables color clears. On Babylon.js 9.10.1 the camera output-target path then omitted the requested depth/stencil clear for both eyes. Independent depth clears restored the textured room and UI to both halves of a Quest display capture, with the original color and swapchain settings. Use the physical display gate from [the application draft](https://github.com/rebeckerspecialties/webapp/pull/1341); a mock framebuffer bind or pooled menu OCR cannot detect this.
 
 For a background layer, the samples submit the image or film *before* the transparent controller projection. Native OpenXR honors the projection's `blendTextureSourceAlpha`; it must not reorder an application's layers. The [sample draft](https://github.com/rebeckerspecialties/babylonnative-webxr-samples/pull/1) has physical display controls 107/108: red in the left eye, blue in the right, panorama visible with source alpha, black around the markers without it. Stop other test apps before capture: an older focused Factotum frame can otherwise appear even when Samples logs successful submissions.
+
+## Android movie and JS hitches
+
+Quest 1, 960x1080 VP8, same 72 Hz layer test alternating texture and direct media twice:
+copying 4,147,200 decoded bytes into a new JS ArrayBuffer for every texture frame gave
+61.5/57.4 app FPS; lending the decoder front buffer synchronously gave 68.9/68.8.
+The V8 render-thread collections longer than 1 ms fell from 257/266 per test to 9/5.
+Direct media remained 71.1-71.5 FPS. The direct Android compositor Surface has
+no app pixel upload. The WebGPU texture still incurs MediaCodec YUV conversion
+and a wgpu texture write. Do not expose the native span or extend it past the call.
+Check real left/right pixels against the timed VP8 reference after changes.
+
+Factotum uses a different V8 build (Intl, linked into its N-API library).
+One opening-menu major collection took 47 ms; the JS wait was 46 ms and the
+next headset reporting windows contained 12 stale frames. Other education
+stalls occurred without a contemporaneous JS collection. A common 4-second
+GC timer has not been established. Never replace its V8 adapter with the one
+from Samples when profiling; verify DT_NEEDED for the actual installed library.

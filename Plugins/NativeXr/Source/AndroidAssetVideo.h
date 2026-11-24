@@ -1,6 +1,7 @@
 #pragma once
 
 #include <AndroidExtensions/Globals.h>
+#include <Babylon/Graphics/ExternalImagePixels.h>
 #include <android/bitmap.h>
 
 #include <algorithm>
@@ -16,7 +17,7 @@ namespace Babylon
 {
     // Java framework media services, not a bundled codec. AssetFileDescriptor
     // includes the offset and length within the uncompressed APK entry.
-    class AndroidAssetPlayer final : public xr::MediaSurfaceProducer
+    class AndroidAssetPlayer final : public xr::MediaSurfaceProducer, public Graphics::ExternalImagePixels
     {
         std::mutex m_mutex;
         jobject m_player{}, m_retriever{};
@@ -308,6 +309,16 @@ namespace Babylon
             Check(l.e, name);
             return n;
         }
+        bool ReadCurrentPixels(const Reader& reader) override
+        {
+            std::scoped_lock lock{m_mutex};
+            Locals l;
+            if (!m_player || !RequestStreamingFrame(l.e)) return false;
+            std::unique_lock frameLock{m_frameMutex};
+            if (m_front.empty()) return false; // Use the existing first-frame fallback.
+            reader(m_front, m_frontWidth, m_frontHeight);
+            return true;
+        }
         Napi::Object CopyFrame(Napi::Env env)
         {
             std::scoped_lock lock{m_mutex};
@@ -374,8 +385,10 @@ namespace Babylon
     {
     public:
         std::shared_ptr<AndroidAssetPlayer> Player{std::make_shared<AndroidAssetPlayer>()};
+        Graphics::ExternalImageRegistration Registration;
         explicit AndroidAssetVideo(const Napi::CallbackInfo& info)
             : Napi::ObjectWrap<AndroidAssetVideo>{info}
+            , Registration{static_cast<napi_env>(info.Env()), this, Player}
         {
         }
         static void Initialize(Napi::Env e)

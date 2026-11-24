@@ -8,6 +8,7 @@ if(NOT TARGET gtest_main)
 endif()
 
 set(SOURCES
+    "Source/Tests.ExternalImagePixels.cpp"
     "Source/Tests.AsyncBridge.cpp")
 
 add_executable(NativeWebGPUAsyncTests ${SOURCES})

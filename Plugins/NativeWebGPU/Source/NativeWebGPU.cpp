@@ -32,6 +32,9 @@
 #include <unordered_map>
 #include <vector>
 #include <utility>
+#ifdef __ANDROID__
+#include <Babylon/Graphics/ExternalImagePixels.h>
+#endif
 
 namespace Babylon::Plugins::NativeWebGPU
 {
@@ -1296,9 +1299,10 @@ namespace Babylon::Plugins::NativeWebGPU
             }
 
             auto descriptor = sourceDescriptor.As<Napi::Object>();
-            if (descriptor.Has("source") && descriptor.Get("source").IsObject())
+            auto source = descriptor.Get("source");
+            if (source.IsObject())
             {
-                return descriptor.Get("source").As<Napi::Object>();
+                return source.As<Napi::Object>();
             }
 
             return descriptor;
@@ -1315,9 +1319,8 @@ namespace Babylon::Plugins::NativeWebGPU
             bool FlipY{};
         };
 
-        std::optional<ExternalImageData> ExtractExternalImageData(const Napi::Value& sourceDescriptor)
+        std::optional<ExternalImageData> ExtractExternalImageData(const Napi::Value& sourceDescriptor, const std::optional<Napi::Object>& sourceObject)
         {
-            auto sourceObject = ExtractExternalImageSource(sourceDescriptor);
             if (!sourceObject.has_value() ||
                 !sourceObject->Has("_getNativeImageData") ||
                 !sourceObject->Get("_getNativeImageData").IsFunction())
@@ -3758,7 +3761,41 @@ namespace Babylon::Plugins::NativeWebGPU
                 const auto destinationJson = ToJson(info[1]);
                 const auto sizeJson = ToJson(info[2]);
 
-                auto imageData = ExtractExternalImageData(info[0]);
+                auto source = ExtractExternalImageSource(info[0]);
+#ifdef __ANDROID__
+                void* wrapper{};
+                if (source && napi_unwrap(info.Env(), *source, &wrapper) == napi_ok && wrapper)
+                {
+                    if (auto pixels = Graphics::ExternalImageRegistration::Find(static_cast<napi_env>(info.Env()), wrapper))
+                    {
+                        const auto descriptor = info[0].As<Napi::Object>();
+                        const auto origin = descriptor.Get("origin");
+                        const auto x = origin.IsUndefined() ? 0 : GetOriginCoordinate(origin, "x", 0);
+                        const auto y = origin.IsUndefined() ? 0 : GetOriginCoordinate(origin, "y", 1);
+                        const auto flip = GetBool(descriptor, "flipY", false);
+                        bool copied{};
+                        bool available;
+                        try
+                        {
+                            available = pixels->ReadCurrentPixels([&](std::span<const uint8_t> bytes, uint32_t width, uint32_t height) {
+                                copied = babylon_wgpu_native_queue_copy_external_image_rgba_to_texture(bytes.data(), bytes.size(), width, height,
+                                    x, y, flip, destinationJson.c_str(), sizeJson.c_str());
+                            });
+                        }
+                        catch (const std::exception& error)
+                        {
+                            throw Napi::Error::New(info.Env(), error.what());
+                        }
+                        if (available)
+                        {
+                            if (!copied) ThrowNativeWebGpuError(info.Env(), "Failed to copy decoded video pixels", "GPUQueue.copyExternalImageToTexture");
+                            else babylon_wgpu_mark_webgpu_draw_requested();
+                            return;
+                        }
+                    }
+                }
+#endif
+                auto imageData = ExtractExternalImageData(info[0], source);
                 if (imageData.has_value())
                 {
                     if (babylon_wgpu_native_queue_copy_external_image_rgba_to_texture(
