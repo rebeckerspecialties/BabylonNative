@@ -4756,6 +4756,12 @@ namespace Babylon::Plugins::NativeWebGPU
 
         auto callbacks = callbacksValue.As<Napi::Object>();
         auto pendingIds = pendingIdsValue.As<Napi::Array>();
+        const auto count = pendingIds.Length();
+        if (count == 0)
+        {
+            // Immersive sessions can tick the window without any window rAF callbacks.
+            return;
+        }
         state.Set(JS_ANIMATION_FRAME_ACTIVE_CALLBACKS_NAME, callbacks);
         state.Set(JS_ANIMATION_FRAME_CALLBACKS_NAME, Napi::Object::New(env));
         state.Set(JS_ANIMATION_FRAME_PENDING_IDS_NAME, Napi::Array::New(env));
@@ -4779,7 +4785,7 @@ namespace Babylon::Plugins::NativeWebGPU
 
         try
         {
-            for (uint32_t index = 0; index < pendingIds.Length(); ++index)
+            for (uint32_t index = 0; index < count; ++index)
             {
                 const auto id = pendingIds.Get(index).As<Napi::Number>().Uint32Value();
                 auto callback = callbacks.Get(id);

@@ -153,6 +153,14 @@ TEST(NativeWebGPUAsyncBridge, AnimationFrameCancellationAndNestingMatchBrowserSe
     runtime.Dispatch([&completionPromise, completionFlag](Napi::Env env) {
         Babylon::Polyfills::Window::Initialize(env);
         Babylon::Plugins::NativeWebGPU::Initialize(env);
+        auto state = env.Global().Get("__babylonNativeWebGpuAnimationFrameState").As<Napi::Object>();
+        auto pending = state.Get("pendingIds");
+        auto active = state.Get("activeCallbacks");
+        auto callbacks = state.Get("callbacks");
+        Babylon::Plugins::NativeWebGPU::TickAnimationFrame(env);
+        EXPECT_TRUE(pending.StrictEquals(state.Get("pendingIds")));
+        EXPECT_TRUE(active.StrictEquals(state.Get("activeCallbacks")));
+        EXPECT_TRUE(callbacks.StrictEquals(state.Get("callbacks")));
         env.Global().Set("__nativeWebGpuTestDone", Napi::Function::New(env, [&completionPromise, completionFlag](const Napi::CallbackInfo& info) {
             const bool success = info.Length() > 0 && info[0].IsBoolean() && info[0].As<Napi::Boolean>().Value();
             const std::string details = info.Length() > 1 && info[1].IsString() ? info[1].As<Napi::String>().Utf8Value() : std::string{};
