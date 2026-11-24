@@ -120,7 +120,8 @@ To correlate GC, enable `debug.babylon.gc=1` for a separate run, retain
 `node Apps/scripts/summarizeQuestFrameGaps.mjs LOG APP_PID`. Disable both flags
 and restart before timing. A 24/72 direct VP9 run had nine steady render-isolate
 collections but none overlapping its four late callbacks or dispatch waits.
-There was no decoder. Do not launch Factotum over a still-active Samples
+The decoder wrote to the compositor Surface; there were zero app movie uploads.
+Do not launch Factotum over a still-active Samples
 session for the education check: Android can resume Factotum and advance the
 tour while the display continues showing Samples. Test normal app handoff
 separately from each app's isolated performance.
