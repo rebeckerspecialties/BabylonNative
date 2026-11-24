@@ -28,6 +28,7 @@ namespace Babylon
         uint32_t TextureUsage() const;
         double ScaleFactor() const { return m_scaleFactor; }
         double Foveation() const { return m_foveation; }
+        bool BlendsSourceAlpha() const { return m_blendTextureSourceAlpha; }
         xr::Pose DeltaPose() const;
 
     private:
@@ -40,6 +41,7 @@ namespace Babylon
         double m_scaleFactor{1.0};
         double m_foveation{};
         bool m_ignoreDepthValues{};
+        bool m_blendTextureSourceAlpha{true};
 
         Plugins::XRSession& GetSession() const;
 
@@ -47,6 +49,8 @@ namespace Babylon
         Napi::Value GetTextureHeight(const Napi::CallbackInfo& info);
         Napi::Value GetTextureArrayLength(const Napi::CallbackInfo& info);
         Napi::Value GetIgnoreDepthValues(const Napi::CallbackInfo& info);
+        Napi::Value GetBlendTextureSourceAlpha(const Napi::CallbackInfo& info);
+        void SetBlendTextureSourceAlpha(const Napi::CallbackInfo&, const Napi::Value& value);
         Napi::Value GetLayout(const Napi::CallbackInfo& info);
         Napi::Value GetFixedFoveation(const Napi::CallbackInfo& info);
         void SetFixedFoveation(const Napi::CallbackInfo& info, const Napi::Value& value);

@@ -32,7 +32,7 @@ namespace xr
         std::mutex m_mutex;
         std::unordered_map<uint64_t, ImageChain> m_chains;
         uint64_t m_next{1};
-        std::vector<LayerPlacement> m_order{LayerPlacement{}};
+        std::vector<LayerPlacement> m_order{LayerPlacement::Projection(false)};
         std::vector<Header> m_storage;
         std::vector<const XrCompositionLayerBaseHeader*> m_headers;
 
@@ -145,7 +145,7 @@ namespace xr
             m_chains.clear();
         }
         bool Finish(XrSession session, XrSpace space, XrSpace viewerSpace, XrFrameEndInfo& end,
-            const XrCompositionLayerBaseHeader* projection, bool render, bool equirect2, uint32_t maxLayers)
+            XrCompositionLayerProjection* projection, bool render, bool equirect2, uint32_t maxLayers)
         {
             std::scoped_lock lock{m_mutex};
             for (auto& [_, chain] : m_chains)
@@ -165,7 +165,8 @@ namespace xr
                 {
                     if (projection)
                     {
-                        m_headers.push_back(projection);
+                        projection->layerFlags = p.BlendAlpha ? XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT : 0;
+                        m_headers.push_back(reinterpret_cast<const XrCompositionLayerBaseHeader*>(projection));
                         submittedProjection = true;
                     }
                     continue;

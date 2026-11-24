@@ -15,6 +15,10 @@ async function runProjectionRotation({ layersFeature = true, replacementScale = 
         const init = { colorFormat: binding.getPreferredColorFormat(), depthStencilFormat: "depth24plus",
             textureUsage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC };
         const layers = [binding.createProjectionLayer(init), binding.createProjectionLayer({ ...init, scaleFactor: replacementScale })];
+        check(layers.every(layer => layer.blendTextureSourceAlpha === true), "projection layers must blend source alpha by default");
+        layers[0].blendTextureSourceAlpha = 0;
+        check(layers[0].blendTextureSourceAlpha === false && layers[1].blendTextureSourceAlpha === true, "projection alpha state must be per-layer");
+        layers[0].blendTextureSourceAlpha = true;
         const fixed = layers[0].fixedFoveation;
         check(fixed === null || typeof fixed === "number", "fixedFoveation must report support explicitly");
         if (fixed === null) {
