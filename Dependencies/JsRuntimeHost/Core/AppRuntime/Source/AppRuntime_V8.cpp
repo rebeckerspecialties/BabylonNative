@@ -12,6 +12,12 @@
 #include <memory>
 #include <optional>
 #include <stdexcept>
+#ifdef __ANDROID__
+#include <android/log.h>
+#include <sys/system_properties.h>
+#include <chrono>
+#include <string_view>
+#endif
 
 #ifdef JSRUNTIMEHOST_EMBED_V8_SNAPSHOT
 #include "AndroidV8Snapshot.h"
@@ -89,6 +95,21 @@ namespace Babylon
         platform.RegisterHost(isolate, *this, GetDelayedTaskScheduler());
         v8::Isolate::Initialize(isolate, create_params);
 
+#ifdef __ANDROID__
+        // Read once per isolate. Ordinary runs install no callbacks.
+        char traceGc[PROP_VALUE_MAX]{};
+        if (__system_property_get("debug.babylon.gc", traceGc) && std::string_view{traceGc} == "1")
+        {
+            static thread_local std::chrono::steady_clock::time_point gcStart;
+            isolate->AddGCPrologueCallback([](v8::Isolate*, v8::GCType, v8::GCCallbackFlags) {
+                gcStart = std::chrono::steady_clock::now();
+            });
+            isolate->AddGCEpilogueCallback([](v8::Isolate*, v8::GCType type, v8::GCCallbackFlags) {
+                const auto us = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - gcStart).count();
+                __android_log_print(ANDROID_LOG_INFO, "BabylonGC", "type=%d us=%lld", int(type), static_cast<long long>(us));
+            });
+        }
+#endif
         {
             v8::Isolate::Scope isolate_scope{isolate};
             v8::HandleScope isolate_handle_scope{isolate};
