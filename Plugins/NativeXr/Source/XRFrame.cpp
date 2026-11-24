@@ -195,12 +195,15 @@ namespace Babylon
                 return m_jsXRViewerPose.Value();
             }
             auto* referenceSpace = XRReferenceSpace::Unwrap(space);
+            std::optional<xr::Pose> inverse;
+            if (referenceSpace && (referenceSpace->GetTransform() || referenceSpace->IsViewer()))
+                inverse = InvertPose(referenceSpace->OriginInNativeFrame(ViewerOrigin()));
             m_jsXRViewerPose = Napi::Persistent(XRViewerPose::New(info));
             m_viewerPoseSpace = Napi::Persistent(space);
             XRViewerPose::Unwrap(m_jsXRViewerPose.Value())->Update(
                 info,
                 m_frame,
-                referenceSpace == nullptr ? nullptr : referenceSpace->GetTransform());
+                inverse);
 
             return m_jsXRViewerPose.Value();
         }
@@ -215,47 +218,60 @@ namespace Babylon
                 error.ThrowAsJavaScriptException();
                 return env.Undefined();
             }
-            const auto referenceType = env.Global().Get("XRReferenceSpace").As<Napi::Function>();
-            const auto locate = [&](const Napi::Value& value) -> std::optional<xr::Pose> {
-                if (value.IsExternal())
-                {
-                    // Do not dereference an opaque space retained from a disconnected source.
-                    const auto* address = value.As<Napi::External<void>>().Data();
-                    for (const auto& source : m_frame->InputSources)
-                    {
-                        if (!source.TrackedThisFrame)
-                        {
-                            continue;
-                        }
-                        if (address == &source.AimSpace) return source.AimSpace.Pose;
-                        if (address == &source.GripSpace) return source.GripSpace.Pose;
-                        if (source.JointsTrackedThisFrame)
-                        {
-                            for (const auto& joint : source.HandJoints)
-                            {
-                                if (address == &joint && joint.PoseTracked) return joint.Pose;
-                            }
-                        }
-                    }
-                    if (m_frame->EyeTrackerSpace && address == &*m_frame->EyeTrackerSpace) return m_frame->EyeTrackerSpace->Pose;
-                    return std::nullopt;
-                }
-                if (value.IsObject() && value.As<Napi::Object>().InstanceOf(referenceType))
-                {
-                    return XRReferenceSpace::Unwrap(value.As<Napi::Object>())->GetPoseInNativeSpace({});
-                }
-                Napi::TypeError::New(env, "XRFrame.getPose expects two XR spaces.").ThrowAsJavaScriptException();
-                return std::nullopt;
-            };
-            const auto space = locate(info[0]);
+            const auto space = LocateSpace(info[0]);
             if (env.IsExceptionPending()) return env.Undefined();
-            const auto base = locate(info[1]);
+            const auto base = LocateSpace(info[1]);
             if (env.IsExceptionPending()) return env.Undefined();
             if (!space || !base) return env.Null();
             auto result = XRPose::New(info);
             XRPose::Unwrap(result)->Update(info, ComposePoses(InvertPose(*base), *space));
             result.Set("emulatedPosition", !m_frame->IsTracking);
             return result;
+        }
+
+        xr::Pose XRFrame::ViewerOrigin() const
+        {
+            if (m_frame->ViewerSpace)
+                return m_frame->ViewerSpace->Pose;
+            return m_frame->Views.empty() ? xr::Pose{} : m_frame->Views.front().Space.Pose;
+        }
+
+        std::optional<xr::Pose> XRFrame::LocateSpace(Napi::Value value) const
+        {
+            const auto env = value.Env();
+            if (value.IsExternal())
+            {
+                // Do not dereference an opaque space retained from a disconnected source.
+                const auto* address = value.As<Napi::External<void>>().Data();
+                for (const auto& source : m_frame->InputSources)
+                {
+                    if (!source.TrackedThisFrame)
+                    {
+                        continue;
+                    }
+                    if (address == &source.AimSpace)
+                        return source.AimSpace.Pose;
+                    if (address == &source.GripSpace)
+                        return source.GripSpace.Pose;
+                    if (source.JointsTrackedThisFrame)
+                    {
+                        for (const auto& joint : source.HandJoints)
+                        {
+                            if (address == &joint && joint.PoseTracked)
+                                return joint.Pose;
+                        }
+                    }
+                }
+                if (m_frame->EyeTrackerSpace && address == &*m_frame->EyeTrackerSpace)
+                    return m_frame->EyeTrackerSpace->Pose;
+                return std::nullopt;
+            }
+            if (value.IsObject() && value.As<Napi::Object>().InstanceOf(env.Global().Get("XRReferenceSpace").As<Napi::Function>()))
+            {
+                return XRReferenceSpace::Unwrap(value.As<Napi::Object>())->OriginInNativeFrame(ViewerOrigin());
+            }
+            Napi::TypeError::New(env, "Expected an XR space.").ThrowAsJavaScriptException();
+            return std::nullopt;
         }
 
         Napi::Value XRFrame::GetPoseData(const Napi::CallbackInfo& info)
@@ -328,6 +344,12 @@ namespace Babylon
 
         Napi::Value XRFrame::GetHitTestResults(const Napi::CallbackInfo& info)
         {
+            if (!m_frame || !m_poseAccess)
+            {
+                auto error = Napi::Error::New(info.Env(), "Hit testing requires an active XR frame.");
+                error.Value().Set("name", "InvalidStateError");
+                throw error;
+            }
             XRHitTestSource* hitTestSource = XRHitTestSource::Unwrap(info[0].As<Napi::Object>());
             XRRay* offsetRay = hitTestSource->OffsetRay();
             xr::Ray nativeRay{};
@@ -340,7 +362,14 @@ namespace Babylon
                 nativeRay = { {0, 0, 0}, {0, 0, -1} };
             }
 
-            // Get the native results
+            const auto origin = LocateSpace(hitTestSource->Space());
+            if (info.Env().IsExceptionPending()) return info.Env().Undefined();
+            if (!origin || m_frame->Views.empty()) return Napi::Array::New(info.Env());
+            // The ARKit and ARCore backends accept first-view-relative rays.
+            const auto fromSource = ComposePoses(InvertPose(m_frame->Views.front().Space.Pose), *origin);
+            nativeRay.Origin = ComposePoses(fromSource, xr::Pose{nativeRay.Origin, {}}).Position;
+            nativeRay.Direction = RotatePoseVector(fromSource.Orientation, nativeRay.Direction);
+
             std::vector<xr::HitResult> nativeHitResults{};
             m_frame->GetHitTestResults(nativeHitResults, nativeRay, hitTestSource->GetEntityTypes());
 

@@ -67,6 +67,8 @@ namespace Babylon
             }
 
             Napi::Value GetHitTestResults(const Napi::CallbackInfo& info);
+            std::optional<xr::Pose> LocateSpace(Napi::Value value) const;
+            xr::Pose ViewerOrigin() const;
             Napi::Value CreateAnchor(const Napi::CallbackInfo& info);
             Napi::Value GetTrackedAnchors(const Napi::CallbackInfo& info);
             void PromotePendingAnchors();
