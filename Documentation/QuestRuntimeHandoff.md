@@ -101,6 +101,19 @@ For a background layer, the samples submit the image or film *before* the transp
 
 ## Android movie and JS hitches
 
+For a separate timing diagnosis, set `adb shell setprop debug.babylon.xr_timing 1`
+before creating the session, capture ordinary logcat, then set the property to
+`0` and restart before qualification. `XR predicted gap` splits the previous
+frame into eye preparation, JS queue delay, callback (including native calls),
+time after JS, and frame submission; `wait` belongs to the *next* frame.
+These are elapsed intervals, not CPU samples or GPU timestamps. On the Quad
+image with controller/HUD, three of five missed refreshes included 16–22 ms
+inside the JS task; the other two included 4.5–7.3 ms of JS queue delay.
+There was no decoder. Do not launch Factotum over a still-active Samples
+session for the education check: Android can resume Factotum and advance the
+tour while the display continues showing Samples. Test normal app handoff
+separately from each app's isolated performance.
+
 On Quest 1 the V8 sampler attributed 19.6 MB/25 s to the stereo projection clear
 callback and 9.7 MB to its caller; separate timing runs used no sampler. Render-pass
 and command-encoder methods belong on the receiver's prototype, not each instance.

@@ -425,6 +425,14 @@ namespace xr
                 Mesh& GetMeshByID(Mesh::Identifier) const;
                 ImageTrackingResult& GetImageTrackingResultByID(ImageTrackingResult::Identifier) const;
                 void Render();
+#if defined(__ANDROID__) && defined(BABYLON_NATIVE_XR_OPENXR)
+                struct CallbackTiming
+                {
+                    std::chrono::steady_clock::time_point Started{}, Finished{};
+                };
+                // Only set during an opt-in Android frame-pacing diagnostic.
+                CallbackTiming* Timing{};
+#endif
             private:
                 struct Impl;
                 std::unique_ptr<Impl> m_impl{};

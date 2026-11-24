@@ -13,6 +13,7 @@
 #include <openxr/openxr.h>
 #include <openxr/openxr_platform.h>
 #include <android/log.h>
+#include <sys/system_properties.h>
 #include "CompositionLayers.h"
 #include "PassthroughLayer.h"
 #include "SpaceWarpSwapchains.h"
@@ -62,6 +63,45 @@ namespace xr
                 return std::strcmp(extension.extensionName, name) == 0;
             });
         }
+
+        struct FrameTimingProbe
+        {
+            using Clock = std::chrono::steady_clock;
+            Clock::time_point WaitReturned{}, Prepared{}, EndStarted{}, EndReturned{};
+            System::Session::Frame::CallbackTiming Callback{};
+            XrTime DisplayTime{};
+            unsigned Frames{}, Logged{};
+
+            static std::optional<FrameTimingProbe> Create()
+            {
+                char value[PROP_VALUE_MAX]{};
+                __system_property_get("debug.babylon.xr_timing", value);
+                if (std::strcmp(value, "1") == 0) return FrameTimingProbe{};
+                return std::nullopt;
+            }
+
+            void AfterWait(Clock::time_point entered, const XrFrameState& frame)
+            {
+                const auto now = Clock::now();
+                const auto delta = frame.predictedDisplayTime - DisplayTime;
+                if (++Frames > 150 && frame.predictedDisplayPeriod > 0 && delta > frame.predictedDisplayPeriod * 3 / 2 &&
+                    EndReturned >= EndStarted && EndStarted >= Prepared && Prepared >= WaitReturned && Logged < 24)
+                {
+                    auto ms = [](auto duration) { return std::chrono::duration<double, std::milli>(duration).count(); };
+                    __android_log_print(ANDROID_LOG_INFO, "BabylonNative",
+                        "XR predicted gap frame=%u delta=%.2fms prevPrepare=%.2f prevApp=%.2f prevEnd=%.2f hostGap=%.2f wait=%.2f jsQueue=%.2f jsWork=%.2f afterJs=%.2f",
+                        Frames, static_cast<double>(delta) / 1e6, ms(Prepared-WaitReturned), ms(EndStarted-Prepared),
+                        ms(EndReturned - EndStarted), ms(entered - EndReturned), ms(now - entered),
+                        Callback.Started >= Prepared ? ms(Callback.Started - Prepared) : -1.,
+                        Callback.Finished >= Callback.Started && Callback.Started >= Prepared ? ms(Callback.Finished - Callback.Started) : -1.,
+                        Callback.Finished >= Prepared ? ms(EndStarted - Callback.Finished) : -1.);
+                    ++Logged;
+                }
+                DisplayTime = frame.predictedDisplayTime;
+                WaitReturned = now;
+                Callback = {};
+            }
+        };
 
         Pose ToPose(const XrPosef& pose)
         {
@@ -938,7 +978,9 @@ namespace xr
             }
 
             auto waitInfo = MakeXr<XrFrameWaitInfo>(XR_TYPE_FRAME_WAIT_INFO);
+            const auto entered = Timing ? FrameTimingProbe::Clock::now() : FrameTimingProbe::Clock::time_point{};
             CheckXr(xrWaitFrame(Session, &waitInfo, &FrameState), "xrWaitFrame");
+            if (Timing) Timing->AfterWait(entered, FrameState);
             auto beginInfo = MakeXr<XrFrameBeginInfo>(XR_TYPE_FRAME_BEGIN_INFO);
             CheckXr(xrBeginFrame(Session, &beginInfo), "xrBeginFrame");
             FrameBegun = true;
@@ -1049,6 +1091,7 @@ namespace xr
                 activeView.RequiresAppClear = true;
             }
 
+            if (Timing) Timing->Prepared = FrameTimingProbe::Clock::now();
             return std::make_unique<Session::Frame>(*this);
         }
 
@@ -1061,6 +1104,7 @@ namespace xr
 
             // xrEndFrame consumes these descriptors synchronously. Retain capacity
             // across submissions, but never retain a previous frame's next chain.
+            if (Timing) Timing->EndStarted = FrameTimingProbe::Clock::now();
             auto& projectionViews = ProjectionViews;
             auto& warpViews = WarpViews;
             projectionViews.clear();
@@ -1145,6 +1189,7 @@ namespace xr
             }
 #endif
             FrameBegun = false;
+            if (Timing) Timing->EndReturned = FrameTimingProbe::Clock::now();
         }
 
         void RequestEndSession()
@@ -1164,6 +1209,7 @@ namespace xr
         std::optional<Space> HeadPose;
         XrSessionState SessionState{XR_SESSION_STATE_UNKNOWN};
         XrFrameState FrameState{MakeXr<XrFrameState>(XR_TYPE_FRAME_STATE)};
+        std::optional<FrameTimingProbe> Timing{FrameTimingProbe::Create()};
         std::vector<XrViewConfigurationView> ViewConfigurationViews{};
         std::vector<ViewSwapchain> ViewSwapchains{};
         CompositionLayers Layers;
@@ -1480,6 +1526,7 @@ namespace xr
         , m_impl{std::make_unique<System::Session::Frame::Impl>(sessionImpl)}
     {
         timespec display{}, now{};
+        if (sessionImpl.Timing) Timing = &sessionImpl.Timing->Callback;
         if (sessionImpl.System.ToMonotonicTime &&
             XR_SUCCEEDED(sessionImpl.System.ToMonotonicTime(sessionImpl.System.Instance, sessionImpl.FrameState.predictedDisplayTime, &display)) &&
             clock_gettime(CLOCK_MONOTONIC, &now) == 0)

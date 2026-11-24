@@ -502,6 +502,10 @@ namespace Babylon
 #endif
 
                 arcana::make_task(m_runtimeScheduler, m_sessionState->CancellationSource, [this, frameScope{std::make_shared<Graphics::FrameCompletionScope>(m_sessionState->GraphicsContext.AcquireFrameCompletionScope())}, thisRef{shared_from_this()}]() {
+#if defined(__ANDROID__) && defined(BABYLON_NATIVE_XR_OPENXR)
+                    auto* timing = m_sessionState->Frame->Timing;
+                    if (timing) timing->Started = std::chrono::steady_clock::now();
+#endif
                     BeginUpdate();
 
                     {
@@ -510,6 +514,9 @@ namespace Babylon
                     }
 
                     EndUpdate();
+#if defined(__ANDROID__) && defined(BABYLON_NATIVE_XR_OPENXR)
+                    if (timing) timing->Finished = std::chrono::steady_clock::now();
+#endif
                 }).then(arcana::inline_scheduler, m_sessionState->CancellationSource, [this, thisRef{shared_from_this()}](const arcana::expected<void, std::exception_ptr>& result) {
                       if (!m_sessionState->CancellationSource.cancelled() && result.has_error())
                       {
