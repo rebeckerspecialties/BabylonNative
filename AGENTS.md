@@ -1,9 +1,8 @@
 # BabylonNative wgpu Branch Notes
 
-For the Quest 1 Vulkan / Factotum / WebXR Samples stack, start with
-[the runtime handoff](Documentation/QuestRuntimeHandoff.md): exact source pins, APK qualification,
-the Home/passthrough isolation sequence, upstream N-API/Worker gaps and fork PR ownership.
-Keep simulator screenshots opt-in; validate the ARM64 artifacts on a physical headset.
+For physical Quest acceptance, use the [runtime handoff](Documentation/QuestRuntimeHandoff.md):
+verify both eyes and education playback separately from timed layer runs. Importing
+a decoder buffer is not a sampling test. Keep hosted simulator screenshots opt-in.
 
 This branch is a durable WebGPU/wgpu-native fork, not an upstream bgfx replacement. Keep changes mergeable with upstream BabylonNative and Babylon.js 9.x, and avoid adding JS-visible nonstandard hooks unless they are hidden behind browser-shaped APIs or validation-only internals.
 
@@ -353,7 +352,14 @@ manual launch command is:
 xcrun devicectl device process launch --device B5D4CA48-8949-525C-8E5D-4F661161BD9D --terminate-existing --console com.rebeckerspecialties.BabylonNative.Playground app:///Scripts/native_xr_babylon_portal_demo.js
 ```
 
-Current functional baseline as of 2026-05-20:
+On XS Max (iOS 18.7.10), launch `app:///Scripts/native_xr_portal_manual_validation.js`
+before the demo for real floor placement and normal status logs. The November build
+needed JSC symbol-key access for `createBindGroup` to read `entries[Symbol.iterator]`.
+The geometry-buffer run passed physical inspection but ran at 16-26 fps after placement;
+60 fps while waiting for a floor is not a post-placement result. Keep the shared pre-pass
+opt-in until placement, clipping, AO and moving-camera performance pass together.
+
+Original functional baseline (May 2026):
 
 - Physical iPhone 12 manual inspection showed camera passthrough, a world-fixed
   portal, floor-plane placement from the marker torus, the original blue/glowing

@@ -5,7 +5,7 @@ second graphics device, driver tracing, or camera diagnostics that restart the c
 
 ## Known-good inputs
 
-- Runtime [0c5901c9](https://github.com/rebeckerspecialties/BabylonNative/commit/0c5901c922cad767b456bc62622edb93a4b4eab7); [Samples source and commands](https://github.com/rebeckerspecialties/babylonnative-webxr-samples/blob/0ef2981/QUEST-VALIDATION.md); [clean ARM64 Samples build](https://github.com/rebeckerspecialties/babylonnative-webxr-samples/actions/runs/45291729947).
+- For current APKs use the BabylonNative gitlink in [Samples draft #1](https://github.com/rebeckerspecialties/babylonnative-webxr-samples/pull/1); do not substitute the latest checkout. The [earlier clean ARM64 artifact](https://github.com/rebeckerspecialties/babylonnative-webxr-samples/actions/runs/45291729947) predates stereo cube arrays and lazy XR snapshots.
 - Cube: mirror the *entire* source strip before slicing, not just the order or just the face pixels. The six decoded faces match the original transform exactly.
 - Android video: the direct XR media surface played the reference VP8; the old texture path displayed green stripes while the video clock and RGB changed. Read CPU-accessible MediaCodec output images; use plane position/limit, strides, crop and color range. Actual texture samples at 12.5 and 13.5 s matched both source eyes (<0.30/255 mean error, correlation >0.999). Separate final-display markers verified eye routing off/max, including swapped/duplicate controls.
 - Quest texture video: 1056 and 1062 XR callbacks per 15 seconds (default/max foveation); source clip is 30 fps. Warp validation is submission of paired motion/depth, not an optical synthetic-frame measurement. Do not transfer these rates to Factotum year two.
@@ -25,7 +25,11 @@ After reboot, the user confirmed Home and tracking recovered. After subsequent r
 
 ## Factotum acceptance
 
-**Factotum Release on Quest (failed).** [ARM64 artifact build](https://github.com/rebeckerspecialties/webapp/actions/runs/45293795788), SHA-256 `e80c7813d3f4ae21584e16bded62297e57b658f45f88ec3f9d93f2e59cd2d76e`, installed as `com.rebecker.factotum.xr.qualification`; no CAMERA permission. The cold app entered a focused Vulkan session at 1216x1344 per eye. It logged two rig views but the system capture showed black on the left and the scene and UI on the right. The local debug comparator reproduced this. Do not count this build as a two-eye opening or playback pass. Compare the per-eye attachment immediately before submission to the two-pass raw Samples control, then check for subsequent clears.
+**Education playback:** `native/ci/quest-education.py SERIAL PACKAGE OUT` passed on
+the installed `com.rebecker.factotum.openingcheck` build: May 1 2024, 77 cubes,
+five rings, tour7 narration and changing display pixels in both eyes (2.76%/2.74%).
+The earlier [qualification artifact](https://github.com/rebeckerspecialties/webapp/actions/runs/45293795788)
+failed with a black left eye. Qualify each new APK independently, including normal Back.
 
 **Factotum lifecycle (failed).** A normal Android Back from the active Release session resumed Home but also produced SIGSEGV. The separate debug comparator showed the same path: `NativeXr::Impl::SessionState` released N-API references through `napi_delete_reference` / `napi_env__::DequeueFinalizer` during graphics device destruction. The embedding destroys AppRuntime before the device; a frame/task can still retain XR state. Check teardown of a live session without an explicit JS end, including a queued RAF, vs explicit `session.end()` before exit. Release JS-owned references on their owning runtime while still alive, and verify repeated Back/re-entry without a native crash. This failure does not establish the cause of Home-only black passthrough.
 
@@ -96,6 +100,16 @@ Factotum's two-view startup log and a submitted OpenXR frame both occurred with 
 For a background layer, the samples submit the image or film *before* the transparent controller projection. Native OpenXR honors the projection's `blendTextureSourceAlpha`; it must not reorder an application's layers. The [sample draft](https://github.com/rebeckerspecialties/babylonnative-webxr-samples/pull/1) has physical display controls 107/108: red in the left eye, blue in the right, panorama visible with source alpha, black around the markers without it. Stop other test apps before capture: an older focused Factotum frame can otherwise appear even when Samples logs successful submissions.
 
 ## Android movie and JS hitches
+
+On Quest 1 the V8 sampler attributed 19.6 MB/25 s to the stereo projection clear
+callback and 9.7 MB to its caller; separate timing runs used no sampler. Render-pass
+and command-encoder methods belong on the receiver's prototype, not each instance.
+Keep native pose storage independent per frame; materialize JS matrices only on access.
+For 45-second texture/direct comparisons run Samples 111-114; read steady missed
+refreshes and longest clean interval, not just headline FPS. See the
+[decoder import probe](../Core/GraphicsWgpu/Tests/AndroidDecoderImport.md) before
+changing the production upload path. For iOS, ARKit currently grants immersive AR,
+not the stereo VR presentation required by the Quest applications.
 
 Quest 1, 960x1080 VP8, same 72 Hz layer test alternating texture and direct media twice:
 copying 4,147,200 decoded bytes into a new JS ArrayBuffer for every texture frame gave
