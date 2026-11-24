@@ -867,6 +867,41 @@ TEST(NativeWebGPUAsyncBridge, QueuedCompilesSnapshotDescriptorsAndKeepDevicesIso
     )JS");
 }
 
+TEST(NativeWebGPUAsyncBridge, CommandEncoderMethodsShareCodeButNotDeviceOwnership)
+{
+    RunNativeWebGpuAsyncScript(R"JS(
+        (async () => {
+            const adapter = await navigator.gpu.requestAdapter();
+            const devices = [await adapter.requestDevice(), await adapter.requestDevice()];
+            const buffers = devices.map(d => d.createBuffer({size: 16, usage: GPUBufferUsage.COPY_DST}));
+            const encoders = devices.map(d => d.createCommandEncoder());
+            for (const name of ["beginRenderPass", "beginComputePass", "resolveQuerySet", "clearBuffer",
+                "copyBufferToBuffer", "copyBufferToTexture", "copyTextureToBuffer", "copyTextureToTexture", "finish"]) {
+                if (typeof GPUCommandEncoder.prototype[name] !== "function" ||
+                    encoders.some(e => Object.hasOwn(e, name) || e[name] !== GPUCommandEncoder.prototype[name])) {
+                    throw Error("Unshared command encoder method: " + name);
+                }
+            }
+            for (const i of [1, 0]) {
+                const other = 1 - i;
+                devices.forEach(d => d.pushErrorScope("validation"));
+                encoders[other].clearBuffer.call(encoders[i], buffers[i]);
+                devices[i].queue.submit([encoders[other].finish.call(encoders[i])]);
+                if ((await Promise.all(devices.map(d => d.popErrorScope()))).some(Boolean)) throw Error("Wrong device on valid command");
+                devices.forEach(d => d.pushErrorScope("validation"));
+                const invalid = devices[i].createCommandEncoder();
+                invalid.clearBuffer(buffers[other]);
+                invalid.finish();
+                const error = await devices[i].popErrorScope();
+                if (!(error instanceof GPUValidationError) || !/different GPUDevice/.test(error.message) ||
+                    await devices[other].popErrorScope() !== null) throw Error("Wrong error scope on foreign resource");
+            }
+            devices.forEach(d => d.destroy());
+            __nativeWebGpuTestDone(true, "");
+        })().catch(e => __nativeWebGpuTestDone(false, String(e) + "\n" + (e.stack || "")));
+    )JS");
+}
+
 TEST(NativeWebGPUAsyncBridge, RenderPassMethodsAreSharedWithoutCapturingTheFirstDevice)
 {
     RunNativeWebGpuAsyncScript(R"JS(
