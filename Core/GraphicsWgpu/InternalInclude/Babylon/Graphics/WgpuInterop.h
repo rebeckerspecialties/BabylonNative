@@ -142,7 +142,7 @@ extern "C"
     void* babylon_wgpu_native_get_metal_device();
     // Borrowed queue owned by the active backend; native consumers must retain it.
     void* babylon_wgpu_native_get_metal_queue();
-    uint64_t babylon_wgpu_native_import_vulkan_texture(uint64_t native_image, uint32_t width, uint32_t height, int64_t vk_format, const char* descriptor_json);
+    uint64_t babylon_wgpu_native_import_vulkan_texture(uint64_t native_image, uint32_t width, uint32_t height, int64_t vk_format, const char* descriptor_json, uint64_t right_cube_image);
     bool babylon_wgpu_native_set_eye_density_map(uint64_t color, uint64_t map);
     uint64_t babylon_wgpu_native_import_openxr_data_texture(uint64_t native_image, uint32_t width, uint32_t height, int64_t vk_format, const char* descriptor_json);
     int64_t babylon_wgpu_native_openxr_vk_format(const char* webgpu_format);

@@ -14,17 +14,23 @@ namespace xr
     // present for many frames without reacquiring or uploading it.
     class CompositionLayers
     {
-        struct ImageChain
+        struct SwapchainImages
         {
             XrSwapchain Handle{};
+            uint32_t Index{};
+            std::vector<XrSwapchainImageVulkanKHR> Images;
+            bool Acquired{};
+        };
+        struct ImageChain : SwapchainImages
+        {
             LayerShape Shape{};
             LayerLayout Layout{};
-            uint32_t Width{}, Height{}, Eyes{}, Index{};
-            std::vector<XrSwapchainImageVulkanKHR> Images;
+            uint32_t Width{}, Height{}, Eyes{};
+            std::optional<SwapchainImages> RightCube;
             std::shared_ptr<MediaSurfaceProducer> Media;
             jobject Surface{};
             bool Attached{};
-            bool Acquired{}, Rendered{}, Retiring{};
+            bool Rendered{}, Retiring{};
         };
         using Header = std::variant<XrCompositionLayerQuad, XrCompositionLayerCylinderKHR,
             XrCompositionLayerEquirect2KHR, XrCompositionLayerEquirectKHR, XrCompositionLayerCubeKHR>;
@@ -86,40 +92,49 @@ namespace xr
             ci.usageFlags = XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT | XR_SWAPCHAIN_USAGE_SAMPLED_BIT;
             ci.width = width * (layout == LayerLayout::LeftRight ? 2 : 1);
             ci.height = height * (layout == LayerLayout::TopBottom ? 2 : 1);
-            ci.format = format; ci.arraySize = layout == LayerLayout::Array ? 2 : 1;
+            const bool stereoCube = shape == LayerShape::Cube && layout == LayerLayout::Array;
+            ci.format = format; ci.arraySize = layout == LayerLayout::Array && !stereoCube ? 2 : 1;
             ci.faceCount = shape == LayerShape::Cube ? 6 : 1;
             ci.mipCount = ci.sampleCount = 1;
-            CheckXr(xrCreateSwapchain(session, &ci, &chain.Handle), "xrCreateSwapchain(composition layer)");
+            auto createImages = [&](SwapchainImages& output) {
+                CheckXr(xrCreateSwapchain(session, &ci, &output.Handle), "xrCreateSwapchain(composition layer)");
+                uint32_t count{};
+                CheckXr(xrEnumerateSwapchainImages(output.Handle, 0, &count, nullptr), "enumerate layer image count");
+                output.Images.assign(count, MakeXr<XrSwapchainImageVulkanKHR>(XR_TYPE_SWAPCHAIN_IMAGE_VULKAN_KHR));
+                CheckXr(xrEnumerateSwapchainImages(output.Handle, count, &count,
+                    reinterpret_cast<XrSwapchainImageBaseHeader*>(output.Images.data())), "enumerate layer images");
+            };
             try
             {
-                uint32_t count{};
-                CheckXr(xrEnumerateSwapchainImages(chain.Handle, 0, &count, nullptr), "enumerate layer image count");
-                chain.Images.assign(count, MakeXr<XrSwapchainImageVulkanKHR>(XR_TYPE_SWAPCHAIN_IMAGE_VULKAN_KHR));
-                CheckXr(xrEnumerateSwapchainImages(chain.Handle, count, &count,
-                    reinterpret_cast<XrSwapchainImageBaseHeader*>(chain.Images.data())), "enumerate layer images");
+                createImages(chain);
+                if (stereoCube) createImages(chain.RightCube.emplace());
                 const auto id = m_next++;
                 m_chains.emplace(id, std::move(chain));
                 return id;
             }
-            catch (...) { xrDestroySwapchain(chain.Handle); throw; }
+            catch (...) { Destroy(chain); throw; }
         }
 
-        uint64_t Acquire(uint64_t id)
+        LayerImage Acquire(uint64_t id, int64_t format)
         {
             std::scoped_lock lock{m_mutex};
             auto& chain = m_chains.at(id);
             if (chain.Retiring) throw std::runtime_error{"Layer is destroyed"};
-            if (!chain.Acquired)
+            auto acquireImages = [](SwapchainImages& images)
             {
-                auto acquire = MakeXr<XrSwapchainImageAcquireInfo>(XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO);
-                CheckXr(xrAcquireSwapchainImage(chain.Handle, &acquire, &chain.Index), "acquire layer image");
-                auto wait = MakeXr<XrSwapchainImageWaitInfo>(XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO);
-                wait.timeout = XR_INFINITE_DURATION;
-                CheckXr(xrWaitSwapchainImage(chain.Handle, &wait), "wait for layer image");
-                chain.Acquired = true;
-                chain.Rendered = false;
-            }
-            return reinterpret_cast<uint64_t>(chain.Images.at(chain.Index).image);
+                if (!images.Acquired)
+                {
+                    auto acquire = MakeXr<XrSwapchainImageAcquireInfo>(XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO);
+                    CheckXr(xrAcquireSwapchainImage(images.Handle, &acquire, &images.Index), "acquire layer image");
+                    auto wait = MakeXr<XrSwapchainImageWaitInfo>(XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO);
+                    wait.timeout = XR_INFINITE_DURATION;
+                    CheckXr(xrWaitSwapchainImage(images.Handle, &wait), "wait for layer image");
+                    images.Acquired = true;
+                }
+                return reinterpret_cast<uint64_t>(images.Images.at(images.Index).image);
+            };
+            if (!chain.Acquired) chain.Rendered = false;
+            return {acquireImages(chain), format, chain.RightCube ? acquireImages(*chain.RightCube) : 0};
         }
 
         void MarkRendered(uint64_t id)
@@ -154,6 +169,11 @@ namespace xr
                 auto release = MakeXr<XrSwapchainImageReleaseInfo>(XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO);
                 CheckXr(xrReleaseSwapchainImage(chain.Handle, &release), "release layer image");
                 chain.Acquired = false;
+                if (chain.RightCube && chain.RightCube->Acquired)
+                {
+                    CheckXr(xrReleaseSwapchainImage(chain.RightCube->Handle, &release), "release right cube image");
+                    chain.RightCube->Acquired = false;
+                }
             }
             m_headers.clear();
             m_storage.clear();
@@ -220,7 +240,10 @@ namespace xr
                     }
                     case LayerShape::Cube: {
                         auto h = MakeXr<XrCompositionLayerCubeKHR>(XR_TYPE_COMPOSITION_LAYER_CUBE_KHR);
-                        h.orientation = pose.orientation; h.swapchain = c.Handle; h.imageArrayIndex = eye; append(h); break;
+                        h.orientation = pose.orientation;
+                        h.swapchain = eye == 1 && c.RightCube ? c.RightCube->Handle : c.Handle;
+                        h.imageArrayIndex = 0;
+                        append(h); break;
                     }
                     default: break;
                     }
@@ -249,7 +272,8 @@ namespace xr
         {
             if (chain.Attached) chain.Media->SetSurface(nullptr);
             if (chain.Surface) android::global::GetEnvForCurrentThread()->DeleteGlobalRef(chain.Surface);
-            xrDestroySwapchain(chain.Handle);
+            if (chain.RightCube && chain.RightCube->Handle) xrDestroySwapchain(chain.RightCube->Handle);
+            if (chain.Handle) xrDestroySwapchain(chain.Handle);
         }
     };
 }

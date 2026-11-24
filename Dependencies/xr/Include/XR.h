@@ -138,7 +138,7 @@ namespace xr
             return placement;
         }
     };
-    struct LayerImage { uint64_t Image; int64_t Format; };
+    struct LayerImage { uint64_t Image; int64_t Format; uint64_t RightCubeImage{}; };
     struct WarpImages
     {
         LayerImage Motion;

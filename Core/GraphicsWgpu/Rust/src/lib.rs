@@ -893,13 +893,14 @@ pub extern "C" fn babylon_wgpu_native_import_vulkan_texture(
     height: u32,
     vk_format: i64,
     descriptor_json: *const c_char,
+    right_cube_image: u64,
 ) -> u64 {
     run_with_active_backend("NativeWebGPU.importVulkanTexture", 0, |backend| {
         backend.import_vulkan_texture(
             native_image,
             width, height, vk_format,
             read_c_string(descriptor_json, "GPUTextureDescriptor")?,
-            false,
+            false, right_cube_image,
         )
     })
 }
@@ -940,7 +941,7 @@ pub extern "C" fn babylon_wgpu_native_import_openxr_data_texture(
 ) -> u64 {
     run_with_active_backend("NativeWebGPU.importOpenXRDataTexture", 0, |backend| {
         backend.import_vulkan_texture(native_image, width, height, vk_format,
-            read_c_string(descriptor_json, "GPUTextureDescriptor")?, true)
+            read_c_string(descriptor_json, "GPUTextureDescriptor")?, true, 0)
     })
 }
 
@@ -4828,6 +4829,7 @@ mod upstream_wgpu_native {
             width: u32, height: u32, vk_format: i64,
             descriptor_json: &str,
             data_attachment: bool,
+            right_cube_image: u64,
         ) -> Result<u64, String> {
             if native_image == 0 {
                 return Err("native Vulkan image handle was null".to_string());
@@ -4893,7 +4895,6 @@ mod upstream_wgpu_native {
                 memory_flags: wgpu::hal::MemoryFlags::empty(),
                 view_formats: view_formats.clone(),
             };
-            let raw_image = ash::vk::Image::from_raw(native_image);
             let output_format = match i32::try_from(vk_format).ok().map(ash::vk::Format::from_raw) {
                 Some(ash::vk::Format::R8G8B8A8_SRGB) => wgpu::TextureFormat::Rgba8UnormSrgb,
                 Some(ash::vk::Format::B8G8R8A8_SRGB) => wgpu::TextureFormat::Bgra8UnormSrgb,
@@ -4906,7 +4907,10 @@ mod upstream_wgpu_native {
             if width == 0 || height == 0 || size.depth_or_array_layers == 0 || dimension != wgpu::TextureDimension::D2 || sample_count != 1 || mip_level_count != 1 {
                 return Err("Expected a single-sampled two-dimensional OpenXR projection image".into());
             }
-            let extent = wgpu::Extent3d { width, height, depth_or_array_layers: size.depth_or_array_layers };
+            if right_cube_image != 0 && (data_attachment || width != height || size.depth_or_array_layers != 12 || native_image == right_cube_image) {
+                return Err("Stereo cube needs two distinct six-face color images".into());
+            }
+            let extent = wgpu::Extent3d { width, height, depth_or_array_layers: if right_cube_image != 0 { 6 } else { size.depth_or_array_layers } };
             // The OpenXR swapchain was created with sampled/color-attachment usage only.
             // A WebXR application requesting copy or storage needs its own application image.
             let external_usage = wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT;
@@ -4923,15 +4927,14 @@ mod upstream_wgpu_native {
                 usage: if resolve { wgpu::TextureUses::COLOR_TARGET | wgpu::TextureUses::RESOURCE } else { hal_descriptor.usage },
                 ..hal_descriptor
             };
-            let hal_texture = unsafe {
-                hal_device.texture_from_raw(
-                    raw_image,
+            // OpenXR owns the acquired images. The layer resolves before either is released.
+            let import = |image: u64| unsafe {
+                let hal_texture = hal_device.texture_from_raw(
+                    ash::vk::Image::from_raw(image),
                     &hal_descriptor,
                     Some(Box::new(|| {})),
                     wgpu::hal::vulkan::TextureMemory::External,
-                )
-            };
-            let texture = unsafe {
+                );
                 self.runtime
                     .device
                     .create_texture_from_hal::<wgpu::hal::api::Vulkan>(
@@ -4951,7 +4954,8 @@ mod upstream_wgpu_native {
                         wgpu::TextureUses::UNINITIALIZED,
                     )
             };
-
+            let texture = import(native_image);
+            let right_cube = (right_cube_image != 0).then(|| import(right_cube_image));
             let (texture, eye_target) = if resolve {
                 let device = &self.runtime.device;
                 let source = device.create_texture(&wgpu::TextureDescriptor {
@@ -4960,7 +4964,7 @@ mod upstream_wgpu_native {
                 });
                 let resolver = self.eye_resolvers.entry(output_format)
                     .or_insert_with(|| crate::xr_eye_resolve::Pipeline::new(device, output_format));
-                let target = resolver.target(device, &source, &texture);
+                let target = resolver.target(device, &source, &texture, right_cube.as_ref());
                 (source, Some(target))
             } else {
                 (texture, None)
@@ -5000,6 +5004,7 @@ mod upstream_wgpu_native {
             _width: u32, _height: u32, _vk_format: i64,
             _descriptor_json: &str,
             _data_attachment: bool,
+            _right_cube_image: u64,
         ) -> Result<u64, String> {
             Err("native Vulkan texture import is only available on Android".to_string())
         }

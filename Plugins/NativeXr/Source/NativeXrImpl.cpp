@@ -628,7 +628,7 @@ namespace Babylon
                     const auto colorTextureId = babylon_wgpu_native_import_vulkan_texture(
                         static_cast<uint64_t>(reinterpret_cast<uintptr_t>(view.ColorTexturePointer)),
                         view.SwapchainWidth, view.SwapchainHeight, view.SwapchainFormat,
-                        colorDescriptor.c_str());
+                        colorDescriptor.c_str(), 0);
                     viewConfig.DensityImage = view.DensityMapImage;
                     if (viewConfig.DensityImage && !babylon_wgpu_native_set_eye_density_map(colorTextureId, viewConfig.DensityImage))
                         throw std::runtime_error{"Could not attach the acquired projection density map: " + GetLastWgpuError()};
@@ -753,7 +753,7 @@ namespace Babylon
                 // A retained JS view must never reference an image that the runtime has reacquired.
                 // COPY_DST selects the app-owned render texture + ordered Vulkan resolve path.
                 const auto descriptor = MakeTextureDescriptorJson("XRCompositionLayer", width, height, slices, format.c_str(), usage | 2);
-                target.ColorTextureId = babylon_wgpu_native_import_vulkan_texture(image.Image, width, height, image.Format, descriptor.c_str());
+                target.ColorTextureId = babylon_wgpu_native_import_vulkan_texture(image.Image, width, height, image.Format, descriptor.c_str(), image.RightCubeImage);
                 if (!target.ColorTextureId) throw std::runtime_error{"Could not import OpenXR compositor image: " + GetLastWgpuError()};
                 target.JsColorTexture = Napi::Persistent(NativeWebGPU::CreateTextureFromNativeId(
                     m_env, target.ColorTextureId, "XRCompositionLayer", format.c_str(), width, height, slices, usage));

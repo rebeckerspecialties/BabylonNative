@@ -1368,7 +1368,7 @@ namespace xr
         if (!SupportsLayer(shape)) throw std::runtime_error{"Layer shape unavailable in this OpenXR runtime"};
         return m_impl->Layers.Create(m_impl->Session, shape, m_impl->ColorFormat, width, height, layout);
     }
-    LayerImage System::Session::AcquireLayer(uint64_t id) { return {m_impl->Layers.Acquire(id), m_impl->ColorFormat}; }
+    LayerImage System::Session::AcquireLayer(uint64_t id) { return m_impl->Layers.Acquire(id, m_impl->ColorFormat); }
     void System::Session::MarkLayerRendered(uint64_t id) { m_impl->Layers.MarkRendered(id); }
     void System::Session::RetireLayer(uint64_t id) { m_impl->Layers.Retire(id); }
     void System::Session::SetLayerOrder(std::vector<LayerPlacement> layers) { m_impl->Layers.SetOrder(std::move(layers)); }

@@ -48,6 +48,7 @@ impl Pipeline {
         device: &wgpu::Device,
         source: &wgpu::Texture,
         destination: &wgpu::Texture,
+        right_cube: Option<&wgpu::Texture>,
     ) -> Target {
         let layers = (0..source.depth_or_array_layers())
             .map(|index| {
@@ -66,9 +67,13 @@ impl Pipeline {
                         resource: wgpu::BindingResource::TextureView(&view),
                     }],
                 });
+                let (image, face) = match right_cube {
+                    Some(right) if index >= 6 => (right, index - 6),
+                    _ => (destination, index),
+                };
                 Layer {
                     binding,
-                    destination: destination.create_view(&desc),
+                    destination: image.create_view(&wgpu::TextureViewDescriptor { base_array_layer: face, ..desc }),
                 }
             })
             .collect();
