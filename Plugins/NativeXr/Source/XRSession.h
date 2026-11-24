@@ -97,7 +97,10 @@ namespace Babylon
             float m_depthNear{0.1f};
             float m_depthFar{1000.0f};
             bool m_webGPUFeatureEnabled{};
-            bool m_warpRequested{}, m_warpRequired{}, m_warpEnabled{};
+#if defined(__ANDROID__) && defined(BABYLON_NATIVE_XR_OPENXR)
+            bool m_warpRequested{}, m_warpRequired{};
+#endif
+            bool m_warpEnabled{};
             std::vector<std::string> m_enabledFeatures{};
 
             std::vector<std::pair<std::string, Napi::FunctionReference>> m_eventNamesAndCallbacks{};

@@ -676,7 +676,9 @@ namespace Babylon
                 }
 
                 const auto layers = update.Get("layers").As<Napi::Array>();
-                uint32_t headerCount{};
+#if defined(__ANDROID__) && defined(BABYLON_NATIVE_XR_OPENXR)
+                uint32_t headerCount = layers.Length();
+#endif
                 for (uint32_t i=0; i<layers.Length(); ++i)
                 {
                     const auto layerValue = layers.Get(i);
@@ -691,12 +693,11 @@ namespace Babylon
                         }
                         for (uint32_t j=0; j<i; ++j)
                             if (layerValue.StrictEquals(layers.Get(j))) throw Napi::TypeError::New(info.Env(),"Duplicate layer");
-                        headerCount += shaped->Eyes();
+                        headerCount += shaped->Eyes() - 1;
                         continue;
                     }
 #endif
                     if (projectionLayerCandidate) throw std::runtime_error{"Only one projection layer is supported."};
-                    ++headerCount;
                     projectionIndex = i;
                     if (!layerValue.IsObject() || !IsInstanceOfGlobalClass(layerValue.As<Napi::Object>(), "XRProjectionLayer"))
                     {
