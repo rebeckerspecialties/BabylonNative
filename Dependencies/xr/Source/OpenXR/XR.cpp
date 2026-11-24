@@ -1047,7 +1047,7 @@ namespace xr
             std::vector<XrCompositionLayerSpaceWarpInfoFB> warpViews;
             auto projectionLayer =
                 MakeXr<XrCompositionLayerProjection>(XR_TYPE_COMPOSITION_LAYER_PROJECTION);
-            const XrCompositionLayerBaseHeader* layerHeader{};
+            XrCompositionLayerProjection* projection{};
             if (renderLayer && FrameShouldRender)
             {
                 projectionViews.resize(
@@ -1077,7 +1077,7 @@ namespace xr
                 projectionLayer.space = AppSpace;
                 projectionLayer.viewCount = static_cast<uint32_t>(projectionViews.size());
                 projectionLayer.views = projectionViews.data();
-                layerHeader = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&projectionLayer);
+                projection = &projectionLayer;
             }
 
             for (auto& viewSwapchain : ViewSwapchains)
@@ -1103,7 +1103,7 @@ namespace xr
             auto endInfo = MakeXr<XrFrameEndInfo>(XR_TYPE_FRAME_END_INFO);
             endInfo.displayTime = FrameState.predictedDisplayTime;
             endInfo.environmentBlendMode = System.BlendMode;
-            const bool submittedProjection = Layers.Finish(Session, AppSpace, HeadSpace, endInfo, layerHeader, renderLayer && FrameShouldRender, System.Equirect2, System.MaxLayers);
+            const bool submittedProjection = Layers.Finish(Session, AppSpace, HeadSpace, endInfo, projection, renderLayer && FrameShouldRender, System.Equirect2, System.MaxLayers);
             if (submittedProjection && warpViews.size() == 2 && !LoggedWarpSubmission)
             {
                 __android_log_print(ANDROID_LOG_INFO, "BabylonNative", "Submitted stereo motion and depth to OpenXR compositor");

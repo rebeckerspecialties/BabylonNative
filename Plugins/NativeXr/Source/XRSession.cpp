@@ -1030,9 +1030,12 @@ namespace Babylon
                         {
                             if (shaped->Id()) order.push_back(shaped->Placement());
                         }
-                        else order.emplace_back();
+                        else if (m_activeProjectionLayer)
+                        {
+                            order.push_back(xr::LayerPlacement::Projection(m_activeProjectionLayer->BlendsSourceAlpha()));
+                        }
                     }
-                    if (!m_renderState.Get("baseLayer").IsNull() && layers.Length() == 0) order.emplace_back();
+                    if (!m_renderState.Get("baseLayer").IsNull() && layers.Length() == 0) order.push_back(xr::LayerPlacement::Projection(false));
                     platform->SetLayerOrder(std::move(order));
                 }
 #endif

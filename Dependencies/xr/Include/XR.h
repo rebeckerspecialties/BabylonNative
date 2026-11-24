@@ -131,6 +131,12 @@ namespace xr
         float Width{1}, Height{1}, Radius{2}, Angle{1}, Aspect{2}, Upper{1.5707963f}, Lower{-1.5707963f};
         bool BlendAlpha{true};
         bool ViewerRelative{};
+        static LayerPlacement Projection(bool blendAlpha)
+        {
+            LayerPlacement placement{};
+            placement.BlendAlpha = blendAlpha;
+            return placement;
+        }
     };
     struct LayerImage { uint64_t Image; int64_t Format; };
     struct WarpImages

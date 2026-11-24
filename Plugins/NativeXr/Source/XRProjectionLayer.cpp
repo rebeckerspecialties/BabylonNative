@@ -62,6 +62,7 @@ namespace Babylon
                 InstanceAccessor("textureHeight", &XRProjectionLayer::GetTextureHeight, nullptr),
                 InstanceAccessor("textureArrayLength", &XRProjectionLayer::GetTextureArrayLength, nullptr),
                 InstanceAccessor("ignoreDepthValues", &XRProjectionLayer::GetIgnoreDepthValues, nullptr),
+                InstanceAccessor("blendTextureSourceAlpha", &XRProjectionLayer::GetBlendTextureSourceAlpha, &XRProjectionLayer::SetBlendTextureSourceAlpha),
                 InstanceAccessor("layout", &XRProjectionLayer::GetLayout, nullptr),
                 InstanceAccessor("fixedFoveation", &XRProjectionLayer::GetFixedFoveation, &XRProjectionLayer::SetFixedFoveation),
                 InstanceAccessor("deltaPose", &XRProjectionLayer::GetDeltaPose, &XRProjectionLayer::SetDeltaPose),
@@ -105,6 +106,16 @@ namespace Babylon
         {
             m_ignoreDepthValues = init.Get("ignoreDepthValues").As<Napi::Boolean>().Value();
         }
+    }
+
+    Napi::Value XRProjectionLayer::GetBlendTextureSourceAlpha(const Napi::CallbackInfo& info)
+    {
+        return Napi::Boolean::New(info.Env(), m_blendTextureSourceAlpha);
+    }
+
+    void XRProjectionLayer::SetBlendTextureSourceAlpha(const Napi::CallbackInfo&, const Napi::Value& value)
+    {
+        m_blendTextureSourceAlpha = value.ToBoolean().Value();
     }
 
     bool XRProjectionLayer::BelongsTo(const Plugins::XRSession& session) const
