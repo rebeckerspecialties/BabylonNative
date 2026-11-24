@@ -1043,8 +1043,12 @@ namespace xr
                 return;
             }
 
-            std::vector<XrCompositionLayerProjectionView> projectionViews;
-            std::vector<XrCompositionLayerSpaceWarpInfoFB> warpViews;
+            // xrEndFrame consumes these descriptors synchronously. Retain capacity
+            // across submissions, but never retain a previous frame's next chain.
+            auto& projectionViews = ProjectionViews;
+            auto& warpViews = WarpViews;
+            projectionViews.clear();
+            warpViews.clear();
             auto projectionLayer =
                 MakeXr<XrCompositionLayerProjection>(XR_TYPE_COMPOSITION_LAYER_PROJECTION);
             XrCompositionLayerProjection* projection{};
@@ -1159,6 +1163,8 @@ namespace xr
         PFN_xrUpdateSwapchainFB UpdateSwapchain{};
         PFN_xrDestroyFoveationProfileFB DestroyProfile{};
         std::vector<XrView> LocatedViews{};
+        std::vector<XrCompositionLayerProjectionView> ProjectionViews{};
+        std::vector<XrCompositionLayerSpaceWarpInfoFB> WarpViews{};
         std::vector<Session::Frame::View> ActiveFrameViews{};
         std::vector<Session::Frame::InputSource> InputSources{};
         XrActionSet ControllerActions{};
