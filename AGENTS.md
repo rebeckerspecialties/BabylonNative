@@ -344,25 +344,25 @@ Performance lessons from rejected experiments:
 
 ## NativeXR Portal Demo State
 
-The active AR portal test script is
-`Apps/Playground/Scripts/native_xr_babylon_portal_demo.js`. On iPhone 12, the
-manual launch command is:
+Launch the installed AR portal with its cosine-weighted GT-VBAO pipeline (use
+the CoreDevice ID or UDID for the attached phone):
 
 ```sh
-xcrun devicectl device process launch --device B5D4CA48-8949-525C-8E5D-4F661161BD9D --terminate-existing --console com.rebeckerspecialties.BabylonNative.Playground app:///Scripts/native_xr_babylon_portal_demo.js
+sh Apps/scripts/runPortalAr.sh 00008020-001C292A2190003A
 ```
 
-On XS Max (iOS 18.7.10), launch `app:///Scripts/native_xr_portal_manual_validation.js`
-before the demo for real floor placement and normal status logs. The November build
-needed JSC symbol-key access for `createBindGroup` to read `entries[Symbol.iterator]`.
-The user confirmed geometry-buffer placement and rendering at 16-26 fps. To compare,
-insert `app:///Scripts/native_xr_portal_profile_prepass.js` between the manual prelude
-and the demo. Wait for `marker-settled`, `ssao2-renderer=pre-pass` and `anchor-created`.
-The November XS retry placed and rendered on the display; its first 60 post-anchor
-windows had a median of 18 fps, 86 draws and 17 passes/frame. Do not compare 60 fps
-before placement or 30 fps facing less geometry with this view. Keep pre-pass opt-in.
-Use `xcrun devicectl device capture screenshot --device ID --destination PATH`;
-silence on a redirected console was not evidence that the phone was black.
+Use the optional `ssao2` argument for the stock shared-pre-pass control. Running
+the scene script alone or selecting just the pre-pass does not enable GT-VBAO.
+Require both `gtvbao=cosine-weighted` and real placement for the GT-VBAO run.
+Use a device display capture, not the app framebuffer: a successful install
+and draw count did not catch normals/depth being composited as scene color.
+Do not enable the single-camera non-AR color-reuse shortcut in XR. Compare
+performance only after placement with comparable geometry in view.
+XS Max (iOS 18.7.10): physical inspection confirmed normal color and under-car
+shadow with GT-VBAO. The distant storefront stayed stable while panning with
+`xr-reversed-depth=true`. Babylon reverses its per-eye matrix copies only
+when the single projection layer ignores depth; XRView and clip distances are
+unchanged. Verify this in AR, not just in the flat stress scene.
 
 Original functional baseline (May 2026):
 

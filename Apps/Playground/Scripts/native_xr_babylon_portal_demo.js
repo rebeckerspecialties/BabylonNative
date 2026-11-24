@@ -1216,6 +1216,44 @@ function findNativeArPortalFloorForPosition(position, floorPlanes) {
         }
     }
 
+    // Babylon copies XRView's forward-depth projection into each rig camera.
+    // Reverse only the application's depth row: z' = w - z for WebGPU's [0,1].
+    // Read the immutable per-eye source; never toggle an already-reversed matrix.
+    function setPortalReversedProjection(matrix, projection, rightHanded) {
+        var m = matrix.m;
+        m[2] = projection[3] - projection[2];
+        m[6] = projection[7] - projection[6];
+        m[10] = (projection[11] - projection[10]) * (rightHanded ? 1 : -1);
+        m[14] = projection[15] - projection[14];
+        matrix.markAsUpdated();
+    }
+
+    function configurePortalXrDepth(engine, scene, experience) {
+        if (!engine.isWebGPU || engine.useReverseDepthBuffer) return;
+        var manager = experience.sessionManager;
+        var camera = experience.camera;
+        var enabled = false;
+        manager.onXRFrameObservable.add(function (frame) {
+            var layers = frame.session.renderState.layers;
+            // A compositor consuming depth needs its own depth-range contract.
+            var available = !!layers && layers.length === 1 && layers[0].ignoreDepthValues === true;
+            if (available !== enabled) {
+                engine.useReverseDepthBuffer = enabled = available;
+                reportStatus("native-xr-portal:xr-reversed-depth=" + enabled);
+            }
+            var pose = camera._lastXRViewerPose;
+            if (!enabled || !pose) return;
+            for (var i = 0; i < pose.views.length; i++) {
+                var projection = pose.views[i].projectionMatrix;
+                setPortalReversedProjection(camera.rigCameras[i].getProjectionMatrix(), projection, scene.useRightHandedSystem);
+                if (i === 0) setPortalReversedProjection(camera.getProjectionMatrix(), projection, scene.useRightHandedSystem);
+            }
+        });
+        manager.onXRSessionEnded.add(function () {
+            if (enabled) engine.useReverseDepthBuffer = enabled = false;
+        });
+    }
+
     async function createPortalScene(engine) {
         reportStatus("native-xr-portal:local-createScene");
         ensureBrowserLocationForLoaders();
@@ -1253,6 +1291,7 @@ function findNativeArPortalFloorForPosition(position, floorPlanes) {
         var fm = xr.baseExperience.featuresManager;
         if (engine.isWebGPU && BABYLON.WebXRLayers) {
             fm.enableFeature(BABYLON.WebXRLayers.Name, "latest");
+            configurePortalXrDepth(engine, scene, xr.baseExperience);
             reportStatus("native-xr-portal:webgpu-layers=enabled");
         }
         var nativeHitTestEntityTypes = globalThis.__nativeArPortalAllowEstimatedPointPlacement === true ? ["plane", "point"] : ["plane"];

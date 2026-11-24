@@ -10,14 +10,60 @@ const ts = require("typescript");
 const source = readFileSync(new URL("../Playground/Scripts/native_xr_babylon_portal_demo.js", import.meta.url), "utf8");
 const ast = ts.createSourceFile("portal.js", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
 let createStressScene;
+const xrDepthFunctions = [];
 function visit(node) {
     if (ts.isFunctionDeclaration(node) && node.name?.text === "createPortalStressScene") {
         createStressScene = node.getText(ast);
+    }
+    if (ts.isFunctionDeclaration(node) && ["configurePortalXrDepth", "setPortalReversedProjection"].includes(node.name?.text)) {
+        xrDepthFunctions.push(node.getText(ast));
     }
     ts.forEachChild(node, visit);
 }
 visit(ast);
 assert.ok(createStressScene, "Portal stress scene must exist");
+
+for (const rightHanded of [true, false]) {
+    test("XR depth preserves per-eye optics, clipping and compositor depth; right-handed=" + rightHanded, () => {
+        const context = vm.createContext({ reportStatus() {} });
+        vm.runInContext(xrDepthFunctions.join("\n"), context);
+        const near = 0.1, far = 1000;
+        const eye = offset => ({ projectionMatrix: Float32Array.from([
+            1,0,0,0, 0,1,0,0, offset,0,far/(near-far),-1, 0,0,far*near/(near-far),0]) });
+        const views = [eye(0.1), eye(-0.12)];
+        const original = views.map(v => v.projectionMatrix.slice());
+        const rigCameras = views.map(v => {
+            const m = BABYLON.Matrix.FromArray(v.projectionMatrix);
+            if (!rightHanded) m.toggleProjectionMatrixHandInPlace();
+            return { getProjectionMatrix: () => m };
+        });
+        const parent = rigCameras[0].getProjectionMatrix().clone();
+        const camera = { _lastXRViewerPose: { views }, rigCameras, getProjectionMatrix: () => parent };
+        const manager = { onXRFrameObservable: new BABYLON.Observable(), onXRSessionEnded: new BABYLON.Observable() };
+        const engine = { isWebGPU: true, useReverseDepthBuffer: false };
+        context.configurePortalXrDepth(engine, { useRightHandedSystem: rightHanded }, { camera, sessionManager: manager });
+        const frame = ignoresDepth => manager.onXRFrameObservable.notifyObservers({ session: { renderState: { layers: [{ignoreDepthValues: ignoresDepth}] } } });
+        frame(false);
+        assert.equal(engine.useReverseDepthBuffer, false);
+        frame(true);
+        frame(true);
+        assert.equal(engine.useReverseDepthBuffer, true);
+        for (let i = 0; i < 2; ++i) {
+            const m = rigCameras[i].getProjectionMatrix().m;
+            assert.deepEqual(views[i].projectionMatrix, original[i]);
+            assert.equal(m[8], original[i][8] * (rightHanded ? 1 : -1));
+            const depth = d => (m[10] * d + m[14]) / (m[11] * d + m[15]);
+            assert.ok(Math.abs(depth(rightHanded ? -near : near) - 1) < 1e-6);
+            assert.ok(Math.abs(depth(rightHanded ? -far : far)) < 1e-6);
+        }
+        assert.deepEqual(parent.m, rigCameras[0].getProjectionMatrix().m);
+        frame(false);
+        assert.equal(engine.useReverseDepthBuffer, false);
+        frame(true);
+        manager.onXRSessionEnded.notifyObservers();
+        assert.equal(engine.useReverseDepthBuffer, false);
+    });
+}
 
 const glb = readFileSync(new URL("../Playground/Scripts/native_xr_portal_assets/native_xr_portal_hillvalley.astc.glb", import.meta.url));
 const asset = JSON.parse(glb.subarray(20, 20 + glb.readUInt32LE(12)).toString("utf8"));
@@ -85,7 +131,12 @@ for (const webgpu of [false, true]) {
     });
 }
 
-test("the portal demo never overrides the AR camera with reversed depth", () => {
-    assert.equal((source.match(/useReverseDepthBuffer\s*=/g) || []).length, 1);
-    assert.match(createStressScene, /engine\.useReverseDepthBuffer = true/);
+test("the portal does not override WebGL or take ownership of an already-reversed engine", () => {
+    const context = vm.createContext({});
+    vm.runInContext(xrDepthFunctions.join("\n"), context);
+    for (const engine of [{isWebGPU:false,useReverseDepthBuffer:false}, {isWebGPU:true,useReverseDepthBuffer:true}]) {
+        const before = {...engine};
+        context.configurePortalXrDepth(engine, {}, {});
+        assert.deepEqual(engine, before);
+    }
 });
