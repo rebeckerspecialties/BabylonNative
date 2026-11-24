@@ -15,6 +15,12 @@ second graphics device, driver tracing, or camera diagnostics that restart the c
 
 ## Passthrough relapse
 
+The [hosted Samples APK at 95ede2f](https://github.com/rebeckerspecialties/babylonnative-webxr-samples/actions/runs/45508469215)
+passed case 119: 1,435 tracked frames, room visible behind the markers, Home
+passthrough working after normal session end (both checked through the lenses).
+This run used runtime `be4997de`. Switching directly between two active apps
+is a different lifecycle case and has left the previous app on the display.
+
 The owner confirmed a browser AR sample still displayed real passthrough on the same headset while Home passthrough stayed black. Treat Home/Guardian presentation as a separate path: this control is inconsistent with global camera unavailability. Do not reset tracking, clear Guardian or reboot before comparing those paths.
 
 After reboot, the user confirmed Home and tracking recovered. After subsequent runs the user again saw broken passthrough. During this second failure Home was resumed, neither test app was running, and CAMERA app-ops showed no operations for Samples or either Factotum package. Stock Quest does not expose Android's media.camera service. Vendor tracking remained in 6DoF with changing exposure on all four cameras, zero reported camera issues per minute, and intermittent skipped map-tracking updates. No contemporaneous GPU fault was identified. This excludes a surviving test process as the camera owner at that point; it does not identify which system session or presentation transition failed.
