@@ -117,9 +117,11 @@ Quest 1, 960x1080 VP8, same 72 Hz layer test alternating texture and direct medi
 copying 4,147,200 decoded bytes into a new JS ArrayBuffer for every texture frame gave
 61.5/57.4 app FPS; lending the decoder front buffer synchronously gave 68.9/68.8.
 The V8 render-thread collections longer than 1 ms fell from 257/266 per test to 9/5.
-Direct media remained 71.1-71.5 FPS. The direct Android compositor Surface has
-no app pixel upload. The WebGPU texture still incurs MediaCodec YUV conversion
-and a wgpu texture write. Do not expose the native span or extend it past the call.
+Direct media remained 71.1-71.5 FPS. Prefer the Android compositor Surface for
+presentation: VP8 and hardware VP9 Profile 0 need no app pixel upload. Quest 1
+did not decode the 10-bit Profile 2 control. Its actual decoder buffers lacked
+Vulkan's external-format sampled-image bit. The WebGPU texture fallback still
+converts YUV and writes a texture; do not expose the native span past the call.
 Check real left/right pixels against the timed VP8 reference after changes.
 
 Factotum uses a different V8 build (Intl, linked into its N-API library).

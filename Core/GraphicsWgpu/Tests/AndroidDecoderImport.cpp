@@ -24,7 +24,7 @@ namespace
     }
 
     // No GPU work is submitted: the decoder retains ownership throughout this import check.
-    void CheckImport(VkDevice device, AHardwareBuffer* buffer)
+    bool CheckImport(VkPhysicalDevice physical, VkDevice device, AHardwareBuffer* buffer)
     {
         AHardwareBuffer_Desc desc{};
         AHardwareBuffer_describe(buffer, &desc);
@@ -33,12 +33,22 @@ namespace
         auto getProps = reinterpret_cast<PFN_vkGetAndroidHardwareBufferPropertiesANDROID>(vkGetDeviceProcAddr(device, "vkGetAndroidHardwareBufferPropertiesANDROID"));
         if (!getProps) Check(-1, "Missing vkGetAndroidHardwareBufferPropertiesANDROID");
         Check(getProps(device, buffer, &props), "query decoder buffer");
-        std::printf("decoder %ux%u usage=%llx format=%u external=%llu memory=%llu memoryTypes=%x formatFeatures=%x\n", desc.width, desc.height,
-            static_cast<unsigned long long>(desc.usage), format.format, static_cast<unsigned long long>(format.externalFormat),
+        std::printf("decoder %ux%u usage=%llx ahbFormat=0x%x vkFormat=%u external=%llu memory=%llu memoryTypes=%x formatFeatures=%x\n", desc.width, desc.height,
+            static_cast<unsigned long long>(desc.usage), desc.format, format.format, static_cast<unsigned long long>(format.externalFormat),
             static_cast<unsigned long long>(props.allocationSize), props.memoryTypeBits, format.formatFeatures);
         if (!props.memoryTypeBits) Check(-1, "No importable Vulkan memory type");
-        if (!(format.formatFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT))
-            std::fprintf(stderr, "Missing mandatory SAMPLED_IMAGE feature; checking binding only, no GPU sampling\n");
+        auto features = format.formatFeatures;
+        if (format.format != VK_FORMAT_UNDEFINED)
+        {
+            VkFormatProperties defined{};
+            vkGetPhysicalDeviceFormatProperties(physical, format.format, &defined);
+            features = defined.optimalTilingFeatures;
+        }
+        if (!(features & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT))
+        {
+            std::fprintf(stderr, "Missing SAMPLED_IMAGE feature for the selected image format; skipping sampled image creation\n");
+            return false;
+        }
         VkExternalFormatANDROID external{VK_STRUCTURE_TYPE_EXTERNAL_FORMAT_ANDROID, nullptr, format.externalFormat};
         const auto* formatChain = format.format == VK_FORMAT_UNDEFINED ? &external : nullptr;
         VkExternalMemoryImageCreateInfo handle{VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO, formatChain,
@@ -70,9 +80,10 @@ namespace
         conv.yChromaOffset = format.suggestedYChromaOffset;
         conv.chromaFilter = VK_FILTER_NEAREST;
         VkSamplerYcbcrConversion conversion{};
-        Check(vkCreateSamplerYcbcrConversion(device, &conv, nullptr, &conversion), "create decoder conversion");
+        const bool rgba = format.format == VK_FORMAT_R8G8B8A8_UNORM || format.format == VK_FORMAT_R8G8B8A8_SRGB;
+        if (!rgba) Check(vkCreateSamplerYcbcrConversion(device, &conv, nullptr, &conversion), "create decoder conversion");
         VkSamplerYcbcrConversionInfo conversionInfo{VK_STRUCTURE_TYPE_SAMPLER_YCBCR_CONVERSION_INFO, nullptr, conversion};
-        VkImageViewCreateInfo viewInfo{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO, &conversionInfo};
+        VkImageViewCreateInfo viewInfo{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO, rgba ? nullptr : &conversionInfo};
         viewInfo.image = image;
         viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
         viewInfo.format = format.format;
@@ -83,13 +94,19 @@ namespace
         vkDestroySamplerYcbcrConversion(device, conversion, nullptr);
         vkDestroyImage(device, image, nullptr);
         vkFreeMemory(device, memory, nullptr);
+        return true;
     }
 }
 
 int main(int argc, char** argv)
 {
-    if (argc != 2 && (argc != 3 || std::strcmp(argv[2], "yuv420") != 0)) return 2;
-    const auto readerFormat = argc == 3 ? AIMAGE_FORMAT_YUV_420_888 : AIMAGE_FORMAT_PRIVATE;
+    if (argc < 2 || argc > 4) return 2;
+    const char* mode = argc >= 3 ? argv[2] : "private";
+    const bool linear = std::strcmp(mode, "yuv420-linear") == 0;
+    const bool rgba = std::strcmp(mode, "rgba") == 0;
+    const bool yuv = linear || std::strcmp(mode, "yuv420") == 0;
+    if (!yuv && !rgba && std::strcmp(mode, "private") != 0) return 2;
+    const auto readerFormat = yuv ? AIMAGE_FORMAT_YUV_420_888 : rgba ? AIMAGE_FORMAT_RGBA_8888 : AIMAGE_FORMAT_PRIVATE;
     VkApplicationInfo app{VK_STRUCTURE_TYPE_APPLICATION_INFO};
     app.apiVersion = VK_API_VERSION_1_1;
     VkInstanceCreateInfo instanceInfo{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};
@@ -135,11 +152,16 @@ int main(int argc, char** argv)
             int32_t w{}, h{};
             AMediaFormat_getInt32(fmt, AMEDIAFORMAT_KEY_WIDTH, &w);
             AMediaFormat_getInt32(fmt, AMEDIAFORMAT_KEY_HEIGHT, &h);
-            Check(AImageReader_newWithUsage(w, h, readerFormat, AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE, 3, &reader), "create image reader");
+            const uint64_t usage = AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE | (linear ? AHARDWAREBUFFER_USAGE_CPU_READ_RARELY : 0);
+            Check(AImageReader_newWithUsage(w, h, readerFormat, usage, 3, &reader), "create image reader");
             ANativeWindow* window{};
             Check(AImageReader_getWindow(reader, &window), "get decoder surface");
-            codec = AMediaCodec_createDecoderByType(mime);
+            codec = argc == 4 ? AMediaCodec_createCodecByName(argv[3]) : AMediaCodec_createDecoderByType(mime);
             if (!codec) return 1;
+            char* name{};
+            Check(AMediaCodec_getName(codec, &name), "get decoder name");
+            std::printf("selected %s for %s\n", name, AMediaFormat_toString(fmt));
+            AMediaCodec_releaseName(codec, name);
             Check(AMediaCodec_configure(codec, fmt, window, nullptr, 0), "configure decoder");
             AMediaFormat_delete(fmt);
             break;
@@ -148,9 +170,9 @@ int main(int argc, char** argv)
     }
     if (!codec) return 1;
     Check(AMediaCodec_start(codec), "start decoder");
-    int imported = 0;
+    int decoded = 0, imported = 0;
     bool eos = false;
-    for (int attempt = 0; attempt < 500 && imported < 4; ++attempt)
+    for (int attempt = 0; attempt < 500 && decoded < 4; ++attempt)
     {
         const auto input = eos ? -1 : AMediaCodec_dequeueInputBuffer(codec, 10000);
         if (input >= 0)
@@ -166,15 +188,17 @@ int main(int argc, char** argv)
         AMediaCodecBufferInfo info{};
         const auto out = AMediaCodec_dequeueOutputBuffer(codec, &info, 10000);
         if (out >= 0) Check(AMediaCodec_releaseOutputBuffer(codec, out, info.size != 0), "render decoder frame");
+        else if (out != AMEDIACODEC_INFO_TRY_AGAIN_LATER && out != AMEDIACODEC_INFO_OUTPUT_FORMAT_CHANGED && out != AMEDIACODEC_INFO_OUTPUT_BUFFERS_CHANGED)
+            Check(static_cast<int>(out), "dequeue decoder output");
         AImage* acquired{};
         const auto status = AImageReader_acquireNextImage(reader, &acquired);
         if (status == AMEDIA_IMGREADER_NO_BUFFER_AVAILABLE) continue;
         Check(status, "acquire decoder frame");
         AHardwareBuffer* buffer{};
         Check(AImage_getHardwareBuffer(acquired, &buffer), "get decoder hardware buffer");
-        CheckImport(device, buffer);
+        ++decoded;
+        if (CheckImport(physical, device, buffer)) ++imported;
         AImage_delete(acquired);
-        ++imported;
     }
     Check(AMediaCodec_stop(codec), "stop decoder");
     AMediaCodec_delete(codec);
@@ -182,6 +206,6 @@ int main(int argc, char** argv)
     AImageReader_delete(reader);
     vkDestroyDevice(device, nullptr);
     vkDestroyInstance(instance, nullptr);
-    std::printf("decoder images imported and bound with converted views: %d\n", imported);
-    return imported == 4 ? 0 : 1;
+    std::printf("decoded images: %d; sampleable format with bound view: %d\n", decoded, imported);
+    return decoded != 4 ? 1 : imported != decoded ? 3 : 0;
 }
