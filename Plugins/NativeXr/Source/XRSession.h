@@ -49,12 +49,14 @@ namespace Babylon
             void InitializeXrLayer(Napi::Object layer);
 
             bool IsWebGPUFeatureEnabled() const;
+            bool IsSpaceWarpEnabled() const { return m_warpEnabled; }
             bool IsLayersFeatureEnabled() const;
             bool IsCurrentAnimationFrame(const Napi::Object& frame) const;
             bool IsInAnimationCallback() const { return m_inAnimationCallback; }
             bool IsCurrentView(const Napi::Object& view) const;
 #if defined(__ANDROID__) && defined(BABYLON_NATIVE_XR_OPENXR)
             std::shared_ptr<xr::System::Session> PlatformSession() const { return m_rateSession.lock(); }
+            void UpdateProjectionFoveation(const Babylon::XRProjectionLayer& layer);
             XRGPUSubImageData AcquireLayerTexture(uint64_t id, uint32_t width, uint32_t height, uint32_t slices,
                 const std::string& format, uint32_t usage, const std::string& depth);
             bool IsCompositionLayerActive(const Napi::Object&) const;
@@ -95,6 +97,7 @@ namespace Babylon
             float m_depthNear{0.1f};
             float m_depthFar{1000.0f};
             bool m_webGPUFeatureEnabled{};
+            bool m_warpRequested{}, m_warpRequired{}, m_warpEnabled{};
             std::vector<std::string> m_enabledFeatures{};
 
             std::vector<std::pair<std::string, Napi::FunctionReference>> m_eventNamesAndCallbacks{};

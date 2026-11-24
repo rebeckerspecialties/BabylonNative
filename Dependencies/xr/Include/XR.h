@@ -92,6 +92,7 @@ namespace xr
         uint32_t QueueIndex{};
         uint32_t MaxTextureDimension2D{};
         bool (*WaitForSubmittedWork)(){};
+        bool SupportsNonSubsampledDensityMaps{};
     };
 
     struct Vector3f
@@ -130,8 +131,20 @@ namespace xr
         float Width{1}, Height{1}, Radius{2}, Angle{1}, Aspect{2}, Upper{1.5707963f}, Lower{-1.5707963f};
         bool BlendAlpha{true};
         bool ViewerRelative{};
+        static LayerPlacement Projection(bool blendAlpha)
+        {
+            LayerPlacement placement{};
+            placement.BlendAlpha = blendAlpha;
+            return placement;
+        }
     };
     struct LayerImage { uint64_t Image; int64_t Format; };
+    struct WarpImages
+    {
+        LayerImage Motion;
+        LayerImage Depth;
+        uint32_t Width, Height, Views;
+    };
     class MediaSurfaceProducer
     {
     public:
@@ -287,6 +300,8 @@ namespace xr
                     uint32_t SwapchainWidth{};
                     uint32_t SwapchainHeight{};
                     int64_t SwapchainFormat{};
+                    uint64_t DensityMapImage{};
+                    uint32_t DensityMapWidth{}, DensityMapHeight{};
 #endif
 
                     TextureFormat DepthTextureFormat{};
@@ -439,6 +454,11 @@ namespace xr
             uint64_t CreateLayer(LayerShape shape, uint32_t width, uint32_t height, LayerLayout layout);
             uint64_t CreateMediaLayer(LayerShape shape, uint32_t width, uint32_t height, LayerLayout layout, std::shared_ptr<MediaSurfaceProducer> source);
             bool SupportsMediaLayers() const;
+            bool SupportsWarpDepth(int64_t format) const;
+            bool SupportsFoveation(double scale) const;
+            void SetFoveation(double amount);
+            WarpImages AcquireWarpImages(int64_t format);
+            void MarkWarpImagesSubmitted(const Pose& delta);
             LayerImage AcquireLayer(uint64_t id);
             void MarkLayerRendered(uint64_t id);
             void RetireLayer(uint64_t id);

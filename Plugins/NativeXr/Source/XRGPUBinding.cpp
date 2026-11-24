@@ -7,6 +7,7 @@
 #include "XRProjectionLayer.h"
 #include "XRSession.h"
 #if defined(__ANDROID__) && defined(BABYLON_NATIVE_XR_OPENXR)
+#include <Babylon/Graphics/WgpuInterop.h>
 #include "XRShapedLayer.h"
 #endif
 
@@ -131,8 +132,7 @@ namespace Babylon
 
     Napi::Value XRGPUBinding::GetUsesDepthValues(const Napi::CallbackInfo& info)
     {
-        // Depth is application-local; neither platform compositor receives a depth swapchain.
-        return Napi::Boolean::New(info.Env(), false);
+        return Napi::Boolean::New(info.Env(), m_session.IsSpaceWarpEnabled());
     }
 
     Napi::Value XRGPUBinding::CreateProjectionLayer(const Napi::CallbackInfo& info)
@@ -151,9 +151,17 @@ namespace Babylon
         if (!requestedDepth.IsUndefined() && !requestedDepth.IsNull())
         {
             const auto depthStencilFormat = requestedDepth.As<Napi::String>().Utf8Value();
-            if (depthStencilFormat != SUPPORTED_DEPTH_STENCIL_FORMAT && depthStencilFormat != "depth24plus")
+            bool supported = depthStencilFormat == SUPPORTED_DEPTH_STENCIL_FORMAT || depthStencilFormat == "depth24plus";
+#if defined(__ANDROID__) && defined(BABYLON_NATIVE_XR_OPENXR)
+            if (m_session.IsSpaceWarpEnabled())
             {
-                throw std::runtime_error{"Expected depth24plus or depth24plus-stencil8 for the WebGPU projection layer."};
+                const auto platform = m_session.PlatformSession();
+                supported = platform && platform->SupportsWarpDepth(babylon_wgpu_native_openxr_vk_format(depthStencilFormat.c_str()));
+            }
+#endif
+            if (!supported)
+            {
+                return RejectSubImage(info.Env(), "NotSupportedError", "Unsupported projection depth format");
             }
             resolved.Set("depthStencilFormat", depthStencilFormat);
         }
@@ -171,7 +179,7 @@ namespace Babylon
             throw std::runtime_error{"XRGPUBinding.createProjectionLayer scaleFactor must be a finite positive number."};
         }
         resolved.Set("scaleFactor", Napi::Number::New(info.Env(), scaleFactor));
-        resolved.Set("ignoreDepthValues", Napi::Boolean::New(info.Env(), true));
+        resolved.Set("ignoreDepthValues", Napi::Boolean::New(info.Env(), !(m_session.IsSpaceWarpEnabled() && resolved.Has("depthStencilFormat"))));
 
         return XRProjectionLayer::New(info.Env(), m_sessionReference.Value(), resolved, m_deviceReference.Value());
     }

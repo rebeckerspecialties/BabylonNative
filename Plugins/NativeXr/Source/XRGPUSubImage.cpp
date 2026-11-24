@@ -66,6 +66,7 @@ namespace Babylon
             Napi::Number::New(env, data.X), Napi::Number::New(env, data.Y),
             Napi::Number::New(env, data.ViewWidth ? data.ViewWidth : data.Width),
             Napi::Number::New(env, data.ViewHeight ? data.ViewHeight : data.Height),
+            data.MotionVectorTexture.IsEmpty() ? env.Null() : data.MotionVectorTexture,
         });
     }
 
@@ -81,6 +82,8 @@ namespace Babylon
         {
             m_depthStencilTexture = Napi::Persistent(RequireGPUTexture(info, 1, "depthStencilTexture"));
         }
+        if (info.Length() > 9 && !info[9].IsNull())
+            m_motionVectorTexture = Napi::Persistent(RequireGPUTexture(info, 9, "motionVectorTexture"));
         m_viewport.Set("x", info.Length() >= 9 ? info[5] : Napi::Value::From(info.Env(), 0));
         m_viewport.Set("y", info.Length() >= 9 ? info[6] : Napi::Value::From(info.Env(), 0));
         m_viewport.Set("width", info.Length() >= 9 ? info[7] : Napi::Value::From(info.Env(), m_width));
@@ -99,7 +102,7 @@ namespace Babylon
 
     Napi::Value XRGPUSubImage::GetMotionVectorTexture(const Napi::CallbackInfo& info)
     {
-        return info.Env().Null();
+        return m_motionVectorTexture.IsEmpty() ? info.Env().Null() : Napi::Value{m_motionVectorTexture.Value()};
     }
 
     Napi::Value XRGPUSubImage::GetColorTextureWidth(const Napi::CallbackInfo& info)
@@ -114,12 +117,12 @@ namespace Babylon
 
     Napi::Value XRGPUSubImage::GetDepthStencilTextureWidth(const Napi::CallbackInfo& info)
     {
-        return Napi::Number::New(info.Env(), m_depthStencilTexture.IsEmpty() ? 0u : m_width);
+        return m_depthStencilTexture.IsEmpty() ? Napi::Value{Napi::Number::New(info.Env(), 0)} : m_depthStencilTexture.Value().Get("width");
     }
 
     Napi::Value XRGPUSubImage::GetDepthStencilTextureHeight(const Napi::CallbackInfo& info)
     {
-        return Napi::Number::New(info.Env(), m_depthStencilTexture.IsEmpty() ? 0u : m_height);
+        return m_depthStencilTexture.IsEmpty() ? Napi::Value{Napi::Number::New(info.Env(), 0)} : m_depthStencilTexture.Value().Get("height");
     }
 
     Napi::Value XRGPUSubImage::GetViewport(const Napi::CallbackInfo&)

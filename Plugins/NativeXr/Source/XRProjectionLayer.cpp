@@ -2,9 +2,12 @@
 
 #include "JsInstanceOf.h"
 #include "XRProjectionLayer.h"
+#include "XRRigidTransform.h"
 #include "XRSession.h"
 
 #include <stdexcept>
+#include <algorithm>
+#include <cmath>
 
 namespace Babylon
 {
@@ -59,8 +62,10 @@ namespace Babylon
                 InstanceAccessor("textureHeight", &XRProjectionLayer::GetTextureHeight, nullptr),
                 InstanceAccessor("textureArrayLength", &XRProjectionLayer::GetTextureArrayLength, nullptr),
                 InstanceAccessor("ignoreDepthValues", &XRProjectionLayer::GetIgnoreDepthValues, nullptr),
+                InstanceAccessor("blendTextureSourceAlpha", &XRProjectionLayer::GetBlendTextureSourceAlpha, &XRProjectionLayer::SetBlendTextureSourceAlpha),
                 InstanceAccessor("layout", &XRProjectionLayer::GetLayout, nullptr),
                 InstanceAccessor("fixedFoveation", &XRProjectionLayer::GetFixedFoveation, &XRProjectionLayer::SetFixedFoveation),
+                InstanceAccessor("deltaPose", &XRProjectionLayer::GetDeltaPose, &XRProjectionLayer::SetDeltaPose),
             });
         env.Global().Set(JS_CLASS_NAME, constructor);
     }
@@ -103,6 +108,16 @@ namespace Babylon
         }
     }
 
+    Napi::Value XRProjectionLayer::GetBlendTextureSourceAlpha(const Napi::CallbackInfo& info)
+    {
+        return Napi::Boolean::New(info.Env(), m_blendTextureSourceAlpha);
+    }
+
+    void XRProjectionLayer::SetBlendTextureSourceAlpha(const Napi::CallbackInfo&, const Napi::Value& value)
+    {
+        m_blendTextureSourceAlpha = value.ToBoolean().Value();
+    }
+
     bool XRProjectionLayer::BelongsTo(const Plugins::XRSession& session) const
     {
         if (m_sessionReference.IsEmpty())
@@ -126,12 +141,44 @@ namespace Babylon
 
     Napi::Value XRProjectionLayer::GetFixedFoveation(const Napi::CallbackInfo& info)
     {
+#if defined(__ANDROID__) && defined(BABYLON_NATIVE_XR_OPENXR)
+        if (auto platform = GetSession().PlatformSession(); platform && platform->SupportsFoveation(m_scaleFactor))
+            return Napi::Number::New(info.Env(), m_foveation);
+#endif
         return info.Env().Null();
     }
 
-    void XRProjectionLayer::SetFixedFoveation(const Napi::CallbackInfo&, const Napi::Value&)
+    void XRProjectionLayer::SetFixedFoveation(const Napi::CallbackInfo& info, const Napi::Value& value)
     {
-        // No renderer currently attaches a density map to the application eye pass.
+        const double amount = value.ToNumber().DoubleValue();
+        if (!std::isfinite(amount)) throw Napi::TypeError::New(info.Env(), "fixedFoveation must be finite");
+#if defined(__ANDROID__) && defined(BABYLON_NATIVE_XR_OPENXR)
+        auto& session = GetSession();
+        if (auto platform = session.PlatformSession(); platform && platform->SupportsFoveation(m_scaleFactor))
+        {
+            m_foveation = std::clamp(amount, 0.0, 1.0);
+            session.UpdateProjectionFoveation(*this);
+        }
+#endif
+    }
+
+    xr::Pose XRProjectionLayer::DeltaPose() const
+    {
+        return m_deltaPose.IsEmpty() ? xr::Pose{{0, 0, 0}, {0, 0, 0, 1}} : XRRigidTransform::Unwrap(m_deltaPose.Value())->GetNativePose();
+    }
+
+    Napi::Value XRProjectionLayer::GetDeltaPose(const Napi::CallbackInfo& info)
+    {
+        return m_deltaPose.IsEmpty() ? info.Env().Null() : Napi::Value{m_deltaPose.Value()};
+    }
+
+    void XRProjectionLayer::SetDeltaPose(const Napi::CallbackInfo& info, const Napi::Value& value)
+    {
+        if (!GetSession().IsSpaceWarpEnabled()) return;
+        if (value.IsNull() || value.IsUndefined()) { m_deltaPose.Reset(); return; }
+        if (!value.IsObject() || !IsInstanceOfGlobalClass(value.As<Napi::Object>(), "XRRigidTransform"))
+            throw Napi::TypeError::New(info.Env(), "deltaPose must be an XRRigidTransform or null");
+        m_deltaPose = Napi::Persistent(value.As<Napi::Object>());
     }
 
     const std::string& XRProjectionLayer::DepthStencilFormat() const

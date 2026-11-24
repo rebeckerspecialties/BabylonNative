@@ -34,6 +34,8 @@ namespace Babylon
 #if defined(__ANDROID__) && defined(BABYLON_NATIVE_XR_OPENXR)
             XRGPUSubImageData AcquireLayerTexture(uint64_t id, uint32_t width, uint32_t height, uint32_t slices,
                 const std::string& format, uint32_t usage, const std::string& depthFormat);
+            void AcquireWarpAttachments(XRGPUSubImageData& image, const std::string& depthFormat);
+            void SetWarpDelta(const xr::Pose& delta);
 #endif
             uint32_t GetWebGPUTextureWidth() const;
             const char* GetWebGPUColorFormat() const;
@@ -121,6 +123,7 @@ namespace Babylon
                 xr::Size ViewTextureSize{};
                 std::string DepthFormat{};
                 uint32_t ColorUsage{};
+                uint64_t DensityImage{};
                 std::vector<RenderTarget> RenderTargets{};
                 bool Initialized{false};
             };
@@ -151,6 +154,9 @@ namespace Babylon
                 // Destroy the OpenXR session before returning the window to Vulkan WSI.
                 std::optional<gsl::final_action<void (*)()>> ResumeWindowPresentation;
                 std::map<uint64_t, ViewConfiguration::RenderTarget> AcquiredLayers;
+                ViewConfiguration::RenderTarget Warp;
+                uint32_t WarpViews{};
+                xr::Pose WarpDelta{};
 #endif
                 std::shared_ptr<xr::System::Session> Session{};
                 std::shared_ptr<xr::System::Session::Frame> Frame{};

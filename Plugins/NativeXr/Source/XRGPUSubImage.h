@@ -14,6 +14,7 @@ namespace Babylon
         uint32_t Height{};
         uint32_t ArrayLayer{};
         uint32_t X{}, Y{}, ViewWidth{}, ViewHeight{};
+        Napi::Value MotionVectorTexture{};
     };
 
     // WebXR-WebGPU XRGPUSubImage implementation.
@@ -28,6 +29,7 @@ namespace Babylon
     private:
         Napi::ObjectReference m_colorTexture{};
         Napi::ObjectReference m_depthStencilTexture{};
+        Napi::ObjectReference m_motionVectorTexture{};
         Napi::ObjectReference m_viewport{};
         uint32_t m_width{};
         uint32_t m_height{};

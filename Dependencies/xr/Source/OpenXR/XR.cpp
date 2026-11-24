@@ -14,6 +14,7 @@
 #include <openxr/openxr_platform.h>
 #include <android/log.h>
 #include "CompositionLayers.h"
+#include "SpaceWarpSwapchains.h"
 
 #include <algorithm>
 #include <array>
@@ -217,6 +218,14 @@ namespace xr
             const bool convertTime = enable(XR_KHR_CONVERT_TIMESPEC_TIME_EXTENSION_NAME);
             AndroidSurface = enable(XR_KHR_ANDROID_SURFACE_SWAPCHAIN_EXTENSION_NAME);
             const bool querySpaceWarp = enable(XR_FB_SPACE_WARP_EXTENSION_NAME);
+            constexpr const char* densityExtensions[] = {XR_FB_SWAPCHAIN_UPDATE_STATE_EXTENSION_NAME,
+                XR_FB_FOVEATION_EXTENSION_NAME, XR_FB_FOVEATION_CONFIGURATION_EXTENSION_NAME, XR_FB_FOVEATION_VULKAN_EXTENSION_NAME};
+            Foveation = std::all_of(std::begin(densityExtensions), std::end(densityExtensions),
+                [&](const char* name) { return HasExtension(extensions, name); });
+            if (Foveation)
+            {
+                enabledExtensions.insert(enabledExtensions.end(), std::begin(densityExtensions), std::end(densityExtensions));
+            }
             Cube = enable(XR_KHR_COMPOSITION_LAYER_CUBE_EXTENSION_NAME);
             Equirect2 = enable(XR_KHR_COMPOSITION_LAYER_EQUIRECT2_EXTENSION_NAME);
             Equirect = Equirect2 || enable(XR_KHR_COMPOSITION_LAYER_EQUIRECT_EXTENSION_NAME);
@@ -339,6 +348,7 @@ namespace xr
         bool Cylinder{}, Cube{}, Equirect{}, Equirect2{}, AndroidSurface{};
         uint32_t MaxLayers{};
         uint32_t MotionWidth{}, MotionHeight{};
+        bool Foveation{};
     };
 
     struct System::Session::Impl
@@ -347,6 +357,7 @@ namespace xr
         {
             XrSwapchain Handle{XR_NULL_HANDLE};
             std::vector<XrSwapchainImageVulkan2KHR> Images{};
+            std::vector<XrSwapchainImageFoveationVulkanFB> DensityMaps{};
             uint32_t Width{};
             uint32_t Height{};
             uint32_t ImageIndex{};
@@ -504,6 +515,10 @@ namespace xr
                 const auto offered = [&formats](VkFormat format) {
                     return std::find(formats.begin(), formats.end(), format) != formats.end();
                 };
+                if (offered(VK_FORMAT_R16G16B16A16_SFLOAT))
+                    for (const auto depth : {VK_FORMAT_D16_UNORM, VK_FORMAT_D32_SFLOAT, VK_FORMAT_X8_D24_UNORM_PACK32,
+                        VK_FORMAT_D24_UNORM_S8_UINT, VK_FORMAT_D32_SFLOAT_S8_UINT})
+                        if (offered(depth)) WarpDepths.push_back(depth);
                 __android_log_print(ANDROID_LOG_INFO, "BabylonNative",
                     "OpenXR advertised warp swapchain formats: RGBA16F=%d D16=%d D24S8=%d D32F=%d",
                     offered(VK_FORMAT_R16G16B16A16_SFLOAT), offered(VK_FORMAT_D16_UNORM),
@@ -547,7 +562,19 @@ namespace xr
                 // view. Tell OpenXR to decode those bytes as sRGB at composition.
                 const bool srgb = ColorFormat == VK_FORMAT_R8G8B8A8_SRGB || ColorFormat == VK_FORMAT_B8G8R8A8_SRGB;
                 if (srgb) swapchainCreateInfo.usageFlags |= XR_SWAPCHAIN_USAGE_MUTABLE_FORMAT_BIT;
+                auto foveation = MakeXr<XrSwapchainCreateInfoFoveationFB>(XR_TYPE_SWAPCHAIN_CREATE_INFO_FOVEATION_FB);
+                if (System.Foveation && graphicsBinding.SupportsNonSubsampledDensityMaps)
+                {
+                    foveation.flags = XR_SWAPCHAIN_CREATE_FOVEATION_FRAGMENT_DENSITY_MAP_BIT_FB;
+                    swapchainCreateInfo.next = &foveation;
+                }
                 auto result = xrCreateSwapchain(Session, &swapchainCreateInfo, &viewSwapchain.Handle);
+                if (swapchainCreateInfo.next && (result == XR_ERROR_FEATURE_UNSUPPORTED ||
+                    result == XR_ERROR_SWAPCHAIN_FORMAT_UNSUPPORTED || result == XR_ERROR_LIMIT_REACHED))
+                {
+                    swapchainCreateInfo.next = nullptr;
+                    result = xrCreateSwapchain(Session, &swapchainCreateInfo, &viewSwapchain.Handle);
+                }
                 if (ColorFormat == VK_FORMAT_R16G16B16A16_SFLOAT &&
                     (result == XR_ERROR_FEATURE_UNSUPPORTED || result == XR_ERROR_SWAPCHAIN_FORMAT_UNSUPPORTED))
                 {
@@ -578,6 +605,14 @@ namespace xr
                 viewSwapchain.Images.assign(
                     imageCount,
                     MakeXr<XrSwapchainImageVulkan2KHR>(XR_TYPE_SWAPCHAIN_IMAGE_VULKAN2_KHR));
+                if (swapchainCreateInfo.next)
+                {
+                    viewSwapchain.DensityMaps.assign(imageCount, MakeXr<XrSwapchainImageFoveationVulkanFB>(XR_TYPE_SWAPCHAIN_IMAGE_FOVEATION_VULKAN_FB));
+                    for (uint32_t i = 0; i < imageCount; ++i)
+                    {
+                        viewSwapchain.Images[i].next = &viewSwapchain.DensityMaps[i];
+                    }
+                }
                 CheckXr(
                     xrEnumerateSwapchainImages(
                         viewSwapchain.Handle,
@@ -585,6 +620,23 @@ namespace xr
                         &imageCount,
                         reinterpret_cast<XrSwapchainImageBaseHeader*>(viewSwapchain.Images.data())),
                     "xrEnumerateSwapchainImages");
+                if (!viewSwapchain.DensityMaps.empty())
+                {
+                    const auto& maps = viewSwapchain.DensityMaps;
+                    if (std::all_of(maps.begin(), maps.end(), [](const auto& map) { return map.image && map.width && map.height; }))
+                    {
+                        CheckXr(xrGetInstanceProcAddr(System.Instance, "xrCreateFoveationProfileFB", reinterpret_cast<PFN_xrVoidFunction*>(&CreateProfile)), "get create foveation profile");
+                        CheckXr(xrGetInstanceProcAddr(System.Instance, "xrUpdateSwapchainFB", reinterpret_cast<PFN_xrVoidFunction*>(&UpdateSwapchain)), "get update swapchain");
+                        CheckXr(xrGetInstanceProcAddr(System.Instance, "xrDestroyFoveationProfileFB", reinterpret_cast<PFN_xrVoidFunction*>(&DestroyProfile)), "get destroy foveation profile");
+                        __android_log_print(ANDROID_LOG_INFO, "BabylonNative", "OpenXR supplied %u paired Vulkan density maps, first %ux%u",
+                            static_cast<unsigned>(maps.size()), maps.front().width, maps.front().height);
+                    }
+                    else
+                    {
+                        for (auto& image : viewSwapchain.Images) image.next = nullptr;
+                        viewSwapchain.DensityMaps.clear();
+                    }
+                }
             }
 
             LocatedViews.assign(viewCount, MakeXr<XrView>(XR_TYPE_VIEW));
@@ -742,6 +794,7 @@ namespace xr
                 }
             }
             Layers.Clear();
+            WarpChains.clear();
             for (auto& viewSwapchain : ViewSwapchains)
             {
                 if (viewSwapchain.Handle != XR_NULL_HANDLE)
@@ -900,6 +953,23 @@ namespace xr
             {
                 for (auto& viewSwapchain : ViewSwapchains)
                 {
+                    const int level = RequestedFoveation.load();
+                    if (CreateProfile && ActiveFoveation != level)
+                    {
+                        auto config = MakeXr<XrFoveationLevelProfileCreateInfoFB>(XR_TYPE_FOVEATION_LEVEL_PROFILE_CREATE_INFO_FB);
+                        config.level = static_cast<XrFoveationLevelFB>(level);
+                        config.dynamic = XR_FOVEATION_DYNAMIC_DISABLED_FB;
+                        auto info = MakeXr<XrFoveationProfileCreateInfoFB>(XR_TYPE_FOVEATION_PROFILE_CREATE_INFO_FB);
+                        info.next = &config;
+                        XrFoveationProfileFB profile{};
+                        CheckXr(CreateProfile(Session, &info, &profile), "create foveation profile");
+                        auto state = MakeXr<XrSwapchainStateFoveationFB>(XR_TYPE_SWAPCHAIN_STATE_FOVEATION_FB);
+                        state.profile = profile;
+                        const auto result = UpdateSwapchain(viewSwapchain.Handle, reinterpret_cast<const XrSwapchainStateBaseHeaderFB*>(&state));
+                        DestroyProfile(profile);
+                        CheckXr(result, "apply projection foveation profile");
+                        ActiveFoveation = level;
+                    }
                     auto acquireInfo =
                         MakeXr<XrSwapchainImageAcquireInfo>(XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO);
                     CheckXr(
@@ -942,6 +1012,19 @@ namespace xr
                 activeView.SwapchainWidth = viewSwapchain.Width;
                 activeView.SwapchainHeight = viewSwapchain.Height;
                 activeView.SwapchainFormat = ColorFormat;
+                if (FrameShouldRender && ActiveFoveation > 0 && !viewSwapchain.DensityMaps.empty() &&
+                    extent.Width == viewSwapchain.Width && extent.Height == viewSwapchain.Height)
+                {
+                    const auto& map = viewSwapchain.DensityMaps[viewSwapchain.ImageIndex];
+                    activeView.DensityMapImage = reinterpret_cast<uint64_t>(map.image);
+                    activeView.DensityMapWidth = map.width;
+                    activeView.DensityMapHeight = map.height;
+                }
+                else
+                {
+                    activeView.DensityMapImage = 0;
+                    activeView.DensityMapWidth = activeView.DensityMapHeight = 0;
+                }
                 activeView.DepthTextureFormat = TextureFormat::D24S8;
                 activeView.DepthTexturePointer = nullptr;
                 activeView.DepthTextureSize = activeView.ColorTextureSize;
@@ -961,14 +1044,16 @@ namespace xr
             }
 
             std::vector<XrCompositionLayerProjectionView> projectionViews;
+            std::vector<XrCompositionLayerSpaceWarpInfoFB> warpViews;
             auto projectionLayer =
                 MakeXr<XrCompositionLayerProjection>(XR_TYPE_COMPOSITION_LAYER_PROJECTION);
-            const XrCompositionLayerBaseHeader* layerHeader{};
+            XrCompositionLayerProjection* projection{};
             if (renderLayer && FrameShouldRender)
             {
                 projectionViews.resize(
                     ActiveFrameViews.size(),
                     MakeXr<XrCompositionLayerProjectionView>(XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW));
+                if (ActiveWarp && WarpSubmitted) warpViews.resize(projectionViews.size());
                 for (uint32_t viewIndex = 0; viewIndex < projectionViews.size(); ++viewIndex)
                 {
                     auto& projectionView = projectionViews[viewIndex];
@@ -983,11 +1068,16 @@ namespace xr
                             static_cast<int32_t>(viewSwapchain.Height),
                         }};
                     projectionView.subImage.imageArrayIndex = viewIndex;
+                    if (!warpViews.empty())
+                    {
+                        warpViews[viewIndex] = ActiveWarp->View(viewIndex, WarpDelta, DepthNearZ, DepthFarZ);
+                        projectionView.next = &warpViews[viewIndex];
+                    }
                 }
                 projectionLayer.space = AppSpace;
                 projectionLayer.viewCount = static_cast<uint32_t>(projectionViews.size());
                 projectionLayer.views = projectionViews.data();
-                layerHeader = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&projectionLayer);
+                projection = &projectionLayer;
             }
 
             for (auto& viewSwapchain : ViewSwapchains)
@@ -1003,10 +1093,22 @@ namespace xr
                 }
             }
 
+            if (ActiveWarp)
+            {
+                ActiveWarp->Motion.Release();
+                ActiveWarp->Depth.Release();
+                ActiveWarp = nullptr;
+                WarpSubmitted = false;
+            }
             auto endInfo = MakeXr<XrFrameEndInfo>(XR_TYPE_FRAME_END_INFO);
             endInfo.displayTime = FrameState.predictedDisplayTime;
             endInfo.environmentBlendMode = System.BlendMode;
-            const bool submittedProjection = Layers.Finish(Session, AppSpace, HeadSpace, endInfo, layerHeader, renderLayer && FrameShouldRender, System.Equirect2, System.MaxLayers);
+            const bool submittedProjection = Layers.Finish(Session, AppSpace, HeadSpace, endInfo, projection, renderLayer && FrameShouldRender, System.Equirect2, System.MaxLayers);
+            if (submittedProjection && warpViews.size() == 2 && !LoggedWarpSubmission)
+            {
+                __android_log_print(ANDROID_LOG_INFO, "BabylonNative", "Submitted stereo motion and depth to OpenXR compositor");
+                LoggedWarpSubmission = true;
+            }
             if (submittedProjection && projectionViews.size() == 2 && !LoggedStereoSubmission)
             {
                 __android_log_print(ANDROID_LOG_INFO, "BabylonNative", "Submitted stereo frame to OpenXR compositor");
@@ -1032,6 +1134,7 @@ namespace xr
 
         System::Impl& System;
         bool LoggedStereoSubmission{};
+        bool LoggedWarpSubmission{};
 #ifndef NDEBUG
         uint32_t StereoFrames{};
 #endif
@@ -1044,7 +1147,17 @@ namespace xr
         std::vector<XrViewConfigurationView> ViewConfigurationViews{};
         std::vector<ViewSwapchain> ViewSwapchains{};
         CompositionLayers Layers;
+        std::vector<int64_t> WarpDepths;
+        std::unordered_map<int64_t, std::unique_ptr<SpaceWarpSwapchains>> WarpChains;
+        SpaceWarpSwapchains* ActiveWarp{};
+        XrPosef WarpDelta{};
+        bool WarpSubmitted{};
         std::atomic<double> ProjectionScale{1.0};
+        std::atomic<int> RequestedFoveation{};
+        int ActiveFoveation{};
+        PFN_xrCreateFoveationProfileFB CreateProfile{};
+        PFN_xrUpdateSwapchainFB UpdateSwapchain{};
+        PFN_xrDestroyFoveationProfileFB DestroyProfile{};
         std::vector<XrView> LocatedViews{};
         std::vector<Session::Frame::View> ActiveFrameViews{};
         std::vector<Session::Frame::InputSource> InputSources{};
@@ -1203,6 +1316,47 @@ namespace xr
     }
     uint32_t System::Session::MaxLayerCount() const { return m_impl->System.MaxLayers; }
     bool System::Session::SupportsMediaLayers() const { return m_impl->System.AndroidSurface; }
+    bool System::Session::SupportsFoveation(double scale) const
+    {
+        if (!m_impl->CreateProfile || m_impl->ViewSwapchains.empty()) return false;
+        const auto& chain = m_impl->ViewSwapchains.front();
+        const auto extent = ScaleProjectionExtent({chain.Width, chain.Height}, chain.MaxApplicationExtent, scale);
+        return extent.Width == chain.Width && extent.Height == chain.Height;
+    }
+
+    void System::Session::SetFoveation(double amount)
+    {
+        m_impl->RequestedFoveation.store(amount <= 0 ? 0 : amount <= 1.0/3 ? 1 : amount <= 2.0/3 ? 2 : 3);
+    }
+
+    bool System::Session::SupportsWarpDepth(int64_t format) const
+    {
+        return std::find(m_impl->WarpDepths.begin(), m_impl->WarpDepths.end(), format) != m_impl->WarpDepths.end();
+    }
+
+    WarpImages System::Session::AcquireWarpImages(int64_t format)
+    {
+        if (!m_impl->FrameBegun || !m_impl->FrameShouldRender || !SupportsWarpDepth(format))
+            throw std::runtime_error{"No renderable OpenXR frame with compatible space-warp attachments"};
+        auto& chain = m_impl->WarpChains[format];
+        const auto width = m_impl->System.MotionWidth;
+        const auto height = m_impl->System.MotionHeight;
+        const auto views = static_cast<uint32_t>(m_impl->ViewConfigurationViews.size());
+        if (m_impl->ActiveWarp && m_impl->ActiveWarp != chain.get())
+            throw std::runtime_error{"Cannot change space-warp attachments within an OpenXR frame"};
+        if (!chain) chain = std::make_unique<SpaceWarpSwapchains>(m_impl->Session, static_cast<VkFormat>(format), width, height, views);
+        m_impl->ActiveWarp = chain.get();
+        return {{reinterpret_cast<uint64_t>(chain->Motion.Acquire()), VK_FORMAT_R16G16B16A16_SFLOAT},
+            {reinterpret_cast<uint64_t>(chain->Depth.Acquire()), format}, width, height, views};
+    }
+
+    void System::Session::MarkWarpImagesSubmitted(const Pose& delta)
+    {
+        if (!m_impl->ActiveWarp) throw std::runtime_error{"No acquired space-warp images"};
+        m_impl->WarpDelta = {{delta.Orientation.X, delta.Orientation.Y, delta.Orientation.Z, delta.Orientation.W},
+            {delta.Position.X, delta.Position.Y, delta.Position.Z}};
+        m_impl->WarpSubmitted = true;
+    }
     uint64_t System::Session::CreateMediaLayer(LayerShape shape, uint32_t width, uint32_t height, LayerLayout layout, std::shared_ptr<MediaSurfaceProducer> source)
     {
         PFN_xrCreateSwapchainAndroidSurfaceKHR create{};

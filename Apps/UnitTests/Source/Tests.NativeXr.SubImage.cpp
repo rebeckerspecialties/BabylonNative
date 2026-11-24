@@ -13,7 +13,7 @@ TEST(NativeXrSubImage, OptionalAttachmentsAndEyeSlices)
         try
         {
             Babylon::XRGPUSubImage::Initialize(env);
-            const auto texture = Napi::Eval(env, "({createView() {}})", "texture.js").As<Napi::Object>();
+            const auto texture = Napi::Eval(env, "({width: 128, height: 64, createView() {}})", "texture.js").As<Napi::Object>();
             env.Global().Set("color", texture);
             for (uint32_t eye = 0; eye < 2; ++eye)
             {

@@ -317,7 +317,8 @@ namespace Babylon
                         nativeVulkanBinding.queue_family_index,
                         nativeVulkanBinding.queue_index,
                         nativeVulkanBinding.max_texture_dimension_2d,
-                        babylon_wgpu_native_queue_wait_submitted_work});
+                        babylon_wgpu_native_queue_wait_submitted_work,
+                        nativeVulkanBinding.fragment_density_map != 0});
                     void* graphicsDevice = vulkanBinding.get();
                     void* graphicsQueue = nullptr;
                     std::shared_ptr<void> graphicsBindingLifetime = vulkanBinding;
@@ -564,6 +565,9 @@ namespace Babylon
                 const bool useDepth = *depthFormat != '\0';
 
                 if (it == m_sessionState->TextureToViewConfigurationMap.end() ||
+#if defined(__ANDROID__) && defined(BABYLON_NATIVE_XR_OPENXR)
+                    it->second.DensityImage != view.DensityMapImage ||
+#endif
                     it->second.ViewTextureSize.Width != view.ColorTextureSize.Width ||
                     it->second.ViewTextureSize.Height != view.ColorTextureSize.Height ||
                     it->second.ViewTextureSize.Depth != view.ColorTextureSize.Depth ||
@@ -625,6 +629,9 @@ namespace Babylon
                         static_cast<uint64_t>(reinterpret_cast<uintptr_t>(view.ColorTexturePointer)),
                         view.SwapchainWidth, view.SwapchainHeight, view.SwapchainFormat,
                         colorDescriptor.c_str());
+                    viewConfig.DensityImage = view.DensityMapImage;
+                    if (viewConfig.DensityImage && !babylon_wgpu_native_set_eye_density_map(colorTextureId, viewConfig.DensityImage))
+                        throw std::runtime_error{"Could not attach the acquired projection density map: " + GetLastWgpuError()};
 #else
 #error NativeXR requires an explicit platform texture import path.
 #endif
@@ -707,6 +714,35 @@ namespace Babylon
         }
 
 #if defined(__ANDROID__) && defined(BABYLON_NATIVE_XR_OPENXR)
+        void NativeXr::Impl::SetWarpDelta(const xr::Pose& delta)
+        {
+            m_sessionState->WarpDelta = delta;
+        }
+
+        void NativeXr::Impl::AcquireWarpAttachments(XRGPUSubImageData& subImage, const std::string& depthFormat)
+        {
+            auto& target = m_sessionState->Warp;
+            if (target.JsDepthTexture.IsEmpty())
+            {
+                const auto images = m_sessionState->Session->AcquireWarpImages(babylon_wgpu_native_openxr_vk_format(depthFormat.c_str()));
+                const auto bind = [&](xr::LayerImage image, const char* label, const char* format, uint64_t& id, Napi::ObjectReference& js) {
+                    const auto usage = WEBGPU_TEXTURE_USAGE_RENDER_ATTACHMENT;
+                    const auto descriptor = MakeTextureDescriptorJson(label, images.Width, images.Height, images.Views, format, usage);
+                    id = babylon_wgpu_native_import_openxr_data_texture(image.Image, images.Width, images.Height, image.Format, descriptor.c_str());
+                    if (!id) throw std::runtime_error{"Could not import OpenXR space-warp attachment: " + GetLastWgpuError()};
+                    js = Napi::Persistent(NativeWebGPU::CreateTextureFromNativeId(m_env, id, label, format, images.Width, images.Height, images.Views, usage));
+                };
+                if (target.JsColorTexture.IsEmpty())
+                    bind(images.Motion, "XRProjectionLayer.motion", "rgba16float", target.ColorTextureId, target.JsColorTexture);
+                bind(images.Depth, "XRProjectionLayer.warpDepth", depthFormat.c_str(), target.DepthTextureId, target.JsDepthTexture);
+                m_sessionState->WarpViews = images.Views;
+                if (!babylon_wgpu_native_watch_warp_images(target.ColorTextureId, target.DepthTextureId))
+                    throw std::runtime_error{"Could not track OpenXR space-warp submission"};
+            }
+            subImage.MotionVectorTexture = target.JsColorTexture.Value();
+            subImage.DepthStencilTexture = target.JsDepthTexture.Value();
+        }
+
         XRGPUSubImageData NativeXr::Impl::AcquireLayerTexture(uint64_t id, uint32_t width, uint32_t height, uint32_t slices,
             const std::string& format, uint32_t usage, const std::string& depthFormat)
         {
@@ -756,6 +792,26 @@ namespace Babylon
                 }
             }
             m_sessionState->AcquiredLayers.clear();
+            auto& warp = m_sessionState->Warp;
+            if (!warp.JsColorTexture.IsEmpty() || !warp.JsDepthTexture.IsEmpty())
+            {
+                const bool submitted = babylon_wgpu_native_finish_warp_images(m_sessionState->WarpViews);
+                std::vector<uint64_t> live;
+                for (auto [id, value] : {std::pair{warp.ColorTextureId, &warp.JsColorTexture}, std::pair{warp.DepthTextureId, &warp.JsDepthTexture}})
+                    if (!value->IsEmpty() && !value->Value().Get("__destroyed").ToBoolean().Value()) live.push_back(id);
+                if (!live.empty() && !babylon_wgpu_native_prepare_openxr_textures_for_release(live.data(), live.size()))
+                    throw std::runtime_error{"Could not release OpenXR space-warp attachments: " + GetLastWgpuError()};
+                if (live.size() == 2 && submitted)
+                    m_sessionState->Session->MarkWarpImagesSubmitted(m_sessionState->WarpDelta);
+                for (auto* ref : {&warp.JsColorTexture, &warp.JsDepthTexture})
+                    if (!ref->IsEmpty())
+                    {
+                        auto texture = ref->Value();
+                        texture.Get("destroy").As<Napi::Function>().Call(texture, {});
+                    }
+                warp = {};
+                m_sessionState->WarpViews = 0;
+            }
 #endif
             m_sessionState->ActiveViewConfigurations.clear();
             m_sessionState->ViewConfigurationStartViewIdx.clear();
