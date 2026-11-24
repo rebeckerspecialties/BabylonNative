@@ -81,39 +81,36 @@ namespace Babylon
         }
 #endif
 
-        void SetXRGamepadObjectData(Napi::Object& jsInputSource, Napi::Object& jsGamepadObject, xr::System::Session::Frame::InputSource& inputSource)
+        void UpdateXRGamepad(Napi::Object source, const xr::System::Session::Frame::GamePad& pad, Plugins::GamepadSnapshot& snapshot)
         {
-            auto env = jsInputSource.Env();
-            //Set Gamepad Object
-            auto gamepadButtons = Napi::Array::New(env, inputSource.GamepadObject.Buttons.size());
-            for (size_t i = 0; i < inputSource.GamepadObject.Buttons.size(); i++)
-            {
-                auto gamepadButton = Napi::Object::New(env);
-                auto napiGamepadPressed = Napi::Boolean::New(env, inputSource.GamepadObject.Buttons[i].Pressed);
-                auto napiGamepadTouched = Napi::Boolean::New(env, inputSource.GamepadObject.Buttons[i].Touched);
-                auto napiGamepadValue = Napi::Number::New(env, inputSource.GamepadObject.Buttons[i].Value);
-                gamepadButton.Set("pressed", napiGamepadPressed);
-                gamepadButton.Set("touched", napiGamepadTouched);
-                gamepadButton.Set("value", napiGamepadValue);
-                gamepadButtons.Set(static_cast<int>(i), gamepadButton);
-            }
-            jsGamepadObject.Set("buttons", gamepadButtons);
-
-            auto gamepadAxes = Napi::Array::New(env, inputSource.GamepadObject.Axes.size());
-            for (size_t i = 0; i < inputSource.GamepadObject.Axes.size(); i++)
-            {
-                auto napiGamepadAxesValue = Napi::Number::New(env, inputSource.GamepadObject.Axes[i]);
-                gamepadAxes.Set(static_cast<int>(i), napiGamepadAxesValue);
-            }
-            jsGamepadObject.Set("axes", gamepadAxes);
-            jsInputSource.Set("gamepad", jsGamepadObject);
-        }
-
-        void CreateXRGamepadObject(Napi::Object& jsInputSource, xr::System::Session::Frame::InputSource& inputSource)
-        {
-            auto env = jsInputSource.Env();
-            auto jsGamepadObject = Napi::Object::New(env);
-            SetXRGamepadObjectData(jsInputSource, jsGamepadObject, inputSource);
+            snapshot.Update(pad, [&](bool buttonsChanged, bool axesChanged, bool first) {
+                const auto env = source.Env();
+                auto gamepad = first ? Napi::Object::New(env) : source.Get("gamepad").As<Napi::Object>();
+                auto object = env.Global().Get("Object").As<Napi::Object>();
+                auto freeze = object.Get("freeze").As<Napi::Function>();
+                if (buttonsChanged)
+                {
+                    auto buttons = Napi::Array::New(env, pad.Buttons.size());
+                    for (uint32_t i = 0; i < pad.Buttons.size(); ++i)
+                    {
+                        auto button = Napi::Object::New(env);
+                        button.Set("pressed", pad.Buttons[i].Pressed);
+                        button.Set("touched", pad.Buttons[i].Touched);
+                        button.Set("value", pad.Buttons[i].Value);
+                        buttons.Set(i, button);
+                    }
+                    gamepad.Set("buttons", freeze.Call(object, {buttons}));
+                }
+                if (axesChanged)
+                {
+                    auto axes = Napi::Array::New(env, pad.Axes.size());
+                    for (uint32_t i = 0; i < pad.Axes.size(); ++i)
+                        axes.Set(i, Napi::Number::New(env, pad.Axes[i]));
+                    gamepad.Set("axes", freeze.Call(object, {axes}));
+                }
+                if (first)
+                    source.Set("gamepad", gamepad);
+            });
         }
 
         void PopulateDetectionBoundary(const Napi::Object& object, xr::DetectionBoundary& detectionBoundary)
@@ -195,11 +192,14 @@ namespace Babylon
             return options;
         }
 
-        void SetXRInputSourceData(Napi::Object& jsInputSource, xr::System::Session::Frame::InputSource& inputSource)
+        void SetXRInputSourceData(Napi::Object jsInputSource, xr::System::Session::Frame::InputSource& inputSource, bool setSpaces)
         {
             auto env = jsInputSource.Env();
-            jsInputSource.Set("targetRaySpace", Napi::External<xr::Space>::New(env, &inputSource.AimSpace));
-            jsInputSource.Set("gripSpace", Napi::External<xr::Space>::New(env, &inputSource.GripSpace));
+            if (setSpaces)
+            {
+                jsInputSource.Set("targetRaySpace", Napi::External<xr::Space>::New(env, &inputSource.AimSpace));
+                jsInputSource.Set("gripSpace", Napi::External<xr::Space>::New(env, &inputSource.GripSpace));
+            }
 
             // Don't set hands up unless hand data is supported/available
             if (inputSource.HandTrackedThisFrame || inputSource.JointsTrackedThisFrame)
@@ -260,8 +260,6 @@ namespace Babylon
             }
             profiles.Set(profileIndex, string);
             jsInputSource.Set("profiles", profiles);
-
-            SetXRInputSourceData(jsInputSource, inputSource);
 
             return Napi::Persistent(jsInputSource);
         }
@@ -849,35 +847,21 @@ namespace Babylon
                 if (inputSourceFound == m_idToInputSource.end())
                 {
                     // Create the new input source, which will have the correct spaces associated with it.
-                    m_idToInputSource.insert({ inputSource.ID, CreateXRInputSource(inputSource, env) });
-
-                    // Now that input Source is created, create a gamepad object if enabled for the input source. Hand data also uses the gamepad component.
-                    inputSourceFound = m_idToInputSource.find(inputSource.ID);
-                    if (inputSource.GamepadTrackedThisFrame || inputSource.HandTrackedThisFrame)
-                    {
-                        auto inputSourceVal = inputSourceFound->second.Value();
-                        CreateXRGamepadObject(inputSourceVal, inputSource);
-                    }
-
+                    inputSourceFound = m_idToInputSource.emplace(inputSource.ID, InputSourceState{CreateXRInputSource(inputSource, env), {}}).first;
                     added.insert(inputSource.ID);
                 }
-                else
+                auto& state = inputSourceFound->second;
+                SetXRInputSourceData(state.Object.Value(), inputSource, state.SpaceOwner != &inputSource);
+                state.SpaceOwner = &inputSource;
+                if (inputSource.GamepadTrackedThisFrame || inputSource.HandTrackedThisFrame)
                 {
-                    // Ensure the correct spaces are associated with the existing input source.
-                    auto inputSourceVal = inputSourceFound->second.Value();
-                    SetXRInputSourceData(inputSourceVal, inputSource);
-
-                    // inputSource already exists, find the corresponding gamepad object if enabled and set to correct values
-                    if (inputSourceVal.Has("gamepad"))
-                    {
-                        auto gamepadObject = inputSourceVal.Get("gamepad").As<Napi::Object>();
-                        SetXRGamepadObjectData(inputSourceVal, gamepadObject, inputSource);
-                    }
+                    UpdateXRGamepad(inputSourceFound->second.Object.Value(), inputSource.GamepadObject, inputSourceFound->second.Gamepad);
                 }
 
                 // Handle gestures. Sources that do not support a gesture will always return false
-                const bool isSelected = inputSource.GamepadObject.Buttons[0].Pressed;
-                const bool isSqueezed = inputSource.GamepadObject.Buttons[1].Pressed;
+                const auto& buttons = inputSource.GamepadObject.Buttons;
+                const bool isSelected = !buttons.empty() && buttons[0].Pressed;
+                const bool isSqueezed = buttons.size() > 1 && buttons[1].Pressed;
                 const bool wasSelected = std::find(m_activeSelects.begin(), m_activeSelects.end(), inputSource.ID) != m_activeSelects.end();
                 const bool wasSqueezed = std::find(m_activeSqueezes.begin(), m_activeSqueezes.end(), inputSource.ID) != m_activeSqueezes.end();
 
@@ -904,7 +888,7 @@ namespace Babylon
                 if (current.find(id) == current.end())
                 {
                     // Process select and squeeze for lost sources before we send the source lost event
-                    auto inputSourceVal = ref.Value();
+                    auto inputSourceVal = ref.Object.Value();
                     Napi::Object inputSourceEvent = GenerateXRInputSourceEvent(inputSourceVal, env);
                     const auto& activeSelectIter = std::find(m_activeSelects.begin(), m_activeSelects.end(), id);
                     const auto& activeSqueezeIter = std::find(m_activeSqueezes.begin(), m_activeSqueezes.end(), id);
@@ -934,7 +918,7 @@ namespace Babylon
                 auto jsCurrent = Napi::Array::New(env);
                 for (const auto id : current)
                 {
-                    jsCurrent.Set(jsCurrent.Length(), m_idToInputSource[id].Value());
+                    jsCurrent.Set(jsCurrent.Length(), m_idToInputSource[id].Object.Value());
                 }
                 m_jsInputSources = Napi::Persistent(jsCurrent);
 
@@ -942,12 +926,12 @@ namespace Babylon
                 Napi::Array jsAdded = Napi::Array::New(env);
                 for (const auto id : added)
                 {
-                    jsAdded.Set(jsAdded.Length(), m_idToInputSource[id].Value());
+                    jsAdded.Set(jsAdded.Length(), m_idToInputSource[id].Object.Value());
                 }
                 Napi::Array jsRemoved = Napi::Array::New(env);
                 for (const auto id : removed)
                 {
-                    jsRemoved.Set(jsRemoved.Length(), m_idToInputSource[id].Value());
+                    jsRemoved.Set(jsRemoved.Length(), m_idToInputSource[id].Object.Value());
                 }
                 auto sourcesChangeEvent = Napi::Object::New(env);
                 sourcesChangeEvent.Set("added", jsAdded);
@@ -1095,7 +1079,7 @@ namespace Babylon
                 auto inputSourceIter = m_idToInputSource.find(id);
                 if (inputSourceIter != m_idToInputSource.end())
                 {
-                    auto inputSourceVal = inputSourceIter->second.Value();
+                    auto inputSourceVal = inputSourceIter->second.Object.Value();
                     Napi::Object inputSourceEvent = GenerateXRInputSourceEvent(inputSourceVal, env);
                     FireInputSourceEvent(inputSourceEvent, JS_EVENT_NAME_SELECT_START);
 
@@ -1108,7 +1092,7 @@ namespace Babylon
                 auto inputSourceIter = m_idToInputSource.find(id);
                 if (inputSourceIter != m_idToInputSource.end())
                 {
-                    auto inputSourceVal = inputSourceIter->second.Value();
+                    auto inputSourceVal = inputSourceIter->second.Object.Value();
                     Napi::Object inputSourceEvent = GenerateXRInputSourceEvent(inputSourceVal, env);
                     FireInputSourceEvent(inputSourceEvent, JS_EVENT_NAME_SQUEEZE_START);
 
@@ -1121,7 +1105,7 @@ namespace Babylon
                 auto inputSourceIter = m_idToInputSource.find(id);
                 if (inputSourceIter != m_idToInputSource.end())
                 {
-                    auto inputSourceVal = inputSourceIter->second.Value();
+                    auto inputSourceVal = inputSourceIter->second.Object.Value();
                     Napi::Object inputSourceEvent = GenerateXRInputSourceEvent(inputSourceVal, env);
 
                     // WebXR API dictates the select event fires before the select end
@@ -1137,7 +1121,7 @@ namespace Babylon
                 auto inputSourceIter = m_idToInputSource.find(id);
                 if (inputSourceIter != m_idToInputSource.end())
                 {
-                    auto inputSourceVal = inputSourceIter->second.Value();
+                    auto inputSourceVal = inputSourceIter->second.Object.Value();
                     Napi::Object inputSourceEvent = GenerateXRInputSourceEvent(inputSourceVal, env);
 
                     // WebXR API dictates the squeeze event fires before the squeeze end

@@ -61,6 +61,7 @@ set(SOURCES
     "Source/Tests.Embedding.AnimationFrameGate.cpp"
     "Source/Tests.NativeXr.Compositor.cpp"
     "Source/Tests.NativeXr.FrameCallbackQueue.cpp"
+    "Source/Tests.NativeXr.GamepadSnapshot.cpp"
     "Source/Tests.NativeXr.VideoClock.cpp"
     "Source/Tests.NativeXr.VideoPixels.cpp"
     "Source/Tests.NativeXr.ReferenceSpace.cpp"

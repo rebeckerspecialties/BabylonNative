@@ -6,6 +6,7 @@
 #include <XR.h>
 
 #include "XRGPUSubImage.h"
+#include "GamepadSnapshot.h"
 
 #include <algorithm>
 #include <map>
@@ -106,7 +107,13 @@ namespace Babylon
             std::vector<std::pair<std::string, Napi::FunctionReference>> m_eventNamesAndCallbacks{};
 
             Napi::Reference<Napi::Array> m_jsInputSources{};
-            std::map<xr::System::Session::Frame::InputSource::Identifier, Napi::ObjectReference> m_idToInputSource{};
+            struct InputSourceState
+            {
+                Napi::ObjectReference Object;
+                GamepadSnapshot Gamepad;
+                const xr::System::Session::Frame::InputSource* SpaceOwner{};
+            };
+            std::map<xr::System::Session::Frame::InputSource::Identifier, InputSourceState> m_idToInputSource{};
             Napi::ObjectReference m_jsEyeTrackedSource{};
             std::vector<xr::System::Session::Frame::InputSource::Identifier> m_activeSelects{};
             std::vector<xr::System::Session::Frame::InputSource::Identifier> m_activeSqueezes{};
