@@ -341,6 +341,29 @@ TEST_F(JscNodeApi, DetachNeverReportsSuccessForPinnedBuffer)
     }
 }
 
+TEST_F(JscNodeApi, PropertyOperationsPreserveSymbolIdentity)
+{
+    const auto array{Eval("[]")};
+    const auto iterator{Eval("Symbol.iterator")};
+    const auto key{Eval("Symbol('iterator')")};
+    const auto other{Eval("Symbol('iterator')")};
+    bool present{};
+    napi_value value{};
+    ASSERT_EQ(napi_get_property(env, array, iterator, &value), napi_ok);
+    EXPECT_TRUE(Napi::Value(env, value).StrictEquals(Napi::Value(env, Eval("Array.prototype.values"))));
+    ASSERT_EQ(napi_set_property(env, array, key, iterator), napi_ok);
+    ASSERT_EQ(napi_get_property(env, array, key, &value), napi_ok);
+    EXPECT_TRUE(Napi::Value(env, value).StrictEquals(Napi::Value(env, iterator)));
+    ASSERT_EQ(napi_has_property(env, array, other, &present), napi_ok);
+    EXPECT_FALSE(present);
+    ASSERT_EQ(napi_delete_property(env, array, key, &present), napi_ok);
+    EXPECT_TRUE(present);
+    ASSERT_EQ(napi_has_property(env, array, key, &present), napi_ok);
+    EXPECT_FALSE(present);
+    ASSERT_EQ(napi_has_property(env, array, iterator, &present), napi_ok);
+    EXPECT_TRUE(present);
+}
+
 TEST_F(JscNodeApi, PropertyOperationsCoercePrimitiveReceivers)
 {
     const auto text{Eval("'hello'")};

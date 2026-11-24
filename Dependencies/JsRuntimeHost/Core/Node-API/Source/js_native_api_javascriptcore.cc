@@ -1199,13 +1199,10 @@ napi_status napi_set_property(napi_env env,
   CHECK_NAPI(ToJSObjectCoerced(env, object, &target));
 
   JSValueRef exception{};
-  JSString key_str{ToJSString(env, key, &exception)};
-  CHECK_JSC(env, exception);
-
-  JSObjectSetProperty(
+  JSObjectSetPropertyForKey(
     env->context,
     target,
-    key_str,
+    ToJSValue(key),
     ToJSValue(value),
     kJSPropertyAttributeNone,
     &exception);
@@ -1226,13 +1223,12 @@ napi_status napi_has_property(napi_env env,
   CHECK_NAPI(ToJSObjectCoerced(env, object, &target));
 
   JSValueRef exception{};
-  JSString key_str{ToJSString(env, key, &exception)};
-  CHECK_JSC(env, exception);
-
-  *result = JSObjectHasProperty(
+  *result = JSObjectHasPropertyForKey(
     env->context,
     target,
-    key_str);
+    ToJSValue(key),
+    &exception);
+  CHECK_JSC(env, exception);
   return napi_ok;
 }
 
@@ -1248,13 +1244,10 @@ napi_status napi_get_property(napi_env env,
   CHECK_NAPI(ToJSObjectCoerced(env, object, &target));
 
   JSValueRef exception{};
-  JSString key_str{ToJSString(env, key, &exception)};
-  CHECK_JSC(env, exception);
-
-  *result = ToNapi(JSObjectGetProperty(
+  *result = ToNapi(JSObjectGetPropertyForKey(
     env->context,
     target,
-    key_str,
+    ToJSValue(key),
     &exception));
   CHECK_JSC(env, exception);
 
@@ -1273,13 +1266,10 @@ napi_status napi_delete_property(napi_env env,
   CHECK_NAPI(ToJSObjectCoerced(env, object, &target));
 
   JSValueRef exception{};
-  JSString key_str{ToJSString(env, key, &exception)};
-  CHECK_JSC(env, exception);
-
-  *result = JSObjectDeleteProperty(
+  *result = JSObjectDeletePropertyForKey(
     env->context,
     target,
-    key_str,
+    ToJSValue(key),
     &exception);
   CHECK_JSC(env, exception);
 
