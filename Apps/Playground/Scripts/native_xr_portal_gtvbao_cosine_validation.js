@@ -620,10 +620,11 @@ fn main(input: FragmentInputs) -> FragmentOutputs {
             return material.needAlphaBlending() && !alphaTextured && prepass.excludedMaterials.indexOf(material) === -1;
         });
         panes.forEach(function (material) { prepass.excludedMaterials.push(material); });
-        camera.attachPostProcess(geometry, 0);
-        if (camera._getFirstPostProcess() !== geometry) {
-            throw new Error("Portal AO geometry must be the first post-process.");
-        }
+        // Geometry produces normals/depth for AO, never the scene color used by
+        // the combine. The optional non-XR color-reuse path has no color copy.
+        var aoIndex = camera._postProcesses.indexOf(ssao);
+        if (aoIndex < 0) throw new Error("Portal AO camera has no attached AO pass.");
+        camera.attachPostProcess(geometry, aoIndex);
         scene.onDisposeObservable.add(function () { geometry.dispose(camera); });
         status("native-xr-portal:gtvbao=cosine-weighted:slices=" + sampleLayout.slices + ":stepsPerSide=" + sampleLayout.steps +
             ":samples=" + sampleLayout.slices * sampleLayout.steps * (sampleLayout.paired ? 2 : 1) + ":bits=32:precision=" + precision + ":noise=ordered-4x4:filter=box4*box2" +

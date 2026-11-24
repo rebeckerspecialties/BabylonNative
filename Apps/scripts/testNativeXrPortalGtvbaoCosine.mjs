@@ -348,3 +348,23 @@ test("setup rejects cameras and pipelines it cannot reshape", () => {
         _blurHPostProcess: pass(false), _blurVPostProcess: pass(true), _ssaoCombinePostProcess: pass(false) }] } }), () => {});
     assert.throws(() => observers.pop()(), /unallocated pre-pass SSAO2 pipeline/);
 });
+
+for (const retainColorCopy of [true, false]) {
+    test("geometry feeds AO without replacing scene color; color copy=" + retainColorCopy, () => {
+        const c = install();
+        const pass = () => ({ _textures: [], _options: 0.5, onApplyObservable: new B.Observable() });
+        const color = pass(), ssao = pass(), blurH = pass(), blurV = pass(), combine = pass();
+        const chain = [...(retainColorCopy ? [color] : []), ssao, blurH, blurV, combine];
+        const camera = { mode: B.Camera.PERSPECTIVE_CAMERA, _postProcesses: chain, attachPostProcess(p, i) { chain.splice(i, 0, p); } };
+        c.BABYLON.Matrix = B.Matrix;
+        c.BABYLON.PostProcess = class { constructor(name) { this.name = name; } };
+        const pipeline = { name: "native-xr-portal-ssao2", _prePassRenderer: {}, _originalColorPostProcess: color,
+            _ssaoPostProcess: ssao, _blurHPostProcess: blurH, _blurVPostProcess: blurV, _ssaoCombinePostProcess: combine };
+        c.__nativeArPortalStartProfile({ activeCamera: camera, materials: [], getEngine: () => ({}),
+            postProcessRenderPipelineManager: { supportedPipelines: [pipeline] },
+            onBeforeRenderObservable: { addOnce: cb => cb() }, onDisposeObservable: new B.Observable() }, () => {});
+        const geometry = chain.find(p => p.name === "portalAoGeometry");
+        assert.ok(geometry);
+        assert.deepEqual(chain, [...(retainColorCopy ? [color] : []), geometry, ssao, blurH, blurV, combine]);
+    });
+}
