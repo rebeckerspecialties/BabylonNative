@@ -245,7 +245,7 @@ namespace Babylon
                 const auto* address = value.As<Napi::External<void>>().Data();
                 for (const auto& source : m_frame->InputSources)
                 {
-                    if (!source.TrackedThisFrame)
+                    if (!source.TrackedThisFrame || source.HasUnavailableControllerPose(address))
                     {
                         continue;
                     }
@@ -277,7 +277,13 @@ namespace Babylon
         Napi::Value XRFrame::GetPoseData(const Napi::CallbackInfo& info)
         {
             auto* referenceSpace = XRReferenceSpace::Unwrap(info[1].As<Napi::Object>());
-            const auto& space = *info[0].As<Napi::External<xr::Space>>().Data();
+            const auto* address = info[0].As<Napi::External<xr::Space>>().Data();
+            if (!m_frame || std::any_of(m_frame->InputSources.begin(), m_frame->InputSources.end(),
+                [address](const auto& source) { return source.HasUnavailableControllerPose(address); }))
+            {
+                return Napi::Boolean::New(info.Env(), false);
+            }
+            const auto& space = *address;
             auto vectorBuffer = info[2].As<Napi::ArrayBuffer>();
             auto matrixBuffer = info[3].As<Napi::ArrayBuffer>();
             m_transform.Update(xr::Space{referenceSpace->GetPoseInReferenceSpace(space.Pose)}, vectorBuffer, matrixBuffer, false);

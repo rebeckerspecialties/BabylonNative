@@ -334,6 +334,22 @@ namespace xr
                     GamePad GamepadObject{};
                     Space GripSpace{};
                     Space AimSpace{};
+                    enum class PoseState { Inactive, Unlocated, Located };
+                    bool GripPoseAvailable{true};
+                    bool AimPoseAvailable{true};
+
+                    void SetControllerPoseStates(PoseState grip, PoseState aim)
+                    {
+                        GripPoseAvailable = grip == PoseState::Located;
+                        AimPoseAvailable = aim == PoseState::Located;
+                        TrackedThisFrame = GamepadTrackedThisFrame = grip != PoseState::Inactive || aim != PoseState::Inactive;
+                    }
+
+                    bool HasUnavailableControllerPose(const void* space) const
+                    {
+                        return (space == &GripSpace && (!TrackedThisFrame || !GripPoseAvailable)) ||
+                            (space == &AimSpace && (!TrackedThisFrame || !AimPoseAvailable));
+                    }
                     HandednessEnum Handedness{};
                     std::vector<JointSpace> HandJoints{};
 

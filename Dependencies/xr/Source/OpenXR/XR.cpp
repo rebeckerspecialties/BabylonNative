@@ -785,24 +785,30 @@ namespace xr
             for (size_t i = 0; i < InputSources.size(); ++i)
             {
                 auto& src = InputSources[i];
-                src.TrackedThisFrame = src.GamepadTrackedThisFrame = false;
-                if (synced == XR_SESSION_NOT_FOCUSED) continue;
+                using PoseState = Session::Frame::InputSource::PoseState;
+                if (synced == XR_SESSION_NOT_FOCUSED)
+                {
+                    src.SetControllerPoseStates(PoseState::Inactive, PoseState::Inactive);
+                    continue;
+                }
                 auto get = MakeXr<XrActionStateGetInfo>(XR_TYPE_ACTION_STATE_GET_INFO);
                 get.subactionPath = HandPaths[i];
                 const auto locate = [&](XrAction action, XrSpace space, Space& target) {
                     get.action = action;
                     auto state = MakeXr<XrActionStatePose>(XR_TYPE_ACTION_STATE_POSE);
                     CheckXr(xrGetActionStatePose(Session, &get, &state), "xrGetActionStatePose");
-                    if (!state.isActive) return false;
+                    if (!state.isActive) return PoseState::Inactive;
                     auto location = MakeXr<XrSpaceLocation>(XR_TYPE_SPACE_LOCATION);
                     CheckXr(xrLocateSpace(space, AppSpace, FrameState.predictedDisplayTime, &location), "xrLocateSpace(controller)");
                     constexpr auto valid = XR_SPACE_LOCATION_POSITION_VALID_BIT | XR_SPACE_LOCATION_ORIENTATION_VALID_BIT;
-                    if ((location.locationFlags & valid) != valid) return false;
+                    if ((location.locationFlags & valid) != valid) return PoseState::Unlocated;
                     target.Pose = ToPose(location.pose);
-                    return true;
+                    return PoseState::Located;
                 };
-                if (!locate(Grip, GripSpaces[i], src.GripSpace) || !locate(Aim, AimSpaces[i], src.AimSpace)) continue;
-                src.TrackedThisFrame = src.GamepadTrackedThisFrame = true;
+                const auto grip = locate(Grip, GripSpaces[i], src.GripSpace);
+                const auto aim = locate(Aim, AimSpaces[i], src.AimSpace);
+                src.SetControllerPoseStates(grip, aim);
+                if (!src.TrackedThisFrame) continue;
                 if (src.InteractionProfileName.empty()) {
                     auto profile = MakeXr<XrInteractionProfileState>(XR_TYPE_INTERACTION_PROFILE_STATE);
                     CheckXr(xrGetCurrentInteractionProfile(Session, HandPaths[i], &profile), "xrGetCurrentInteractionProfile");
