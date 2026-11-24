@@ -1,5 +1,7 @@
 #pragma once
 
+#include <algorithm>
+
 namespace Babylon
 {
     class XRView : public Napi::ObjectWrap<XRView>
@@ -34,8 +36,6 @@ namespace Babylon
             : Napi::ObjectWrap<XRView>{info}
             , m_eyeIdx{0}
             , m_eye{XREye::IndexToEye(m_eyeIdx)}
-            , m_projectionMatrix{Napi::Persistent(Napi::Float32Array::New(info.Env(), MATRIX_SIZE))}
-            , m_rigidTransform{Napi::Persistent(XRRigidTransform::New(info.Env()))}
             , m_isFirstPersonObserver{false}
         {
         }
@@ -55,9 +55,13 @@ namespace Babylon
                 m_eye = XREye::IndexToEye(m_eyeIdx);
             }
 
-            std::memcpy(m_projectionMatrix.Value().Data(), projectionMatrix.data(), m_projectionMatrix.Value().ByteLength());
-
-            XRRigidTransform::Unwrap(m_rigidTransform.Value())->Update(space, false);
+            // Capture by value: script can retain the view beyond the device frame.
+            std::copy(projectionMatrix.begin(), projectionMatrix.end(), m_projection.begin());
+            m_space = space;
+            if (!m_projectionMatrix.IsEmpty())
+                std::memcpy(m_projectionMatrix.Value().Data(), m_projection.data(), sizeof(m_projection));
+            if (!m_rigidTransform.IsEmpty())
+                XRRigidTransform::Unwrap(m_rigidTransform.Value())->Update(m_space, false);
 
             m_isFirstPersonObserver = isFirstPersonObserver;
         }
@@ -65,6 +69,8 @@ namespace Babylon
     private:
         size_t m_eyeIdx{};
         gsl::czstring m_eye{};
+        std::array<float, MATRIX_SIZE> m_projection{};
+        xr::Space m_space{};
         Napi::Reference<Napi::Float32Array> m_projectionMatrix{};
         Napi::ObjectReference m_rigidTransform{};
         bool m_isFirstPersonObserver{};
@@ -75,13 +81,25 @@ namespace Babylon
             return Napi::String::From(info.Env(), m_eye);
         }
 
-        Napi::Value GetProjectionMatrix(const Napi::CallbackInfo&)
+        Napi::Value GetProjectionMatrix(const Napi::CallbackInfo& info)
         {
+            if (m_projectionMatrix.IsEmpty())
+            {
+                auto matrix = Napi::Float32Array::New(info.Env(), MATRIX_SIZE);
+                std::memcpy(matrix.Data(), m_projection.data(), sizeof(m_projection));
+                m_projectionMatrix = Napi::Persistent(matrix);
+            }
             return m_projectionMatrix.Value();
         }
 
-        Napi::Value GetTransform(const Napi::CallbackInfo&)
+        Napi::Value GetTransform(const Napi::CallbackInfo& info)
         {
+            if (m_rigidTransform.IsEmpty())
+            {
+                auto transform = XRRigidTransform::New(info.Env());
+                XRRigidTransform::Unwrap(transform)->Update(m_space, false);
+                m_rigidTransform = Napi::Persistent(transform);
+            }
             return m_rigidTransform.Value();
         }
 

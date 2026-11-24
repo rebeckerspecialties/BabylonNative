@@ -34,9 +34,6 @@ namespace Babylon
 
         XRViewerPose(const Napi::CallbackInfo& info)
             : Napi::ObjectWrap<XRViewerPose>{info}
-            , m_jsTransform{Napi::Persistent(XRRigidTransform::New(info.Env()))}
-            , m_jsViews{Napi::Persistent(Napi::Array::New(info.Env(), 0))}
-            , m_transform{*XRRigidTransform::Unwrap(m_jsTransform.Value())}
             , m_isEmulatedPosition{true}
         {
         }
@@ -55,19 +52,21 @@ namespace Babylon
 
             if (frame.ViewerSpace)
             {
-                m_transform.Update(adjustSpace(*frame.ViewerSpace), false);
+                m_space = adjustSpace(*frame.ViewerSpace);
             }
             else if (!frame.Views.empty())
             {
-                m_transform.Update(adjustSpace(frame.Views[0].Space), false);
+                m_space = adjustSpace(frame.Views[0].Space);
             }
+            if (!m_jsTransform.IsEmpty())
+                XRRigidTransform::Unwrap(m_jsTransform.Value())->Update(m_space, false);
 
             // Update the views array if necessary.
             const auto oldSize = static_cast<uint32_t>(m_views.size());
             const auto newSize = static_cast<uint32_t>(frame.Views.size());
-            if (oldSize != newSize)
+            if (oldSize != newSize || m_jsViews.IsEmpty())
             {
-                auto newViews = Napi::Array::New(m_jsViews.Env(), newSize);
+                auto newViews = Napi::Array::New(info.Env(), newSize);
                 m_views.resize(newSize);
 
                 for (uint32_t idx = 0; idx < newSize; ++idx)
@@ -107,17 +106,24 @@ namespace Babylon
         Napi::ObjectReference m_jsTransform{};
         Napi::Reference<Napi::Array> m_jsViews{};
 
-        XRRigidTransform& m_transform;
+        xr::Space m_space{};
         std::vector<XRView*> m_views{};
         bool m_isEmulatedPosition;
 
-        Napi::Value GetTransform(const Napi::CallbackInfo& /*info*/)
+        Napi::Value GetTransform(const Napi::CallbackInfo& info)
         {
+            if (m_jsTransform.IsEmpty())
+            {
+                auto transform = XRRigidTransform::New(info.Env());
+                XRRigidTransform::Unwrap(transform)->Update(m_space, false);
+                m_jsTransform = Napi::Persistent(transform);
+            }
             return m_jsTransform.Value();
         }
 
-        Napi::Value GetViews(const Napi::CallbackInfo& /*info*/)
+        Napi::Value GetViews(const Napi::CallbackInfo& info)
         {
+            if (m_jsViews.IsEmpty()) m_jsViews = Napi::Persistent(Napi::Array::New(info.Env()));
             return m_jsViews.Value();
         }
 

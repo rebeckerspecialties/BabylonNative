@@ -5,6 +5,7 @@
 #include "../../../Plugins/NativeXr/Source/Constants.h"
 #include "../../../Plugins/NativeXr/Source/XRRigidTransform.h"
 #include "../../../Plugins/NativeXr/Source/XRReferenceSpace.h"
+#include "../../../Plugins/NativeXr/Source/XRView.h"
 
 #include <gtest/gtest.h>
 #include <cmath>
@@ -65,6 +66,30 @@ TEST(NativeXrReferenceSpace, MissingAndIdentityOffsetsLeaveNativePosesUnchanged)
         reference->SetTransform(MakeTransform(env, {{0.f, 0.f, 0.f}, {0.f, 0.f, 0.f, 1.f}}));
         ExpectPoseNear(reference->GetPoseInReferenceSpace(pose), pose);
         ExpectPoseNear(reference->GetPoseInNativeSpace(pose), pose);
+    });
+}
+
+TEST(NativeXrReferenceSpace, RetainedEyeViewsMaterializeIndependentSnapshots)
+{
+    RunReferenceSpaceTest([](Napi::Env env) {
+        Babylon::XRView::Initialize(env);
+        auto ctor = env.Global().Get("XRView").As<Napi::Function>();
+        auto left = ctor.New({}), right = ctor.New({});
+        auto matrix = Babylon::IDENTITY_MATRIX;
+        xr::Space source{{{-0.032f, 0, 0}, {}}};
+        Babylon::XRView::Unwrap(left)->Update(0, matrix, source, false, {});
+        source.Pose.Position.X = 0.032f;
+        matrix[8] = 0.13f;
+        Babylon::XRView::Unwrap(right)->Update(1, matrix, source, false, {});
+        auto projection = left.Get("projectionMatrix").As<Napi::Float32Array>();
+        auto transform = left.Get("transform").As<Napi::Object>();
+        EXPECT_TRUE(projection.StrictEquals(left.Get("projectionMatrix")));
+        EXPECT_TRUE(transform.StrictEquals(left.Get("transform")));
+        EXPECT_FALSE(transform.StrictEquals(right.Get("transform")));
+        EXPECT_FLOAT_EQ(projection[8], 0.f);
+        EXPECT_FLOAT_EQ(right.Get("projectionMatrix").As<Napi::Float32Array>()[8], 0.13f);
+        EXPECT_FLOAT_EQ(transform.Get("matrix").As<Napi::Float32Array>()[12], -0.032f);
+        EXPECT_FLOAT_EQ(right.Get("transform").As<Napi::Object>().Get("matrix").As<Napi::Float32Array>()[12], 0.032f);
     });
 }
 

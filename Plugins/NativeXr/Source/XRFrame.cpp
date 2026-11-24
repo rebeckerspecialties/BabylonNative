@@ -470,8 +470,15 @@ namespace Babylon
             // Pass the world information object back to the caller.
             worldInformationObj.Set("detectedPlanes", planeSet);
 
-            if (m_meshSet)
+            if (m_frame)
             {
+                if (m_meshSet.IsEmpty())
+                {
+                    auto meshes = info.Env().Global().Get("Set").As<Napi::Function>().New({});
+                    for (const auto& entry : m_trackedMeshes)
+                        meshes.Get("add").As<Napi::Function>().Call(meshes, {entry.second.Value()});
+                    m_meshSet = Napi::Persistent(meshes);
+                }
                 worldInformationObj.Set("detectedMeshes", m_meshSet.Value());
             }
 
@@ -582,12 +589,8 @@ namespace Babylon
                 m_trackedMeshes.erase(meshID);
             }
 
-            // Create a new mesh set every frame, detected meshes are assumed immutable
-            m_meshSet = Napi::Persistent(env.Global().Get("Set").As<Napi::Function>().New({}));
-            for (const auto& [meshID, meshNapiValue] : m_trackedMeshes)
-            {
-                m_meshSet.Value().Get("add").As<Napi::Function>().Call(m_meshSet.Value(), { meshNapiValue.Value() });
-            }
+            // Materialize the new snapshot only if script requests worldInformation.
+            m_meshSet.Reset();
         }
 
         void XRFrame::UpdateImageTrackingResults(const Napi::Env& env)
