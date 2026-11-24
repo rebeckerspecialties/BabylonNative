@@ -107,6 +107,8 @@ and command-encoder methods belong on the receiver's prototype, not each instanc
 Keep native pose storage independent per frame; materialize JS matrices only on access.
 For 45-second texture/direct comparisons run Samples 111-114; read steady missed
 refreshes and longest clean interval, not just headline FPS. See the
+[raw and interactive device results](https://github.com/rebeckerspecialties/babylonnative-webxr-samples/blob/b812f88/qualification/quest-1/pacing.md);
+the interactive measurements include the controller projection and FPS HUD. See the
 [decoder import probe](../Core/GraphicsWgpu/Tests/AndroidDecoderImport.md) before
 changing the production upload path. For iOS, ARKit currently grants immersive AR,
 not the stereo VR presentation required by the Quest applications.

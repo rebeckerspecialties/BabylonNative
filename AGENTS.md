@@ -355,9 +355,14 @@ xcrun devicectl device process launch --device B5D4CA48-8949-525C-8E5D-4F661161B
 On XS Max (iOS 18.7.10), launch `app:///Scripts/native_xr_portal_manual_validation.js`
 before the demo for real floor placement and normal status logs. The November build
 needed JSC symbol-key access for `createBindGroup` to read `entries[Symbol.iterator]`.
-The geometry-buffer run passed physical inspection but ran at 16-26 fps after placement;
-60 fps while waiting for a floor is not a post-placement result. Keep the shared pre-pass
-opt-in until placement, clipping, AO and moving-camera performance pass together.
+The user confirmed geometry-buffer placement and rendering at 16-26 fps. To compare,
+insert `app:///Scripts/native_xr_portal_profile_prepass.js` between the manual prelude
+and the demo. Wait for `marker-settled`, `ssao2-renderer=pre-pass` and `anchor-created`.
+The November XS retry placed and rendered on the display; its first 60 post-anchor
+windows had a median of 18 fps, 86 draws and 17 passes/frame. Do not compare 60 fps
+before placement or 30 fps facing less geometry with this view. Keep pre-pass opt-in.
+Use `xcrun devicectl device capture screenshot --device ID --destination PATH`;
+silence on a redirected console was not evidence that the phone was black.
 
 Original functional baseline (May 2026):
 
