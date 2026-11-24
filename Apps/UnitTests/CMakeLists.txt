@@ -86,6 +86,11 @@ set(UNITTEST_LIBRARIES
     XMLHttpRequest
     gtest_main)
 
+if(TARGET OpenXR::openxr_loader)
+    list(APPEND SOURCES "Source/Tests.NativeXr.Passthrough.cpp")
+    list(APPEND UNITTEST_LIBRARIES OpenXR::openxr_loader)
+endif()
+
 # The bgfx NativeEngine tests and the NativeWebGPU tests are alternatives: a build has one
 # graphics backend. The NativeEngine branch tracks upstream's test list so a bgfx build of this
 # tree keeps upstream's coverage; the NativeWebGPU branch is this fork's.

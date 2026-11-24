@@ -268,7 +268,21 @@ namespace Babylon
             return m_sessionState == nullptr ? 0 : m_sessionState->LastTextureArrayLength;
         }
 
-        arcana::task<void, std::exception_ptr> NativeXr::Impl::BeginSessionAsync()
+        arcana::task<bool, std::exception_ptr> NativeXr::Impl::IsSessionSupportedAsync(xr::SessionType mode)
+        {
+#if defined(__ANDROID__) && defined(BABYLON_NATIVE_XR_OPENXR)
+            if (mode == xr::SessionType::IMMERSIVE_AR)
+            {
+                auto& context = Graphics::DeviceContext::GetFromJavaScript(m_env);
+                return arcana::make_task(context.AfterRenderScheduler(), arcana::cancellation::none(), [self = shared_from_this()] {
+                    return self->m_system.TryInitialize() && self->m_system.SupportsImmersiveAr();
+                });
+            }
+#endif
+            return xr::System::IsSessionSupportedAsync(mode);
+        }
+
+        arcana::task<void, std::exception_ptr> NativeXr::Impl::BeginSessionAsync(bool immersiveAr)
         {
             if (m_beginTask)
             {
@@ -279,7 +293,7 @@ namespace Babylon
 
             // Don't try to start a session while it is still ending.
             m_beginTask.emplace(m_endTask.then(context.AfterRenderScheduler(), arcana::cancellation::none(),
-                [this, thisRef{shared_from_this()}, &context]() {
+                [this, thisRef{shared_from_this()}, &context, immersiveAr]() {
                     assert(m_sessionState == nullptr);
 
                     m_sessionState = std::make_unique<SessionState>(context);
@@ -300,6 +314,8 @@ namespace Babylon
                     }
                     auto graphicsBindingLifetime = std::shared_ptr<void>{};
 #elif defined(__ANDROID__) && defined(BABYLON_NATIVE_XR_OPENXR)
+                    if (immersiveAr && !m_system.SupportsImmersiveAr())
+                        throw std::system_error{std::make_error_code(std::errc::not_supported), "OpenXR immersive AR is unavailable"};
                     BabylonWgpuVulkanBinding nativeVulkanBinding{};
                     if (!babylon_wgpu_native_get_vulkan_binding(&nativeVulkanBinding))
                     {
@@ -327,8 +343,13 @@ namespace Babylon
 #endif
 
                     return xr::System::Session::CreateAsync(m_system, graphicsDevice, graphicsQueue, [this, thisRef{shared_from_this()}] { return m_windowPtr; })
-                        .then(m_sessionState->GraphicsContext.AfterRenderScheduler(), arcana::cancellation::none(), [this, thisRef{shared_from_this()}, graphicsBindingLifetime{std::move(graphicsBindingLifetime)}](std::shared_ptr<xr::System::Session> session) {
+                        .then(m_sessionState->GraphicsContext.AfterRenderScheduler(), arcana::cancellation::none(), [this, thisRef{shared_from_this()}, graphicsBindingLifetime{std::move(graphicsBindingLifetime)}, immersiveAr](std::shared_ptr<xr::System::Session> session) {
                             static_cast<void>(graphicsBindingLifetime);
+#if defined(__ANDROID__) && defined(BABYLON_NATIVE_XR_OPENXR)
+                            if (immersiveAr) session->EnableImmersiveAr();
+#else
+                            static_cast<void>(immersiveAr);
+#endif
                             m_sessionState->Session = std::move(session);
 #if defined(__ANDROID__) && defined(BABYLON_NATIVE_XR_OPENXR)
                             babylon_wgpu_suspend_window_presentation();
@@ -338,7 +359,15 @@ namespace Babylon
                         });
                 }));
 
-            return m_beginTask.value();
+            return m_beginTask->then(m_runtimeScheduler, arcana::cancellation::none(),
+                [self = shared_from_this()](const arcana::expected<void, std::exception_ptr>& result) {
+                    if (result.has_error())
+                    {
+                        self->m_sessionState.reset();
+                        self->m_beginTask.reset();
+                        std::rethrow_exception(result.error());
+                    }
+                });
         }
 
         arcana::task<void, std::exception_ptr> NativeXr::Impl::EndSessionAsync()

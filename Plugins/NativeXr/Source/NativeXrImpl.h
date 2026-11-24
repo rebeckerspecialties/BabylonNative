@@ -17,7 +17,8 @@ namespace Babylon
             void UpdateWindow(void* windowPtr);
             void SetSessionStateChangedCallback(std::function<void(bool)> callback);
 
-            arcana::task<void, std::exception_ptr> BeginSessionAsync();
+            arcana::task<bool, std::exception_ptr> IsSessionSupportedAsync(xr::SessionType mode);
+            arcana::task<void, std::exception_ptr> BeginSessionAsync(bool immersiveAr);
             arcana::task<void, std::exception_ptr> EndSessionAsync();
 
             std::weak_ptr<xr::System::Session> GetPlatformSession() const

@@ -160,7 +160,7 @@ namespace xr
             m_chains.clear();
         }
         bool Finish(XrSession session, XrSpace space, XrSpace viewerSpace, XrFrameEndInfo& end,
-            XrCompositionLayerProjection* projection, bool render, bool equirect2, uint32_t maxLayers)
+            XrCompositionLayerProjection* projection, bool render, bool equirect2, uint32_t maxLayers, XrPassthroughLayerFB passthrough)
         {
             std::scoped_lock lock{m_mutex};
             for (auto& [_, chain] : m_chains)
@@ -179,6 +179,13 @@ namespace xr
             m_storage.clear();
             m_storage.reserve(m_order.size() * 2);
             bool submittedProjection{};
+            auto background = MakeXr<XrCompositionLayerPassthroughFB>(XR_TYPE_COMPOSITION_LAYER_PASSTHROUGH_FB);
+            if (render && passthrough)
+            {
+                background.layerHandle = passthrough;
+                background.flags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
+                m_headers.push_back(reinterpret_cast<const XrCompositionLayerBaseHeader*>(&background));
+            }
             if (render) for (const auto& p : m_order)
             {
                 if (!p.Id)

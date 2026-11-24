@@ -456,6 +456,7 @@ namespace xr
             bool SupportsMediaLayers() const;
             bool SupportsWarpDepth(int64_t format) const;
             bool SupportsFoveation(double scale) const;
+            void EnableImmersiveAr();
             void SetFoveation(double amount);
             WarpImages AcquireWarpImages(int64_t format);
             void MarkWarpImagesSubmitted(const Pose& delta);
@@ -484,6 +485,9 @@ namespace xr
 
         bool IsInitialized() const;
         bool TryInitialize();
+#if defined(BABYLON_NATIVE_XR_OPENXR) && defined(__ANDROID__)
+        bool SupportsImmersiveAr() const;
+#endif
         static arcana::task<bool, std::exception_ptr> IsSessionSupportedAsync(SessionType);
 
         uintptr_t GetNativeXrContext();

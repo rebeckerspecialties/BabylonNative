@@ -332,13 +332,20 @@ namespace Babylon
             }
 
             LogSessionStage("starting platform session");
-            session.m_xr->BeginSessionAsync()
+            session.m_xr->BeginSessionAsync(info[0].ToString().Utf8Value() == "immersive-ar")
                 .then(session.m_runtimeScheduler, arcana::cancellation::none(),
                     [deferred, jsSession{ std::move(jsSession) }, immersive = info[0].ToString().Utf8Value() != "inline", env{ info.Env() }](const arcana::expected<void, std::exception_ptr>& result) {
                 if (result.has_error())
                 {
                     LogSessionFailure(result.error());
-                    deferred.Reject(Napi::Error::New(env, result.error()).Value());
+                    auto error = Napi::Error::New(env, result.error());
+                    try { std::rethrow_exception(result.error()); }
+                    catch (const std::system_error& e)
+                    {
+                        if (e.code() == std::errc::not_supported) error.Value().Set("name", "NotSupportedError");
+                    }
+                    catch (...) {}
+                    deferred.Reject(error.Value());
                 }
                 else
                 {
@@ -396,11 +403,7 @@ namespace Babylon
             // Currently only immersive VR and immersive AR are supported.
             const auto sessionMode = ParseXRSessionMode(info[0].As<Napi::String>().Utf8Value());
             if (!sessionMode) throw Napi::TypeError::New(info.Env(), "Unknown XR session mode");
-            if (sessionMode == XRSessionMode::Inline
-#if defined(__ANDROID__) && defined(BABYLON_NATIVE_XR_OPENXR)
-                || sessionMode != XRSessionMode::ImmersiveVr
-#endif
-            )
+            if (sessionMode == XRSessionMode::Inline)
             {
                 auto error = Napi::Error::New(info.Env(), "XR session mode unavailable on this backend");
                 error.Value().Set("name", "NotSupportedError");
@@ -436,7 +439,11 @@ namespace Babylon
             frame.DefineProperty(Napi::PropertyDescriptor::Value("session", session, napi_enumerable));
             session.Set("renderState", m_renderState.Value());
             session.Set("environmentBlendMode", immersiveAr ? "alpha-blend" : "opaque");
+#if defined(__ANDROID__) && defined(BABYLON_NATIVE_XR_OPENXR)
+            session.Set("interactionMode", "world-space");
+#else
             session.Set("interactionMode", immersiveAr ? "screen-space" : "world-space");
+#endif
             session.Set("visibilityState", "visible");
 
             m_enabledFeatures = {XRReferenceSpaceType::VIEWER, XRReferenceSpaceType::LOCAL};

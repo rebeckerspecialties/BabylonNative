@@ -14,6 +14,7 @@
 #include <openxr/openxr_platform.h>
 #include <android/log.h>
 #include "CompositionLayers.h"
+#include "PassthroughLayer.h"
 #include "SpaceWarpSwapchains.h"
 
 #include <algorithm>
@@ -23,6 +24,7 @@
 #include <cstdio>
 #include <cstring>
 #include <stdexcept>
+#include <system_error>
 #include <thread>
 #include <utility>
 
@@ -218,6 +220,7 @@ namespace xr
             const bool convertTime = enable(XR_KHR_CONVERT_TIMESPEC_TIME_EXTENSION_NAME);
             AndroidSurface = enable(XR_KHR_ANDROID_SURFACE_SWAPCHAIN_EXTENSION_NAME);
             const bool querySpaceWarp = enable(XR_FB_SPACE_WARP_EXTENSION_NAME);
+            const bool queryPassthrough = enable(XR_FB_PASSTHROUGH_EXTENSION_NAME);
             constexpr const char* densityExtensions[] = {XR_FB_SWAPCHAIN_UPDATE_STATE_EXTENSION_NAME,
                 XR_FB_FOVEATION_EXTENSION_NAME, XR_FB_FOVEATION_CONFIGURATION_EXTENSION_NAME, XR_FB_FOVEATION_VULKAN_EXTENSION_NAME};
             Foveation = std::all_of(std::begin(densityExtensions), std::end(densityExtensions),
@@ -259,6 +262,12 @@ namespace xr
             {
                 properties.next = &warp;
             }
+            auto passthrough = MakeXr<XrSystemPassthroughPropertiesFB>(XR_TYPE_SYSTEM_PASSTHROUGH_PROPERTIES_FB);
+            if (queryPassthrough)
+            {
+                passthrough.next = properties.next;
+                properties.next = &passthrough;
+            }
             if (convertTime)
             {
                 CheckXr(xrGetInstanceProcAddr(Instance, "xrConvertTimeToTimespecTimeKHR",
@@ -266,6 +275,8 @@ namespace xr
             }
             CheckXr(xrGetSystemProperties(Instance, SystemId, &properties), "xrGetSystemProperties");
             MaxLayers = properties.graphicsProperties.maxLayerCount;
+            SupportsPassthrough = passthrough.supportsPassthrough && MaxLayers >= 2;
+            __android_log_print(ANDROID_LOG_INFO, "BabylonNative", "OpenXR compositor passthrough supported=%d", SupportsPassthrough);
             MotionWidth = warp.recommendedMotionVectorImageRectWidth;
             MotionHeight = warp.recommendedMotionVectorImageRectHeight;
             __android_log_print(ANDROID_LOG_INFO, "BabylonNative",
@@ -331,6 +342,7 @@ namespace xr
             {
                 BlendMode = blendModes.front();
             }
+            SupportsAlphaBlend = std::find(blendModes.begin(), blendModes.end(), XR_ENVIRONMENT_BLEND_MODE_ALPHA_BLEND) != blendModes.end();
 
             return true;
         }
@@ -349,6 +361,7 @@ namespace xr
         uint32_t MaxLayers{};
         uint32_t MotionWidth{}, MotionHeight{};
         bool Foveation{};
+        bool SupportsPassthrough{}, SupportsAlphaBlend{};
     };
 
     struct System::Session::Impl
@@ -794,6 +807,7 @@ namespace xr
                 }
             }
             Layers.Clear();
+            Passthrough.Reset();
             WarpChains.clear();
             for (auto& viewSwapchain : ViewSwapchains)
             {
@@ -831,9 +845,11 @@ namespace xr
                         beginInfo.primaryViewConfigurationType = VIEW_CONFIGURATION_TYPE;
                         CheckXr(xrBeginSession(Session, &beginInfo), "xrBeginSession");
                         SessionRunning = true;
+                        if (UsesPassthrough) Passthrough.Open(System.Instance, Session, xrGetInstanceProcAddr);
                     }
                     else if (SessionState == XR_SESSION_STATE_STOPPING && SessionRunning)
                     {
+                        Passthrough.Reset();
                         CheckXr(xrEndSession(Session), "xrEndSession");
                         SessionRunning = false;
                     }
@@ -1106,8 +1122,8 @@ namespace xr
             }
             auto endInfo = MakeXr<XrFrameEndInfo>(XR_TYPE_FRAME_END_INFO);
             endInfo.displayTime = FrameState.predictedDisplayTime;
-            endInfo.environmentBlendMode = System.BlendMode;
-            const bool submittedProjection = Layers.Finish(Session, AppSpace, HeadSpace, endInfo, projection, renderLayer && FrameShouldRender, System.Equirect2, System.MaxLayers);
+            endInfo.environmentBlendMode = AlphaBlend ? XR_ENVIRONMENT_BLEND_MODE_ALPHA_BLEND : System.BlendMode;
+            const bool submittedProjection = Layers.Finish(Session, AppSpace, HeadSpace, endInfo, projection, renderLayer && FrameShouldRender, System.Equirect2, System.MaxLayers, Passthrough.Handle());
             if (submittedProjection && warpViews.size() == 2 && !LoggedWarpSubmission)
             {
                 __android_log_print(ANDROID_LOG_INFO, "BabylonNative", "Submitted stereo motion and depth to OpenXR compositor");
@@ -1151,6 +1167,9 @@ namespace xr
         std::vector<XrViewConfigurationView> ViewConfigurationViews{};
         std::vector<ViewSwapchain> ViewSwapchains{};
         CompositionLayers Layers;
+        PassthroughLayer Passthrough;
+        bool AlphaBlend{};
+        bool UsesPassthrough{};
         std::vector<int64_t> WarpDepths;
         std::unordered_map<int64_t, std::unique_ptr<SpaceWarpSwapchains>> WarpChains;
         SpaceWarpSwapchains* ActiveWarp{};
@@ -1320,7 +1339,28 @@ namespace xr
         return shape == LayerShape::Quad || (shape == LayerShape::Cube && m_impl->System.Cube) ||
             (shape == LayerShape::Cylinder && m_impl->System.Cylinder) || (shape == LayerShape::Equirect && m_impl->System.Equirect);
     }
-    uint32_t System::Session::MaxLayerCount() const { return m_impl->System.MaxLayers; }
+    bool System::SupportsImmersiveAr() const { return m_impl->SupportsAlphaBlend || m_impl->SupportsPassthrough; }
+
+    void System::Session::EnableImmersiveAr()
+    {
+        if (m_impl->System.SupportsAlphaBlend)
+        {
+            m_impl->AlphaBlend = true;
+        }
+        else if (m_impl->System.SupportsPassthrough)
+        {
+            m_impl->Passthrough.Open(m_impl->System.Instance, m_impl->Session, xrGetInstanceProcAddr);
+            m_impl->UsesPassthrough = true;
+        }
+        else
+        {
+            throw std::system_error{std::make_error_code(std::errc::not_supported), "OpenXR immersive AR is unavailable"};
+        }
+        __android_log_print(ANDROID_LOG_INFO, "BabylonNative", "OpenXR immersive AR: %s",
+            m_impl->AlphaBlend ? "environment alpha blend" : "compositor reconstruction layer");
+    }
+
+    uint32_t System::Session::MaxLayerCount() const { return m_impl->System.MaxLayers - (m_impl->Passthrough.Handle() ? 1u : 0u); }
     bool System::Session::SupportsMediaLayers() const { return m_impl->System.AndroidSurface; }
     bool System::Session::SupportsFoveation(double scale) const
     {

@@ -78,7 +78,7 @@ namespace Babylon
             auto deferred = Napi::Promise::Deferred::New(info.Env());
 
             // Fire off the IsSessionSupported task.
-            xr::System::IsSessionSupportedAsync(sessionType)
+            m_xr->IsSessionSupportedAsync(sessionType)
                 .then(m_runtimeScheduler,
                     arcana::cancellation::none(),
                     [deferred, env = info.Env()](bool result) {
