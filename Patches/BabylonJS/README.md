@@ -270,3 +270,9 @@ clear; adding a spectator restores normal clearing. Eye clears are unchanged.
 
 The pinned-release integration fixture can be run with
 `node Apps/scripts/questMenuLadder/spectator.cjs /path/to/babylonjs-9.37.1.tgz`.
+
+`0011-postprocess-camera-output-layer.patch` preserves the camera output target's
+array slice on the last post-process. Previously the right eye wrote into layer
+zero even though direct scene draws respected the eye's layer. Exercise the
+installed bundle with `node --test Apps/scripts/testBabylonPostProcessOutput.mjs`;
+compare both eyes on-device using the portal's `ssao2-geometry` control.

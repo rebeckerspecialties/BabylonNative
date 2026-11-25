@@ -1,0 +1,14 @@
+diff --git a/packages/dev/core/src/PostProcesses/postProcessManager.ts b/packages/dev/core/src/PostProcesses/postProcessManager.ts
+--- a/packages/dev/core/src/PostProcesses/postProcessManager.ts
++++ b/packages/dev/core/src/PostProcesses/postProcessManager.ts
+@@ -205,3 +205,9 @@
+                 if (targetTexture) {
+-                    engine.bindFramebuffer(targetTexture, faceIndex, undefined, undefined, forceFullscreenViewport);
++                    const output = camera.outputRenderTarget;
++                    if (output?.renderTarget === targetTexture && faceIndex === undefined && !forceFullscreenViewport) {
++                        // An output target can bind a view of an array (for example, the right eye).
++                        output._bindFrameBuffer();
++                    } else {
++                        engine.bindFramebuffer(targetTexture, faceIndex, undefined, undefined, forceFullscreenViewport);
++                    }
+                     pp._outputTexture = targetTexture;

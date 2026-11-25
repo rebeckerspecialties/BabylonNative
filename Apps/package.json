@@ -7,7 +7,7 @@
   ],
   "scripts": {
     "getNightly": "node scripts/getNightly.js",
-    "test:babylonjs:bundle": "node --test scripts/testBabylonPublishedBundle.mjs",
+    "test:babylonjs:bundle": "node --test scripts/testBabylonPublishedBundle.mjs scripts/testBabylonPostProcessOutput.mjs",
     "test:babylonjs:uniforms": "node scripts/testBabylonSharedUniforms.mjs",
     "test:portal:jsc-sampling": "node --test scripts/testNativeXrPortalJscSampling.mjs",
     "test:babylonjs:optimizations": "node --test scripts/testBabylonAccessorInlining.mjs scripts/testBabylonBundleContract.mjs scripts/testBabylonConstantFolding.mjs scripts/testBabylonCommandEncoding.mjs scripts/testBabylonUniformLoop.mjs scripts/testLoopInvariantTransformer.mjs scripts/testBabylonPublishedBundle.mjs scripts/testBabylonSnapshotGroupClears.mjs scripts/testNativeXrPortalMovingBenchmark.mjs scripts/testNativeXrPortalSky.mjs",
