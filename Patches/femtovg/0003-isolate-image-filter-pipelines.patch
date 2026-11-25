@@ -1,0 +1,124 @@
+diff --git a/src/renderer/wgpu.rs b/src/renderer/wgpu.rs
+index 4fb328cc3580e12af6733bff1d476c2b96247467..406e0ed87feeab7d8e509baea89ab8fb2ac79ce4 100644
+--- a/src/renderer/wgpu.rs
++++ b/src/renderer/wgpu.rs
+@@ -2868,6 +2868,7 @@ fn clip_guard(active: bool) -> StencilTest {
+ // Only what materialize() reads belongs in the key; anything else would split the cache for nothing.
+ #[derive(Clone, Debug, Hash, PartialEq, Eq)]
+ struct PipelineState {
++    image_effects: bool,
+     render_to_texture: bool,
+     color_target_state: wgpu::ColorTargetState,
+     primitive_topology: wgpu::PrimitiveTopology,
+@@ -2917,6 +2918,7 @@ impl PipelineState {
+             ),
+         };
+         Self {
++            image_effects: false,
+             render_to_texture,
+             color_target_state,
+             primitive_topology,
+@@ -2936,6 +2938,7 @@ impl PipelineState {
+     ) -> wgpu::RenderPipeline {
+         // Exhaustively bind the key so adding a field or leaving one unused here is a compile error.
+         let Self {
++            image_effects,
+             render_to_texture,
+             color_target_state,
+             primitive_topology,
+@@ -2972,7 +2975,10 @@ impl PipelineState {
+             fragment: Some(wgpu::FragmentState {
+                 module: shader_module,
+                 entry_point: Some(fragment_entry_point),
+-                compilation_options: Default::default(),
++                compilation_options: wgpu::PipelineCompilationOptions {
++                    constants: &[("image_effects", f64::from(u8::from(*image_effects)))],
++                    ..Default::default()
++                },
+                 targets: &[Some(color_target_state.clone())],
+             }),
+             primitive: wgpu::PrimitiveState {
+@@ -3989,6 +3995,22 @@ impl CommandToPipelineAndBindGroupMapper {
+         // to hash, by 1.3 % of the time 600 unclipped fills take to encode.
+         pipeline_state.clip_shape = params.clip.is_some();
+         pipeline_state.clip_mask = params.clip_mask.is_some();
++        // Share one ordinary-paint program across text, images, gradients and stencil draws.
++        // The filter program remains the full shader and handles future paint modes by default.
++        pipeline_state.image_effects = !matches!(
++            params.shader_type,
++            ShaderType::FillColor
++                | ShaderType::FillColorUnclipped
++                | ShaderType::FillImage
++                | ShaderType::TextureCopyUnclipped
++                | ShaderType::Stencil
++                | ShaderType::FillGradient
++                | ShaderType::FillImageGradient
++                | ShaderType::FillGradientConic
++                | ShaderType::FillImageGradientConic
++                | ShaderType::FillGradientTwoPointRadial
++                | ShaderType::FillImageGradientTwoPointRadial
++        );
+ 
+         // An unchanged pipeline was looked up, and stamped with this flush, when it was bound.
+         if render_pass_builder.current_pipeline_state.as_ref() != Some(&pipeline_state) {
+diff --git a/src/renderer/wgpu/shader.wgsl b/src/renderer/wgpu/shader.wgsl
+index 4f67c6351b8a476e3743af8cfd2dab6986a08ba7..1d9fce3a2a557cb025808be4b2779697cc40b38e 100644
+--- a/src/renderer/wgpu/shader.wgsl
++++ b/src/renderer/wgpu/shader.wgsl
+@@ -148,6 +148,9 @@ fn fs_main_clip_mask(vertex: VertexOutput) -> @location(0) vec4<f32> {
+     return shade(vertex, clipMask(vertex.fpos) * clipMaskCoverage(vertex.fpos));
+ }
+ 
++// Set at pipeline creation. A basic paint never needs the filter sampling loops.
++override image_effects: bool = true;
++
+ fn shade(vertex: VertexOutput, clip: f32) -> vec4<f32> {
+     var result: vec4<f32>;
+     let shader_type_int: i32 = i32(params.shader_type);
+@@ -187,7 +190,7 @@ fn shade(vertex: VertexOutput, clip: f32) -> vec4<f32> {
+         }
+         case SHADER_TYPE_FilterImage: {
+             // Filter Image
+-            return renderFilteredImage(vertex, params);
++            if (image_effects) { return renderFilteredImage(vertex, params); }
+         }
+         case SHADER_TYPE_FillColorUnclipped: {
+             // Plain color fill
+@@ -206,7 +209,7 @@ fn shade(vertex: VertexOutput, clip: f32) -> vec4<f32> {
+             result = ditherGradient(textureSample(image_texture, image_sampler, lutCoord(d)), vertex.position.xy);
+         }
+         case SHADER_TYPE_FilterImageColorMatrix: {
+-            return renderColorMatrix(vertex, params);
++            if (image_effects) { return renderColorMatrix(vertex, params); }
+         }
+         case SHADER_TYPE_FillGradientTwoPointRadial: {
+             // Set `result` and fall through to the scissor + stroke-AA multiply.
+@@ -216,22 +219,22 @@ fn shade(vertex: VertexOutput, clip: f32) -> vec4<f32> {
+             result = renderImageGradientTwoPointRadial(vertex, params);
+         }
+         case SHADER_TYPE_FilterImageTurbulence: {
+-            return renderTurbulence(vertex, params);
++            if (image_effects) { return renderTurbulence(vertex, params); }
+         }
+         case SHADER_TYPE_FilterImageTransfer: {
+-            return renderTransfer(vertex, params);
++            if (image_effects) { return renderTransfer(vertex, params); }
+         }
+         case SHADER_TYPE_FilterImageBlend: {
+-            return renderBlend(vertex, params);
++            if (image_effects) { return renderBlend(vertex, params); }
+         }
+         case SHADER_TYPE_FilterImageMorphology: {
+-            return renderMorphology(vertex, params);
++            if (image_effects) { return renderMorphology(vertex, params); }
+         }
+         case SHADER_TYPE_FilterImageOffset: {
+-            return renderOffset(vertex, params);
++            if (image_effects) { return renderOffset(vertex, params); }
+         }
+         case SHADER_TYPE_FillBlur: {
+-            result = renderFillBlur(vertex, params);
++            if (image_effects) { result = renderFillBlur(vertex, params); }
+         }
+         default: {
+             result = vec4<f32>(0.0, 0.0, 1.0, 1.0);
