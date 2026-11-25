@@ -12,6 +12,17 @@ test("separates delayed drains from GC and ignores startup, other processes and 
     assert.equal(result.cpuUs.median, 185);
     assert.equal(result.maxCallbackUs, null);
     assert.equal(result.processNetHeapBytes, null);
+    assert.equal(result.trackersWithoutCallback, null);
     assert.throws(() => summarizeFinalizers(rows, 7, 10, "Education checkpoint"), /Checkpoint/);
     assert.throws(() => summarizeFinalizers([], 7, 9), /No finalizer batches/);
+});
+
+test("uses completed tracker visits, not queue size at drain entry", () => {
+    const row = "11-24 12:00:00.123 7 9 I BabylonFinalize: tid=9 queued=5 wallUs=20 cpuUs=19";
+    const read = end => summarizeFinalizers([row + end], 7, 9);
+    assert.equal(read(" typeSample=0 popped=0 withoutCallback=0").trackersProcessed, null);
+    assert.equal(read(" typeSample=1 popped=7 withoutCallback=2").trackersProcessed.median, 7);
+    assert.equal(read(" typeSample=1 popped=3 withoutCallback=0").trackersWithoutCallback.max, 0);
+    assert.throws(() => read(" typeSample=1 popped=3 withoutCallback=4"), /census/);
+    assert.throws(() => read(" typeSample=1 popped=3"), /census/);
 });

@@ -49,12 +49,18 @@ namespace
   protected:
     virtual void DrainFinalizerQueue()
     {
+      DrainWith([](v8impl::RefTracker* entry) { entry->Finalize(); });
+    }
+
+    template<class Visit>
+    void DrainWith(Visit visit)
+    {
       // A finalizer can queue or delete other finalizers, so take them one at a time.
       while (!pending_finalizers.empty())
       {
         v8impl::RefTracker* finalizer = *pending_finalizers.begin();
         pending_finalizers.erase(finalizer);
-        finalizer->Finalize();
+        visit(finalizer);
       }
     }
 
@@ -93,6 +99,7 @@ namespace
     {
       if (types && inDrain)
       {
+        ++typedCallbacks;
         auto entry = std::find_if(mix.begin(), mix.end(), [cb](const Entry& e) { return !e.count || e.callback == cb; });
         if (entry != mix.end())
         {
@@ -125,10 +132,20 @@ namespace
       const auto allocated = heap ? mallinfo().uordblks : 0;
       const auto gc = gcEnd;
       const auto sequence = gcSequence;
-      if (types) { mix.fill({}); overflow = 0; inDrain = true; }
+      size_t popped{}, withoutCallback{};
+      if (types) { mix.fill({}); overflow = typedCallbacks = 0; inDrain = true; }
       const auto begin = Micros(CLOCK_MONOTONIC);
       const auto cpu = Micros(CLOCK_THREAD_CPUTIME_ID);
-      scheduled_napi_env__::DrainFinalizerQueue();
+      if (types)
+      {
+        DrainWith([&](v8impl::RefTracker* entry) {
+          const auto before = typedCallbacks;
+          entry->Finalize();
+          ++popped;
+          if (typedCallbacks == before) ++withoutCallback;
+        });
+      }
+      else scheduled_napi_env__::DrainFinalizerQueue();
       const auto elapsed = Micros(CLOCK_MONOTONIC) - begin;
       const auto cpuUs = Micros(CLOCK_THREAD_CPUTIME_ID) - cpu;
       inDrain = false;
@@ -137,9 +154,9 @@ namespace
       const auto pc = reinterpret_cast<uintptr_t>(slowest);
       if (pc) dladdr(reinterpret_cast<void*>(pc), &location);
       __android_log_print(ANDROID_LOG_INFO, "BabylonFinalize",
-        "tid=%d gc=%u gcEndUs=%lld startUs=%lld wallUs=%lld cpuUs=%lld queued=%zu callbackSample=%d callbacks=%zu maxCallbackUs=%lld module=%s offset=%zx heapSample=%d netHeapBytes=%lld",
+        "tid=%d gc=%u gcEndUs=%lld startUs=%lld wallUs=%lld cpuUs=%lld queued=%zu callbackSample=%d callbacks=%zu maxCallbackUs=%lld module=%s offset=%zx heapSample=%d netHeapBytes=%lld typeSample=%d popped=%zu withoutCallback=%zu",
         gettid(), sequence, gc, begin, elapsed, cpuUs, queued, detail, calls, maxUs,
-        location.dli_fname ? location.dli_fname : "unknown", static_cast<size_t>(pc - reinterpret_cast<uintptr_t>(location.dli_fbase)), heap, delta);
+        location.dli_fname ? location.dli_fname : "unknown", static_cast<size_t>(pc - reinterpret_cast<uintptr_t>(location.dli_fbase)), heap, delta, types, popped, withoutCallback);
       if (types)
       {
         for (const auto& entry : mix)
@@ -167,7 +184,7 @@ namespace
     const bool detail{DiagnosticEnabled("debug.babylon.fin_detail")};
     struct Entry { napi_finalize callback{}; size_t count{}; };
     std::array<Entry, 64> mix{};
-    size_t overflow{};
+    size_t overflow{}, typedCallbacks{};
     bool inDrain{};
     const bool types{DiagnosticEnabled("debug.babylon.fin_types")};
     unsigned gcSequence{};
