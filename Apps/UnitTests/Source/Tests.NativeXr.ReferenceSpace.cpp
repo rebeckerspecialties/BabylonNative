@@ -103,10 +103,11 @@ TEST(NativeXrReferenceSpace, ViewerPoseKeepsItsOwnTransformAndFrozenEyeList)
             (() => {
                 const left = new XRView(), right = new XRView();
                 const at = x => new XRRigidTransform({x});
-                const a = new XRViewerPose([left, right], at(1), false);
-                const b = new XRViewerPose([right], at(2), true);
-                const empty = new XRViewerPose();
-                return Object.isFrozen(a.views) && a.views === a.views &&
+                const a = new _native.NativeXRViewerPose([left, right], at(1), false);
+                const b = new _native.NativeXRViewerPose([right], at(2), true);
+                const empty = new XRViewerPose([right], at(3), false);
+                return a instanceof XRViewerPose && empty.emulatedPosition && empty.transform.position.x === 0 &&
+                    Object.isFrozen(a.views) && a.views === a.views &&
                     a.views.length === 2 && a.views[0] === left && a.views[1] === right &&
                     b.views.length === 1 && b.views[0] === right && empty.views.length === 0 &&
                     a.transform === a.transform && a.transform !== b.transform &&

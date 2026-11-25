@@ -1,6 +1,7 @@
 #pragma once
 
 #include "XRView.h"
+#include <Babylon/JsRuntime.h>
 #include <napi/env.h>
 #include <optional>
 
@@ -13,21 +14,27 @@ namespace Babylon
     public:
         static void Initialize(Napi::Env env)
         {
-            env.Global().Set(JS_CLASS_NAME, Napi::Eval(env, R"JS(
-                (class XRViewerPose {
-                    #views;
-                    #transform;
-                    #emulated;
-                    constructor(views = [], transform = new XRRigidTransform(), emulated = true) {
-                        this.#views = Object.freeze(views);
-                        this.#transform = transform;
-                        this.#emulated = emulated;
+            const auto constructors = Napi::Eval(env, R"JS(
+                (() => {
+                    const key = {};
+                    class XRViewerPose {
+                        #views;
+                        #transform;
+                        #emulated;
+                        constructor(token = null, views, transform, emulated) {
+                            this.#views = Object.freeze(token === key ? views : []);
+                            this.#transform = token === key ? transform : new XRRigidTransform();
+                            this.#emulated = token === key ? emulated : true;
+                        }
+                        get views() { return this.#views; }
+                        get transform() { return this.#transform; }
+                        get emulatedPosition() { return this.#emulated; }
                     }
-                    get views() { return this.#views; }
-                    get transform() { return this.#transform; }
-                    get emulatedPosition() { return this.#emulated; }
-                })
-            )JS", "babylon-native://plugins/NativeXr/XRViewerPose.js"));
+                    return [XRViewerPose, XRViewerPose.bind(null, key)];
+                })()
+            )JS", "babylon-native://plugins/NativeXr/XRViewerPose.js").As<Napi::Array>();
+            env.Global().Set(JS_CLASS_NAME, constructors.Get(uint32_t{0}));
+            JsRuntime::NativeObject::GetFromJavaScript(env).Set("NativeXRViewerPose", constructors.Get(uint32_t{1}));
         }
 
         static Napi::Object New(const Napi::CallbackInfo& info,
@@ -52,7 +59,8 @@ namespace Babylon
                 views.Set(i, view);
             }
             // Views retain their native frame brand; only JS owns the edges of this snapshot.
-            return env.Global().Get(JS_CLASS_NAME).As<Napi::Function>().New({views, transform, Napi::Boolean::New(env, !frame->IsTracking)});
+            return JsRuntime::NativeObject::GetFromJavaScript(env).Get("NativeXRViewerPose").As<Napi::Function>()
+                .New({views, transform, Napi::Boolean::New(env, !frame->IsTracking)});
         }
     };
 }
