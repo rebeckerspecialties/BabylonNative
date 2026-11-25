@@ -22,7 +22,7 @@ TEST(NodeApi, V8FinalizersRunBeforeShutdown)
                 });
             }
         }
-        Napi::GetContext(env)->GetIsolate()->LowMemoryNotification();
+        v8::Isolate::GetCurrent()->LowMemoryNotification();
         // Collecting the externals posted a task that runs their finalizers ahead of this one.
         runtime.Dispatch([&](Napi::Env) {
             observed.set_value(finalized);
