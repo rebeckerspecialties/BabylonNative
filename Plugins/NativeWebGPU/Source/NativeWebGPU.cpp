@@ -165,6 +165,7 @@ namespace Babylon::Plugins::NativeWebGPU
             std::shared_ptr<NativeDeviceState> Device{};
             NativeResourceKind Kind{};
             uint64_t Id{};
+            bool CommandBrand{};
             size_t Size{};
             uint32_t Usage{};
             bool Mapped{};
@@ -200,7 +201,9 @@ namespace Babylon::Plugins::NativeWebGPU
             bool Destroyed{};
             Napi::ObjectReference Object{}; // Weak: listeners must not root the device through C++.
             std::shared_ptr<Napi::Promise::Deferred> Lost{};
-            std::unordered_map<NativeHandleState*, std::weak_ptr<NativeHandleState>> Resources{};
+            using HandleOwner = std::shared_ptr<NativeHandleState>;
+            std::unordered_map<HandleOwner*, std::weak_ptr<NativeHandleState>> Resources{};
+            std::array<Napi::Reference<Napi::External<HandleOwner>>, 3> CommandBrands{};
             std::vector<std::shared_ptr<ErrorScope>> Scopes{};
             std::weak_ptr<DeviceRegistry> Registry{};
         };
@@ -972,7 +975,17 @@ namespace Babylon::Plugins::NativeWebGPU
                 return nullptr;
             }
 
-            return handleValue.As<Napi::External<std::shared_ptr<NativeHandleState>>>().Data()->get();
+            auto* handle = handleValue.As<Napi::External<std::shared_ptr<NativeHandleState>>>().Data()->get();
+            if (!handle->CommandBrand) return handle;
+            void* wrapped{};
+            if (napi_unwrap(value.Env(), object, &wrapped) == napi_ok)
+            {
+                const auto it = handle->Device->Resources.find(static_cast<NativeDeviceState::HandleOwner*>(wrapped));
+                if (it != handle->Device->Resources.end() && it->first->get()->Kind == handle->Kind)
+                    return it->first->get();
+            }
+            // The single-use object still belongs to the original device after consumption.
+            return handle;
         }
 
         bool ValidateHandleOwner(Napi::Env env, NativeHandleState& state)
@@ -1009,7 +1022,7 @@ namespace Babylon::Plugins::NativeWebGPU
         void FinalizeNativeHandleState(Napi::Env, std::shared_ptr<NativeHandleState>* holder)
         {
             auto* state = holder->get();
-            if (state->Device) state->Device->Resources.erase(state);
+            if (state->Device) state->Device->Resources.erase(holder);
             DestroyNativeHandleState(state);
             delete holder;
         }
@@ -1025,11 +1038,34 @@ namespace Babylon::Plugins::NativeWebGPU
             state->Mapped = mapped;
             state->MappedForWrite = mappedForWrite;
             state->MappedSize = mapped ? size : 0;
-            object.Set(
-                JS_NATIVE_HANDLE_NAME,
-                Napi::External<std::shared_ptr<NativeHandleState>>::New(object.Env(),
-                    new std::shared_ptr<NativeHandleState>{state}, &FinalizeNativeHandleState));
-            if (state->Device) state->Device->Resources.emplace(state.get(), state);
+            using Owner = NativeDeviceState::HandleOwner;
+            auto holder = std::make_unique<Owner>(state);
+            const bool oneShot = kind == NativeResourceKind::CommandEncoder || kind == NativeResourceKind::RenderPass || kind == NativeResourceKind::CommandBuffer;
+            if (oneShot && state->Device)
+            {
+                auto& weak = state->Device->CommandBrands[kind == NativeResourceKind::CommandEncoder ? 0 : kind == NativeResourceKind::RenderPass ? 1 : 2];
+                auto brand = weak.IsEmpty() ? Napi::External<Owner>{} : weak.Value();
+                if (brand.IsEmpty())
+                {
+                    auto closed = std::make_shared<NativeHandleState>();
+                    closed->Kind = kind;
+                    closed->Device = state->Device;
+                    closed->CommandBrand = true;
+                    brand = Napi::External<Owner>::New(object.Env(), new Owner(std::move(closed)), [](Napi::Env, Owner* value) { delete value; });
+                    weak = Napi::Weak(brand);
+                }
+                object.DefineProperty(Napi::PropertyDescriptor::Value(JS_NATIVE_HANDLE_NAME, brand));
+                const auto status = napi_wrap(object.Env(), object, holder.get(), [](napi_env env, void* data, void*) {
+                    FinalizeNativeHandleState(env, static_cast<Owner*>(data));
+                }, nullptr, nullptr);
+                if (status != napi_ok) throw Napi::Error::New(object.Env(), "Unable to attach WebGPU command lifetime.");
+            }
+            else
+            {
+                object.Set(JS_NATIVE_HANDLE_NAME, Napi::External<Owner>::New(object.Env(), holder.get(), &FinalizeNativeHandleState));
+            }
+            auto* registered = holder.release();
+            if (state->Device) state->Device->Resources.emplace(registered, state);
             object.Set(JS_NATIVE_HANDLE_ID_NAME, Napi::Number::From(object.Env(), static_cast<double>(id)));
             object.Set(JS_NATIVE_HANDLE_KIND_NAME, Napi::Number::From(object.Env(), static_cast<uint32_t>(kind)));
             constexpr std::array names{"GPUBuffer", "GPUTexture", "GPUTextureView", "GPUSampler", "GPUShaderModule",
@@ -1037,6 +1073,17 @@ namespace Babylon::Plugins::NativeWebGPU
                 "GPURenderPassEncoder", "GPUCommandBuffer", "GPUComputePipeline", "GPUComputePassEncoder", "GPUQuerySet"};
             SetGpuPrototype(object, names[static_cast<size_t>(kind) - 1]);
             return object;
+        }
+
+        void RetireCommand(const Napi::Value& object, NativeResourceKind kind)
+        {
+            auto* state = GetNativeHandleState(object);
+            if (!state || state->Kind != kind || state->CommandBrand) return;
+            state->Id = 0; // The Rust encoder/pass/command buffer has transferred its commands.
+            if (!state->Device) return;
+            void* wrapped{};
+            if (napi_remove_wrap(object.Env(), object, &wrapped) == napi_ok)
+                FinalizeNativeHandleState(object.Env(), static_cast<NativeDeviceState::HandleOwner*>(wrapped));
         }
 
         void AppendJsonString(std::string& output, std::string_view value)
@@ -2886,10 +2933,7 @@ namespace Babylon::Plugins::NativeWebGPU
             pass.Set("end", MakeGpuFunction<true>(env, [](const Napi::CallbackInfo& info) {
                 const auto passId = GetNativeHandleId(info.This(), NativeResourceKind::RenderPass);
                 babylon_wgpu_native_render_pass_end(passId);
-                if (auto* state = GetNativeHandleState(info.This()))
-                {
-                    state->Id = 0;
-                }
+                RetireCommand(info.This(), NativeResourceKind::RenderPass);
             }));
         }
 
@@ -3215,10 +3259,7 @@ namespace Babylon::Plugins::NativeWebGPU
             encoder.Set("finish", MakeGpuFunction<true>(env, [](const Napi::CallbackInfo& info) -> Napi::Value {
                 const auto encoderId = GetNativeHandleId(info.This(), NativeResourceKind::CommandEncoder);
                 const auto commandBufferId = babylon_wgpu_native_command_encoder_finish(encoderId);
-                if (auto* state = GetNativeHandleState(info.This()))
-                {
-                    state->Id = 0;
-                }
+                RetireCommand(info.This(), NativeResourceKind::CommandEncoder);
                 if (commandBufferId == 0)
                 {
                     ThrowNativeWebGpuError(info.Env(), "NativeWebGPU failed to finish GPUCommandEncoder.", "GPUCommandEncoder.finish");
@@ -3670,14 +3711,12 @@ namespace Babylon::Plugins::NativeWebGPU
                     }
                     for (uint32_t i = 0; i < array.Length(); ++i)
                     {
-                        const auto id = GetNativeHandleId(array.Get(i), NativeResourceKind::CommandBuffer);
+                        const auto command = array.Get(i);
+                        const auto id = GetNativeHandleId(command, NativeResourceKind::CommandBuffer);
                         if (id != 0)
                         {
                             appendCommandBufferId(id);
-                            if (auto* state = GetNativeHandleState(array.Get(i)))
-                            {
-                                state->Id = 0;
-                            }
+                            RetireCommand(command, NativeResourceKind::CommandBuffer);
                         }
                     }
                 }

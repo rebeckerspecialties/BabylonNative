@@ -1,135 +1,66 @@
 #pragma once
 
 #include "XRView.h"
-
+#include <Babylon/JsRuntime.h>
+#include <napi/env.h>
 #include <optional>
 
 namespace Babylon
 {
-    class XRViewerPose : public Napi::ObjectWrap<XRViewerPose>
+    class XRViewerPose final
     {
         static constexpr auto JS_CLASS_NAME = "XRViewerPose";
 
     public:
         static void Initialize(Napi::Env env)
         {
-            Napi::HandleScope scope{env};
-
-            Napi::Function func = DefineClass(
-                env,
-                JS_CLASS_NAME,
-                {
-                    InstanceAccessor("transform", &XRViewerPose::GetTransform, nullptr),
-                    InstanceAccessor("views", &XRViewerPose::GetViews, nullptr),
-                    InstanceAccessor("emulatedPosition", &XRViewerPose::GetEmulatedPosition, nullptr),
-                });
-
-            env.Global().Set(JS_CLASS_NAME, func);
+            const auto constructors = Napi::Eval(env, R"JS(
+                (() => {
+                    const key = {};
+                    class XRViewerPose {
+                        #views;
+                        #transform;
+                        #emulated;
+                        constructor(token = null, views, transform, emulated) {
+                            this.#views = Object.freeze(token === key ? views : []);
+                            this.#transform = token === key ? transform : new XRRigidTransform();
+                            this.#emulated = token === key ? emulated : true;
+                        }
+                        get views() { return this.#views; }
+                        get transform() { return this.#transform; }
+                        get emulatedPosition() { return this.#emulated; }
+                    }
+                    return [XRViewerPose, XRViewerPose.bind(null, key)];
+                })()
+            )JS", "babylon-native://plugins/NativeXr/XRViewerPose.js").As<Napi::Array>();
+            env.Global().Set(JS_CLASS_NAME, constructors.Get(uint32_t{0}));
+            JsRuntime::NativeObject::GetFromJavaScript(env).Set("NativeXRViewerPose", constructors.Get(uint32_t{1}));
         }
 
-        static Napi::Object New(const Napi::CallbackInfo& info)
+        static Napi::Object New(const Napi::CallbackInfo& info,
+            const std::shared_ptr<const xr::System::Session::Frame>& frame, const std::optional<xr::Pose>& referenceSpaceInverse)
         {
-            return info.Env().Global().Get(JS_CLASS_NAME).As<Napi::Function>().New({});
-        }
-
-        XRViewerPose(const Napi::CallbackInfo& info)
-            : Napi::ObjectWrap<XRViewerPose>{info}
-            , m_isEmulatedPosition{true}
-        {
-        }
-
-        void Update(
-            const Napi::CallbackInfo& info,
-            const std::shared_ptr<const xr::System::Session::Frame>& sourceFrame,
-            std::optional<xr::Pose> referenceSpaceInverse)
-        {
-            const auto& frame = *sourceFrame;
-            const auto adjustSpace = [&referenceSpaceInverse](const xr::Space& space) {
-                return referenceSpaceInverse.has_value()
-                    ? xr::Space{ComposePoses(*referenceSpaceInverse, space.Pose)}
-                    : space;
+            const auto env = info.Env();
+            const auto adjust = [&](const xr::Space& space) {
+                return referenceSpaceInverse ? xr::Space{ComposePoses(*referenceSpaceInverse, space.Pose)} : space;
             };
-
-            if (frame.ViewerSpace)
+            auto transform = XRRigidTransform::New(env);
+            if (frame->ViewerSpace || !frame->Views.empty())
             {
-                m_space = adjustSpace(*frame.ViewerSpace);
+                const auto& origin = frame->ViewerSpace ? *frame->ViewerSpace : frame->Views.front().Space;
+                XRRigidTransform::Unwrap(transform)->Update(adjust(origin), false);
             }
-            else if (!frame.Views.empty())
+            auto views = Napi::Array::New(env, frame->Views.size());
+            for (uint32_t i = 0; i < frame->Views.size(); ++i)
             {
-                m_space = adjustSpace(frame.Views[0].Space);
+                const auto& source = frame->Views[i];
+                auto view = XRView::New(info);
+                XRView::Unwrap(view)->Update(i, source.ProjectionMatrix, adjust(source.Space), source.IsFirstPersonObserver, frame);
+                views.Set(i, view);
             }
-            if (!m_jsTransform.IsEmpty())
-                XRRigidTransform::Unwrap(m_jsTransform.Value())->Update(m_space, false);
-
-            // Update the views array if necessary.
-            const auto oldSize = static_cast<uint32_t>(m_views.size());
-            const auto newSize = static_cast<uint32_t>(frame.Views.size());
-            if (oldSize != newSize || m_jsViews.IsEmpty())
-            {
-                auto newViews = Napi::Array::New(info.Env(), newSize);
-                m_views.resize(newSize);
-
-                for (uint32_t idx = 0; idx < newSize; ++idx)
-                {
-                    if (idx < oldSize)
-                    {
-                        newViews.Set(idx, m_jsViews.Value().Get(idx));
-                    }
-                    else
-                    {
-                        newViews.Set(idx, XRView::New(info));
-                    }
-
-                    m_views[idx] = XRView::Unwrap(newViews.Get(idx).As<Napi::Object>());
-                }
-
-                m_jsViews = Napi::Persistent(newViews);
-            }
-
-            // Update the individual views.
-            for (uint32_t idx = 0; idx < static_cast<uint32_t>(frame.Views.size()); ++idx)
-            {
-                const auto& view = frame.Views[idx];
-                m_views[idx]->Update(
-                    idx,
-                    view.ProjectionMatrix,
-                    adjustSpace(view.Space),
-                    view.IsFirstPersonObserver, sourceFrame);
-            }
-
-            // Check the frame to see if it has valid tracking, if it does not then the position should
-            // be flagged as being emulated.
-            m_isEmulatedPosition = !frame.IsTracking;
-        }
-
-    private:
-        Napi::ObjectReference m_jsTransform{};
-        Napi::Reference<Napi::Array> m_jsViews{};
-
-        xr::Space m_space{};
-        std::vector<XRView*> m_views{};
-        bool m_isEmulatedPosition;
-
-        Napi::Value GetTransform(const Napi::CallbackInfo& info)
-        {
-            if (m_jsTransform.IsEmpty())
-            {
-                auto transform = XRRigidTransform::New(info.Env());
-                XRRigidTransform::Unwrap(transform)->Update(m_space, false);
-                m_jsTransform = Napi::Persistent(transform);
-            }
-            return m_jsTransform.Value();
-        }
-
-        Napi::Value GetViews(const Napi::CallbackInfo& info)
-        {
-            if (m_jsViews.IsEmpty()) m_jsViews = Napi::Persistent(Napi::Array::New(info.Env()));
-            return m_jsViews.Value();
-        }
-
-        Napi::Value GetEmulatedPosition(const Napi::CallbackInfo& info)
-        {
-            return Napi::Boolean::New(info.Env(), m_isEmulatedPosition);
+            // Views retain their native frame brand; only JS owns the edges of this snapshot.
+            return JsRuntime::NativeObject::GetFromJavaScript(env).Get("NativeXRViewerPose").As<Napi::Function>()
+                .New({views, transform, Napi::Boolean::New(env, !frame->IsTracking)});
         }
     };
-} // Babylon
+}

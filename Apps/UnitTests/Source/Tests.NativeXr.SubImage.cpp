@@ -27,7 +27,19 @@ TEST(NativeXrSubImage, OptionalAttachmentsAndEyeSlices)
                         image.depthStencilTextureWidth !== (eye ? 128 : 0) || image.depthStencilTextureHeight !== (eye ? 64 : 0))
                         throw Error("Wrong optional attachment or array slice for eye " + eye);
                 )JS", "subImage.js");
+                env.Global().Set(eye ? "right" : "left", sub);
             }
+            Napi::Eval(env, R"JS(
+                const viewport = left.viewport;
+                Object.freeze(left);
+                const changed = left.getViewDescriptor();
+                changed.baseArrayLayer = 17;
+                if (!(left instanceof XRGPUSubImage) || left === right ||
+                    left.viewport !== viewport || right.viewport === viewport ||
+                    left.getViewDescriptor().baseArrayLayer !== 0 || right.getViewDescriptor().baseArrayLayer !== 1 ||
+                    right.depthStencilTexture !== color || left.depthStencilTexture !== null)
+                    throw Error("Retained stereo subimages must remain independent");
+            )JS", "retainedSubImages.js");
             done.set_value();
         }
         catch (...)

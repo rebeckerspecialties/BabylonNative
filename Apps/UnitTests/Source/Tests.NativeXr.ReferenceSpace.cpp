@@ -6,6 +6,7 @@
 #include "../../../Plugins/NativeXr/Source/XRRigidTransform.h"
 #include "../../../Plugins/NativeXr/Source/XRReferenceSpace.h"
 #include "../../../Plugins/NativeXr/Source/XRView.h"
+#include "../../../Plugins/NativeXr/Source/XRViewerPose.h"
 
 #include <gtest/gtest.h>
 #include <cmath>
@@ -93,6 +94,30 @@ TEST(NativeXrReferenceSpace, RetainedEyeViewsMaterializeIndependentSnapshots)
     });
 }
 
+TEST(NativeXrReferenceSpace, ViewerPoseKeepsItsOwnTransformAndFrozenEyeList)
+{
+    RunReferenceSpaceTest([](Napi::Env env) {
+        Babylon::XRView::Initialize(env);
+        Babylon::XRViewerPose::Initialize(env);
+        EXPECT_TRUE(Napi::Eval(env, R"JS(
+            (() => {
+                const left = new XRView(), right = new XRView();
+                const at = x => new XRRigidTransform({x});
+                const a = new _native.NativeXRViewerPose([left, right], at(1), false);
+                const b = new _native.NativeXRViewerPose([right], at(2), true);
+                const empty = new XRViewerPose([right], at(3), false);
+                return a instanceof XRViewerPose && empty.emulatedPosition && empty.transform.position.x === 0 &&
+                    Object.isFrozen(a.views) && a.views === a.views &&
+                    a.views.length === 2 && a.views[0] === left && a.views[1] === right &&
+                    b.views.length === 1 && b.views[0] === right && empty.views.length === 0 &&
+                    a.transform === a.transform && a.transform !== b.transform &&
+                    a.transform.position.x === 1 && b.transform.position.x === 2 &&
+                    !a.emulatedPosition && b.emulatedPosition;
+            })()
+        )JS", "viewer-pose-snapshots.js").As<Napi::Boolean>().Value());
+    });
+}
+
 TEST(NativeXrReferenceSpace, PositionOnlyLayerTransformDefaultsAndCopiesItsDictionary)
 {
     RunReferenceSpaceTest([](Napi::Env env) {
@@ -104,6 +129,62 @@ TEST(NativeXrReferenceSpace, PositionOnlyLayerTransformDefaultsAndCopiesItsDicti
             {{0, 0, -2}, {0, 0, 0, 1}});
         EXPECT_FLOAT_EQ(transform.Get("matrix").As<Napi::Float32Array>()[14], -2.f);
         EXPECT_FLOAT_EQ(transform.Get("inverse").As<Napi::Object>().Get("matrix").As<Napi::Float32Array>()[14], 2.f);
+    });
+}
+
+TEST(NativeXrReferenceSpace, TransformComponentsMaterializeOnEitherSideOfNativeUpdate)
+{
+    RunReferenceSpaceTest([](Napi::Env env) {
+        auto transform = MakeTransform(env, {{1, 2, 3}, {}});
+        auto position = transform.Get("position").As<Napi::Object>();
+        auto inverse = transform.Get("inverse").As<Napi::Object>();
+        auto inverseMatrix = inverse.Get("matrix").As<Napi::Float32Array>();
+        EXPECT_FLOAT_EQ(inverseMatrix[12], -1.f);
+        Babylon::XRRigidTransform::Unwrap(transform)->Update(xr::Pose{{4, 5, 6}, {0, 0, 1, 0}});
+        EXPECT_TRUE(position.StrictEquals(transform.Get("position")));
+        EXPECT_EQ(position.Get("x").ToNumber().DoubleValue(), 4);
+        EXPECT_EQ(transform.Get("orientation").As<Napi::Object>().Get("z").ToNumber().DoubleValue(), 1);
+        EXPECT_FLOAT_EQ(transform.Get("matrix").As<Napi::Float32Array>()[14], 6.f);
+        EXPECT_TRUE(inverseMatrix.StrictEquals(inverse.Get("matrix")));
+        EXPECT_FLOAT_EQ(inverseMatrix[14], -6.f);
+        EXPECT_TRUE(inverse.Get("inverse").StrictEquals(transform));
+    });
+}
+
+TEST(NativeXrReferenceSpace, ConstructorCopiesDoublePrecisionMembersOnlyOnce)
+{
+    RunReferenceSpaceTest([](Napi::Env env) {
+        auto result = Napi::Eval(env, R"JS(
+            (() => {
+                let reads = 0;
+                const value = 1 + 2 ** -40;
+                const pose = new XRRigidTransform({get x() { ++reads; return value; }}, {w: 2});
+                Object.freeze(pose);
+                return reads === 1 && pose.position.x === value && pose.orientation.w === 1 &&
+                    pose.inverse.inverse === pose && pose.matrix === pose.matrix;
+            })()
+        )JS", "rigid-transform-constructor.js");
+        EXPECT_TRUE(result.As<Napi::Boolean>().Value());
+    });
+}
+
+TEST(NativeXrReferenceSpace, FrozenRigidTransformsKeepPrivateIndependentInversePairs)
+{
+    RunReferenceSpaceTest([](Napi::Env env) {
+        EXPECT_TRUE(Napi::Eval(env, R"JS(
+            (() => {
+                const a = Object.freeze(new XRRigidTransform({x: 2}));
+                const b = Object.freeze(new XRRigidTransform({x: 2}));
+                const ai = Object.freeze(a.inverse);
+                const bi = b.inverse;
+                // Neither wrapper may expose a writable inverse slot through reflection.
+                for (const key of Object.getOwnPropertySymbols(a)) {
+                    if (a[key]?.value === ai) a[key].value = bi;
+                }
+                return ai !== bi && a.inverse === ai && ai.inverse === a &&
+                    b.inverse === bi && bi.inverse === b && ai.position.x === -2;
+            })()
+        )JS", "rigid-transform-inverse-pairs.js").As<Napi::Boolean>().Value());
     });
 }
 
