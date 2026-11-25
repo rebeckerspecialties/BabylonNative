@@ -1,144 +1,67 @@
 #include "XRGPUSubImage.h"
-#include "JsInstanceOf.h"
-
-#include <stdexcept>
-#include <string>
+#include <napi/env.h>
 
 namespace Babylon
 {
     namespace
     {
         constexpr auto JS_CLASS_NAME{"XRGPUSubImage"};
-
-        Napi::Object RequireGPUTexture(const Napi::CallbackInfo& info, size_t index, const char* name)
-        {
-            if (info.Length() <= index || !info[index].IsObject())
-            {
-                throw std::runtime_error{std::string{"XRGPUSubImage requires a GPUTexture for "} + name + "."};
-            }
-
-            const auto texture = info[index].As<Napi::Object>();
-            if (!texture.Get("createView").IsFunction())
-            {
-                throw std::runtime_error{std::string{"XRGPUSubImage "} + name + " must be a GPUTexture."};
-            }
-            return texture;
-        }
-
-        Napi::Number RequireNumber(const Napi::CallbackInfo& info, size_t index, const char* name)
-        {
-            if (info.Length() <= index || !info[index].IsNumber())
-            {
-                throw std::runtime_error{std::string{"XRGPUSubImage "} + name + " must be a number."};
-            }
-            return info[index].As<Napi::Number>();
-        }
     }
 
     void XRGPUSubImage::Initialize(Napi::Env env)
     {
-        Napi::HandleScope scope{env};
-        auto constructor = DefineClass(
-            env,
-            JS_CLASS_NAME,
-            {
-                InstanceAccessor("colorTexture", &XRGPUSubImage::GetColorTexture, nullptr),
-                InstanceAccessor("depthStencilTexture", &XRGPUSubImage::GetDepthStencilTexture, nullptr),
-                InstanceAccessor("motionVectorTexture", &XRGPUSubImage::GetMotionVectorTexture, nullptr),
-                InstanceAccessor("colorTextureWidth", &XRGPUSubImage::GetColorTextureWidth, nullptr),
-                InstanceAccessor("colorTextureHeight", &XRGPUSubImage::GetColorTextureHeight, nullptr),
-                InstanceAccessor("depthStencilTextureWidth", &XRGPUSubImage::GetDepthStencilTextureWidth, nullptr),
-                InstanceAccessor("depthStencilTextureHeight", &XRGPUSubImage::GetDepthStencilTextureHeight, nullptr),
-                InstanceAccessor("viewport", &XRGPUSubImage::GetViewport, nullptr),
-                InstanceMethod("getViewDescriptor", &XRGPUSubImage::GetViewDescriptor),
-            });
-        SetGlobalClass(env, JS_CLASS_NAME, constructor);
+        // Only the textures own native resources. The per-eye snapshot and its
+        // references can be collected by the JS engine without native finalizers.
+        env.Global().Set(JS_CLASS_NAME, Napi::Eval(env, R"JS(
+            (() => {
+                const snapshots = new WeakMap();
+                function texture(value, name) {
+                    if (!value || typeof value.createView !== "function")
+                        throw new TypeError("XRGPUSubImage " + name + " must be a GPUTexture.");
+                    return value;
+                }
+                function number(value, name) {
+                    if (typeof value !== "number")
+                        throw new TypeError("XRGPUSubImage " + name + " must be a number.");
+                    return value >>> 0;
+                }
+                return class XRGPUSubImage {
+                    constructor(color, depth, width, height, layer, x, y, viewWidth, viewHeight, motion) {
+                        color = texture(color, "colorTexture");
+                        width = number(width, "width");
+                        height = number(height, "height");
+                        layer = number(layer, "array layer");
+                        if (depth !== null) depth = texture(depth, "depthStencilTexture");
+                        motion = arguments.length < 10 || motion === null ? null : texture(motion, "motionVectorTexture");
+                        const viewport = arguments.length < 9 ? {x: 0, y: 0, width, height} : {x, y, width: viewWidth, height: viewHeight};
+                        snapshots.set(this, {color, depth, motion, width, height, layer, viewport});
+                    }
+                    get colorTexture() { return snapshots.get(this).color; }
+                    get depthStencilTexture() { return snapshots.get(this).depth; }
+                    get motionVectorTexture() { return snapshots.get(this).motion; }
+                    get colorTextureWidth() { return snapshots.get(this).width; }
+                    get colorTextureHeight() { return snapshots.get(this).height; }
+                    get depthStencilTextureWidth() { const d = snapshots.get(this).depth; return d === null ? 0 : d.width; }
+                    get depthStencilTextureHeight() { const d = snapshots.get(this).depth; return d === null ? 0 : d.height; }
+                    get viewport() { return snapshots.get(this).viewport; }
+                    getViewDescriptor() {
+                        return {dimension: "2d", baseMipLevel: 0, mipLevelCount: 1, baseArrayLayer: snapshots.get(this).layer,
+                            arrayLayerCount: 1, aspect: "all"};
+                    }
+                };
+            })()
+        )JS", "babylon-native://plugins/NativeXr/XRGPUSubImage.js"));
     }
 
     Napi::Object XRGPUSubImage::New(Napi::Env env, const XRGPUSubImageData& data)
     {
         return env.Global().Get(JS_CLASS_NAME).As<Napi::Function>().New({
-            data.ColorTexture,
-            data.DepthStencilTexture,
-            Napi::Number::New(env, data.Width),
-            Napi::Number::New(env, data.Height),
-            Napi::Number::New(env, data.ArrayLayer),
-            Napi::Number::New(env, data.X), Napi::Number::New(env, data.Y),
+            data.ColorTexture, data.DepthStencilTexture,
+            Napi::Number::New(env, data.Width), Napi::Number::New(env, data.Height),
+            Napi::Number::New(env, data.ArrayLayer), Napi::Number::New(env, data.X), Napi::Number::New(env, data.Y),
             Napi::Number::New(env, data.ViewWidth ? data.ViewWidth : data.Width),
             Napi::Number::New(env, data.ViewHeight ? data.ViewHeight : data.Height),
             data.MotionVectorTexture.IsEmpty() ? env.Null() : data.MotionVectorTexture,
         });
-    }
-
-    XRGPUSubImage::XRGPUSubImage(const Napi::CallbackInfo& info)
-        : Napi::ObjectWrap<XRGPUSubImage>{info}
-        , m_colorTexture{Napi::Persistent(RequireGPUTexture(info, 0, "colorTexture"))}
-        , m_viewport{Napi::Persistent(Napi::Object::New(info.Env()))}
-        , m_width{RequireNumber(info, 2, "width").Uint32Value()}
-        , m_height{RequireNumber(info, 3, "height").Uint32Value()}
-        , m_arrayLayer{RequireNumber(info, 4, "array layer").Uint32Value()}
-    {
-        if (!info[1].IsNull())
-        {
-            m_depthStencilTexture = Napi::Persistent(RequireGPUTexture(info, 1, "depthStencilTexture"));
-        }
-        if (info.Length() > 9 && !info[9].IsNull())
-            m_motionVectorTexture = Napi::Persistent(RequireGPUTexture(info, 9, "motionVectorTexture"));
-        m_viewport.Set("x", info.Length() >= 9 ? info[5] : Napi::Value::From(info.Env(), 0));
-        m_viewport.Set("y", info.Length() >= 9 ? info[6] : Napi::Value::From(info.Env(), 0));
-        m_viewport.Set("width", info.Length() >= 9 ? info[7] : Napi::Value::From(info.Env(), m_width));
-        m_viewport.Set("height", info.Length() >= 9 ? info[8] : Napi::Value::From(info.Env(), m_height));
-    }
-
-    Napi::Value XRGPUSubImage::GetColorTexture(const Napi::CallbackInfo&)
-    {
-        return m_colorTexture.Value();
-    }
-
-    Napi::Value XRGPUSubImage::GetDepthStencilTexture(const Napi::CallbackInfo& info)
-    {
-        return m_depthStencilTexture.IsEmpty() ? info.Env().Null() : Napi::Value{m_depthStencilTexture.Value()};
-    }
-
-    Napi::Value XRGPUSubImage::GetMotionVectorTexture(const Napi::CallbackInfo& info)
-    {
-        return m_motionVectorTexture.IsEmpty() ? info.Env().Null() : Napi::Value{m_motionVectorTexture.Value()};
-    }
-
-    Napi::Value XRGPUSubImage::GetColorTextureWidth(const Napi::CallbackInfo& info)
-    {
-        return Napi::Number::New(info.Env(), m_width);
-    }
-
-    Napi::Value XRGPUSubImage::GetColorTextureHeight(const Napi::CallbackInfo& info)
-    {
-        return Napi::Number::New(info.Env(), m_height);
-    }
-
-    Napi::Value XRGPUSubImage::GetDepthStencilTextureWidth(const Napi::CallbackInfo& info)
-    {
-        return m_depthStencilTexture.IsEmpty() ? Napi::Value{Napi::Number::New(info.Env(), 0)} : m_depthStencilTexture.Value().Get("width");
-    }
-
-    Napi::Value XRGPUSubImage::GetDepthStencilTextureHeight(const Napi::CallbackInfo& info)
-    {
-        return m_depthStencilTexture.IsEmpty() ? Napi::Value{Napi::Number::New(info.Env(), 0)} : m_depthStencilTexture.Value().Get("height");
-    }
-
-    Napi::Value XRGPUSubImage::GetViewport(const Napi::CallbackInfo&)
-    {
-        return m_viewport.Value();
-    }
-
-    Napi::Value XRGPUSubImage::GetViewDescriptor(const Napi::CallbackInfo& info)
-    {
-        auto descriptor = Napi::Object::New(info.Env());
-        descriptor.Set("dimension", "2d");
-        descriptor.Set("baseMipLevel", Napi::Number::New(info.Env(), 0));
-        descriptor.Set("mipLevelCount", Napi::Number::New(info.Env(), 1));
-        descriptor.Set("baseArrayLayer", Napi::Number::New(info.Env(), m_arrayLayer));
-        descriptor.Set("arrayLayerCount", Napi::Number::New(info.Env(), 1));
-        descriptor.Set("aspect", "all");
-        return descriptor;
     }
 }
