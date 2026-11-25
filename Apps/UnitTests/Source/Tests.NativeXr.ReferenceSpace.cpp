@@ -107,6 +107,42 @@ TEST(NativeXrReferenceSpace, PositionOnlyLayerTransformDefaultsAndCopiesItsDicti
     });
 }
 
+TEST(NativeXrReferenceSpace, TransformComponentsMaterializeOnEitherSideOfNativeUpdate)
+{
+    RunReferenceSpaceTest([](Napi::Env env) {
+        auto transform = MakeTransform(env, {{1, 2, 3}, {}});
+        auto position = transform.Get("position").As<Napi::Object>();
+        auto inverse = transform.Get("inverse").As<Napi::Object>();
+        auto inverseMatrix = inverse.Get("matrix").As<Napi::Float32Array>();
+        EXPECT_FLOAT_EQ(inverseMatrix[12], -1.f);
+        Babylon::XRRigidTransform::Unwrap(transform)->Update(xr::Pose{{4, 5, 6}, {0, 0, 1, 0}});
+        EXPECT_TRUE(position.StrictEquals(transform.Get("position")));
+        EXPECT_EQ(position.Get("x").ToNumber().DoubleValue(), 4);
+        EXPECT_EQ(transform.Get("orientation").As<Napi::Object>().Get("z").ToNumber().DoubleValue(), 1);
+        EXPECT_FLOAT_EQ(transform.Get("matrix").As<Napi::Float32Array>()[14], 6.f);
+        EXPECT_TRUE(inverseMatrix.StrictEquals(inverse.Get("matrix")));
+        EXPECT_FLOAT_EQ(inverseMatrix[14], -6.f);
+        EXPECT_TRUE(inverse.Get("inverse").StrictEquals(transform));
+    });
+}
+
+TEST(NativeXrReferenceSpace, ConstructorCopiesDoublePrecisionMembersOnlyOnce)
+{
+    RunReferenceSpaceTest([](Napi::Env env) {
+        auto result = Napi::Eval(env, R"JS(
+            (() => {
+                let reads = 0;
+                const value = 1 + 2 ** -40;
+                const pose = new XRRigidTransform({get x() { ++reads; return value; }}, {w: 2});
+                Object.freeze(pose);
+                return reads === 1 && pose.position.x === value && pose.orientation.w === 1 &&
+                    pose.inverse.inverse === pose && pose.matrix === pose.matrix;
+            })()
+        )JS", "rigid-transform-constructor.js");
+        EXPECT_TRUE(result.As<Napi::Boolean>().Value());
+    });
+}
+
 TEST(NativeXrReferenceSpace, OffsetViewerOriginTracksTheHeadButOffsetLocalOriginDoesNot)
 {
     RunReferenceSpaceTest([](Napi::Env env) {

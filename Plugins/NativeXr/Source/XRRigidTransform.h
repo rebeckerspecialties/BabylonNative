@@ -165,43 +165,36 @@ namespace Babylon
 
         XRRigidTransform(const Napi::CallbackInfo& info)
             : Napi::ObjectWrap<XRRigidTransform>{info}
-            , m_matrix{Napi::Persistent(Napi::Float32Array::New(info.Env(), MATRIX_SIZE))}
         {
+            const auto readPoint = [](const Napi::Object& input) {
+                std::array<double, 4> point{0, 0, 0, 1};
+                constexpr std::array keys{"x", "y", "z", "w"};
+                for (size_t i = 0; i < keys.size(); ++i)
+                {
+                    const auto member = input.Get(keys[i]);
+                    if (!member.IsUndefined())
+                        point[i] = member.ToNumber().DoubleValue();
+                }
+                return point;
+            };
+            if (info[0].IsObject())
             {
-                auto position{Napi::Object::New(info.Env())};
-                position.Set("x", 0.f);
-                position.Set("y", 0.f);
-                position.Set("z", 0.f);
-                position.Set("w", 1.f);
-                m_position = Napi::Persistent(position);
-
-                auto orientation{Napi::Object::New(info.Env())};
-                orientation.Set("x", 0.f);
-                orientation.Set("y", 0.f);
-                orientation.Set("z", 0.f);
-                orientation.Set("w", 1.f);
-                m_orientation = Napi::Persistent(orientation);
-                if (info[0].IsObject())
-                {
-                    auto input=info[0].As<Napi::Object>();
-                    for (const char* key : {"x","y","z","w"})
-                        if (!input.Get(key).IsUndefined()) position.Set(key,input.Get(key).ToNumber());
-                    if (position.Get("w").ToNumber().DoubleValue()!=1)
-                        throw Napi::TypeError::New(info.Env(),"XRRigidTransform position.w must equal 1");
-                }
-                if (info[1].IsObject())
-                {
-                    auto input=info[1].As<Napi::Object>();
-                    for (const char* key : {"x","y","z","w"})
-                        if (!input.Get(key).IsUndefined()) orientation.Set(key,input.Get(key).ToNumber());
-                    double norm{};
-                    for (const char* key : {"x","y","z","w"}) { const auto n=orientation.Get(key).ToNumber().DoubleValue(); norm+=n*n; }
-                    if (!(norm>0) || !std::isfinite(norm)) throw Napi::TypeError::New(info.Env(),"Invalid orientation quaternion");
-                    for (const char* key : {"x","y","z","w"}) orientation.Set(key,orientation.Get(key).ToNumber().DoubleValue()/std::sqrt(norm));
-                }
+                m_positionValues = readPoint(info[0].As<Napi::Object>());
+                if (m_positionValues[3] != 1)
+                    throw Napi::TypeError::New(info.Env(), "XRRigidTransform position.w must equal 1");
             }
-            const auto matrix = CreateTransformMatrix(xr::Space{GetNativePose()});
-            std::memcpy(m_matrix.Value().Data(), matrix.data(), sizeof(matrix));
+            if (info[1].IsObject())
+            {
+                m_orientationValues = readPoint(info[1].As<Napi::Object>());
+                double norm{};
+                for (const auto n : m_orientationValues)
+                    norm += n * n;
+                if (!(norm > 0) || !std::isfinite(norm))
+                    throw Napi::TypeError::New(info.Env(), "Invalid orientation quaternion");
+                const auto length = std::sqrt(norm);
+                for (auto& n : m_orientationValues)
+                    n /= length;
+            }
             auto slot = Napi::Object::New(info.Env());
             Value().DefineProperty(Napi::PropertyDescriptor::Value(Napi::Symbol::New(info.Env(), "XRRigidTransform inverse slot"), slot));
             m_inverseSlot = Napi::Weak(slot);
@@ -225,19 +218,33 @@ namespace Babylon
     private:
         void UpdateValues(const xr::Space& space, bool inverse)
         {
-            auto position = m_position.Value();
-            position.Set("x", space.Pose.Position.X);
-            position.Set("y", space.Pose.Position.Y);
-            position.Set("z", space.Pose.Position.Z);
-            position.Set("w", 1.f);
+            m_positionValues = {space.Pose.Position.X, space.Pose.Position.Y, space.Pose.Position.Z, 1};
+            m_orientationValues = {space.Pose.Orientation.X, space.Pose.Orientation.Y, space.Pose.Orientation.Z, space.Pose.Orientation.W};
+            m_inverseMatrix = inverse;
+            if (!m_position.IsEmpty())
+                WritePoint(m_position.Value(), m_positionValues);
+            if (!m_orientation.IsEmpty())
+                WritePoint(m_orientation.Value(), m_orientationValues);
+            if (!m_matrix.IsEmpty())
+                WriteMatrix();
+        }
 
-            auto orientation = m_orientation.Value();
-            orientation.Set("x", space.Pose.Orientation.X);
-            orientation.Set("y", space.Pose.Orientation.Y);
-            orientation.Set("z", space.Pose.Orientation.Z);
-            orientation.Set("w", space.Pose.Orientation.W);
+        static void WritePoint(const Napi::Object& point, const std::array<double, 4>& values)
+        {
+            point.Set("x", values[0]);
+            point.Set("y", values[1]);
+            point.Set("z", values[2]);
+            point.Set("w", values[3]);
+        }
 
-            std::memcpy(m_matrix.Value().Data(), CreateTransformMatrix(space, inverse).data(), m_matrix.Value().ByteLength());
+        void WriteMatrix()
+        {
+            auto output = m_matrix.Value();
+            if (output.ByteLength() == MATRIX_SIZE * sizeof(float))
+            {
+                const auto matrix = CreateTransformMatrix(xr::Space{GetNativePose()}, m_inverseMatrix);
+                std::memcpy(output.Data(), matrix.data(), sizeof(matrix));
+            }
         }
 
     public:
@@ -265,14 +272,15 @@ namespace Babylon
 
         xr::Pose GetNativePose() const
         {
-            auto position = m_position.Value();
-            auto orientation = m_orientation.Value();
             return {
-                {position.Get("x").ToNumber().FloatValue(), position.Get("y").ToNumber().FloatValue(), position.Get("z").ToNumber().FloatValue()},
-                {orientation.Get("x").ToNumber().FloatValue(), orientation.Get("y").ToNumber().FloatValue(), orientation.Get("z").ToNumber().FloatValue(), orientation.Get("w").ToNumber().FloatValue()}};
+                {static_cast<float>(m_positionValues[0]), static_cast<float>(m_positionValues[1]), static_cast<float>(m_positionValues[2])},
+                {static_cast<float>(m_orientationValues[0]), static_cast<float>(m_orientationValues[1]), static_cast<float>(m_orientationValues[2]), static_cast<float>(m_orientationValues[3])}};
         }
 
     private:
+        std::array<double, 4> m_positionValues{0, 0, 0, 1};
+        std::array<double, 4> m_orientationValues{0, 0, 0, 1};
+        bool m_inverseMatrix{};
         Napi::ObjectReference m_position{};
         Napi::ObjectReference m_orientation{};
         Napi::Reference<Napi::Float32Array> m_matrix{};
@@ -296,18 +304,35 @@ namespace Babylon
             return result;
         }
 
-        Napi::Value Position(const Napi::CallbackInfo&)
+        Napi::Value Position(const Napi::CallbackInfo& info)
         {
+            if (m_position.IsEmpty())
+            {
+                auto point = Napi::Object::New(info.Env());
+                WritePoint(point, m_positionValues);
+                m_position = Napi::Persistent(point);
+            }
             return m_position.Value();
         }
 
-        Napi::Value Orientation(const Napi::CallbackInfo&)
+        Napi::Value Orientation(const Napi::CallbackInfo& info)
         {
+            if (m_orientation.IsEmpty())
+            {
+                auto point = Napi::Object::New(info.Env());
+                WritePoint(point, m_orientationValues);
+                m_orientation = Napi::Persistent(point);
+            }
             return m_orientation.Value();
         }
 
-        Napi::Value Matrix(const Napi::CallbackInfo&)
+        Napi::Value Matrix(const Napi::CallbackInfo& info)
         {
+            if (m_matrix.IsEmpty())
+            {
+                m_matrix = Napi::Persistent(Napi::Float32Array::New(info.Env(), MATRIX_SIZE));
+                WriteMatrix();
+            }
             return m_matrix.Value();
         }
     };
