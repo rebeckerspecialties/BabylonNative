@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
+import { gapInterval } from "./correlateQuestFrameGaps.mjs";
 
 // Run one interactive layer per process. Logcat timestamps have millisecond precision.
 export function summarizeFrameGaps(lines, pid) {
@@ -19,10 +20,8 @@ export function summarizeFrameGaps(lines, pid) {
         } else if (tag === "BabylonNative" && message.startsWith("XR layer submitted ")) {
             receipt = JSON.parse(message.slice("XR layer submitted ".length)); end = time;
         } else if (tag === "BabylonNative" && message.startsWith("XR predicted gap ")) {
-            const v = Object.fromEntries(Array.from(message.matchAll(/(\w+)=(-?[\d.]+)/g), ([, k, n]) => [k, Number(n)]));
-            if (![v.wait,v.hostGap,v.prevEnd,v.afterJs,v.jsWork,v.jsQueue].every(n => Number.isFinite(n) && n >= 0)) continue;
-            const jsEnd = time - v.wait - v.hostGap - v.prevEnd - v.afterJs;
-            gaps.push({ frame: v.frame, time, jsStart: jsEnd-v.jsWork, jsEnd, dispatch: jsEnd-v.jsWork-v.jsQueue, workMs: v.jsWork });
+            const v = gapInterval(message, time);
+            if (v) gaps.push({ frame: v.frame, time, jsStart: v.start, jsEnd: v.end, dispatch: v.queued, workMs: v.jsWork });
         }
     }
     if (start === undefined || !receipt || end < start || !(receipt.steadyMs > 0)) throw Error("Missing complete timed layer receipt");
