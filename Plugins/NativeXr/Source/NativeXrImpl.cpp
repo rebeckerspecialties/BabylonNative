@@ -880,11 +880,14 @@ namespace Babylon
             arcana::trace_region endFrameRegion{"NativeXR::EndFrame"};
 
 #if defined(__ANDROID__) && defined(BABYLON_NATIVE_XR_OPENXR)
+            auto* timing = m_sessionState->Frame->Timing;
+            if (timing) timing->ReleaseStarted = std::chrono::steady_clock::now();
             const auto& colorTextures = m_sessionState->FrameColorTextureIds;
             if (!colorTextures.empty() && !babylon_wgpu_native_prepare_openxr_textures_for_release(colorTextures.data(), colorTextures.size()))
             {
                 throw std::runtime_error{"NativeXR failed to prepare its WebGPU color textures for OpenXR release: " + GetLastWgpuError()};
             }
+            if (timing) timing->ReleaseFinished = std::chrono::steady_clock::now();
 #endif
 
             if (!ShouldUseAsyncXrComposite() && !babylon_wgpu_native_queue_wait_submitted_work())
