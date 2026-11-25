@@ -370,6 +370,9 @@ namespace Babylon
                         self->m_beginTask.reset();
                         std::rethrow_exception(result.error());
                     }
+#if defined(__ANDROID__) && defined(BABYLON_NATIVE_XR_OPENXR)
+                    self->m_sessionState->Session->HintApplicationThread();
+#endif
                 });
         }
 

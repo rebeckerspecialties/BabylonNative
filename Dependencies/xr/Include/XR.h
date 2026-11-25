@@ -484,6 +484,7 @@ namespace xr
             bool SupportsWarpDepth(int64_t format) const;
             bool SupportsFoveation(double scale) const;
             void EnableImmersiveAr();
+            void HintApplicationThread();
             void SetFoveation(double amount);
             WarpImages AcquireWarpImages(int64_t format);
             void MarkWarpImagesSubmitted(const Pose& delta);
