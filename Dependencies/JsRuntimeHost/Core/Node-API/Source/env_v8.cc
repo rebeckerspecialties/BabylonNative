@@ -4,6 +4,8 @@
 
 #include <utility>
 #ifdef __ANDROID__
+#include <algorithm>
+#include <array>
 #include <android/log.h>
 #include <dlfcn.h>
 #include <malloc.h>
@@ -89,6 +91,16 @@ namespace
 
     void CallFinalizer(napi_finalize cb, void* data, void* hint) override
     {
+      if (types && inDrain)
+      {
+        auto entry = std::find_if(mix.begin(), mix.end(), [cb](const Entry& e) { return !e.count || e.callback == cb; });
+        if (entry != mix.end())
+        {
+          entry->callback = cb;
+          ++entry->count;
+        }
+        else ++overflow;
+      }
       if (!detail)
       {
         napi_env__::CallFinalizer(cb, data, hint);
@@ -113,11 +125,13 @@ namespace
       const auto allocated = heap ? mallinfo().uordblks : 0;
       const auto gc = gcEnd;
       const auto sequence = gcSequence;
+      if (types) { mix.fill({}); overflow = 0; inDrain = true; }
       const auto begin = Micros(CLOCK_MONOTONIC);
       const auto cpu = Micros(CLOCK_THREAD_CPUTIME_ID);
       scheduled_napi_env__::DrainFinalizerQueue();
       const auto elapsed = Micros(CLOCK_MONOTONIC) - begin;
       const auto cpuUs = Micros(CLOCK_THREAD_CPUTIME_ID) - cpu;
+      inDrain = false;
       const auto delta = heap ? static_cast<long long>(mallinfo().uordblks) - static_cast<long long>(allocated) : 0;
       Dl_info location{};
       const auto pc = reinterpret_cast<uintptr_t>(slowest);
@@ -126,6 +140,21 @@ namespace
         "tid=%d gc=%u gcEndUs=%lld startUs=%lld wallUs=%lld cpuUs=%lld queued=%zu callbackSample=%d callbacks=%zu maxCallbackUs=%lld module=%s offset=%zx heapSample=%d netHeapBytes=%lld",
         gettid(), sequence, gc, begin, elapsed, cpuUs, queued, detail, calls, maxUs,
         location.dli_fname ? location.dli_fname : "unknown", static_cast<size_t>(pc - reinterpret_cast<uintptr_t>(location.dli_fbase)), heap, delta);
+      if (types)
+      {
+        for (const auto& entry : mix)
+        {
+          if (!entry.count) break;
+          Dl_info source{};
+          const auto address = reinterpret_cast<uintptr_t>(entry.callback);
+          dladdr(reinterpret_cast<void*>(address), &source);
+          __android_log_print(ANDROID_LOG_INFO, "BabylonFinalType", "tid=%d gc=%u count=%zu module=%s offset=%zx",
+            gettid(), sequence, entry.count, source.dli_fname ? source.dli_fname : "unknown",
+            static_cast<size_t>(address - reinterpret_cast<uintptr_t>(source.dli_fbase)));
+        }
+        if (overflow)
+          __android_log_print(ANDROID_LOG_INFO, "BabylonFinalType", "tid=%d gc=%u overflow=%zu", gettid(), sequence, overflow);
+      }
     }
   private:
     static void AfterGc(v8::Isolate*, v8::GCType, v8::GCCallbackFlags, void* data)
@@ -136,6 +165,11 @@ namespace
     }
     const bool heap{DiagnosticEnabled("debug.babylon.fin_heap")};
     const bool detail{DiagnosticEnabled("debug.babylon.fin_detail")};
+    struct Entry { napi_finalize callback{}; size_t count{}; };
+    std::array<Entry, 64> mix{};
+    size_t overflow{};
+    bool inDrain{};
+    const bool types{DiagnosticEnabled("debug.babylon.fin_types")};
     unsigned gcSequence{};
     long long gcEnd{}, maxUs{};
     size_t calls{};
