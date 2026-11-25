@@ -910,6 +910,41 @@ TEST(NativeWebGPUAsyncBridge, CommandEncoderMethodsShareCodeButNotDeviceOwnershi
     )JS");
 }
 
+TEST(NativeWebGPUAsyncBridge, ConsumedCommandWrappersCanBeRetainedAndFrozen)
+{
+    RunNativeWebGpuAsyncScript(R"JS(
+        (async () => {
+            const device = await (await navigator.gpu.requestAdapter()).requestDevice();
+            const tex = device.createTexture({size: [1, 1], format: "rgba8unorm",
+                usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC});
+            const view = tex.createView();
+            const read = device.createBuffer({size: 512, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ});
+            const saved = [];
+            device.pushErrorScope("validation");
+            for (let i = 0; i < 2; ++i) {
+                const encoder = Object.freeze(device.createCommandEncoder());
+                const pass = Object.freeze(encoder.beginRenderPass({colorAttachments: [{view,
+                    loadOp: "clear", storeOp: "store", clearValue: [1-i, i, 0, 1]}]}));
+                pass.end();
+                encoder.copyTextureToBuffer({texture: tex}, {buffer: read, offset: i * 256, bytesPerRow: 256}, [1, 1]);
+                const command = Object.freeze(encoder.finish());
+                saved.push({pass, encoder, command});
+            }
+            device.queue.submit(saved.map(item => item.command));
+            await read.mapAsync(GPUMapMode.READ);
+            const bytes = new Uint8Array(read.getMappedRange());
+            if (bytes[0] !== 255 || bytes[1] !== 0 || bytes[256] !== 0 || bytes[257] !== 255 ||
+                saved[0].encoder === saved[1].encoder || saved[0].pass === saved[1].pass || saved[0].command === saved[1].command)
+                throw Error("Command wrapper identity or recorded data changed after consumption");
+            read.unmap();
+            const error = await device.popErrorScope();
+            if (error) throw Error(error.message);
+            read.destroy(); tex.destroy(); device.destroy();
+            __nativeWebGpuTestDone(true, "");
+        })().catch(e => __nativeWebGpuTestDone(false, String(e) + "\n" + (e.stack || "")));
+    )JS");
+}
+
 TEST(NativeWebGPUAsyncBridge, RenderPassMethodsAreSharedWithoutCapturingTheFirstDevice)
 {
     RunNativeWebGpuAsyncScript(R"JS(
