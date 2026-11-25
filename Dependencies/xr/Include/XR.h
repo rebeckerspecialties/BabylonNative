@@ -445,6 +445,8 @@ namespace xr
                 struct CallbackTiming
                 {
                     std::chrono::steady_clock::time_point Started{}, Finished{};
+                    std::chrono::steady_clock::time_point DispatchStarted{}, DispatchFinished{};
+                    std::chrono::nanoseconds ThreadCPU{};
                 };
                 // Only set during an opt-in Android frame-pacing diagnostic.
                 CallbackTiming* Timing{};

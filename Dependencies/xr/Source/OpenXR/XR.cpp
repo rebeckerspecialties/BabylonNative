@@ -89,12 +89,14 @@ namespace xr
                 {
                     auto ms = [](auto duration) { return std::chrono::duration<double, std::milli>(duration).count(); };
                     __android_log_print(ANDROID_LOG_INFO, "BabylonNative",
-                        "XR predicted gap frame=%u delta=%.2fms prevPrepare=%.2f prevApp=%.2f prevEnd=%.2f hostGap=%.2f wait=%.2f jsQueue=%.2f jsWork=%.2f afterJs=%.2f",
+                        "XR predicted gap frame=%u delta=%.2fms prevPrepare=%.2f prevApp=%.2f prevEnd=%.2f hostGap=%.2f wait=%.2f jsQueue=%.2f jsWork=%.2f afterJs=%.2f dispatch=%.2f threadCPU=%.2f",
                         Frames, static_cast<double>(delta) / 1e6, ms(Prepared-WaitReturned), ms(EndStarted-Prepared),
                         ms(EndReturned - EndStarted), ms(entered - EndReturned), ms(now - entered),
                         Callback.Started >= Prepared ? ms(Callback.Started - Prepared) : -1.,
                         Callback.Finished >= Callback.Started && Callback.Started >= Prepared ? ms(Callback.Finished - Callback.Started) : -1.,
-                        Callback.Finished >= Prepared ? ms(EndStarted - Callback.Finished) : -1.);
+                        Callback.Finished >= Prepared ? ms(EndStarted - Callback.Finished) : -1.,
+                        Callback.DispatchStarted >= Prepared ? ms(Callback.DispatchFinished - Callback.DispatchStarted) : -1.,
+                        Callback.Finished >= Prepared ? ms(Callback.ThreadCPU) : -1.);
                     ++Logged;
                 }
                 DisplayTime = frame.predictedDisplayTime;
