@@ -168,6 +168,26 @@ TEST(NativeXrReferenceSpace, ConstructorCopiesDoublePrecisionMembersOnlyOnce)
     });
 }
 
+TEST(NativeXrReferenceSpace, FrozenRigidTransformsKeepPrivateIndependentInversePairs)
+{
+    RunReferenceSpaceTest([](Napi::Env env) {
+        EXPECT_TRUE(Napi::Eval(env, R"JS(
+            (() => {
+                const a = Object.freeze(new XRRigidTransform({x: 2}));
+                const b = Object.freeze(new XRRigidTransform({x: 2}));
+                const ai = Object.freeze(a.inverse);
+                const bi = b.inverse;
+                // Neither wrapper may expose a writable inverse slot through reflection.
+                for (const key of Object.getOwnPropertySymbols(a)) {
+                    if (a[key]?.value === ai) a[key].value = bi;
+                }
+                return ai !== bi && a.inverse === ai && ai.inverse === a &&
+                    b.inverse === bi && bi.inverse === b && ai.position.x === -2;
+            })()
+        )JS", "rigid-transform-inverse-pairs.js").As<Napi::Boolean>().Value());
+    });
+}
+
 TEST(NativeXrReferenceSpace, OffsetViewerOriginTracksTheHeadButOffsetLocalOriginDoesNot)
 {
     RunReferenceSpaceTest([](Napi::Env env) {

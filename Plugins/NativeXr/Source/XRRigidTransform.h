@@ -1,5 +1,6 @@
 #pragma once
 
+#include <napi/env.h>
 #include <array>
 #include <cstring>
 #include <cmath>
@@ -152,9 +153,26 @@ namespace Babylon
                     InstanceAccessor("position", &XRRigidTransform::Position, nullptr),
                     InstanceAccessor("orientation", &XRRigidTransform::Orientation, nullptr),
                     InstanceAccessor("matrix", &XRRigidTransform::Matrix, nullptr),
-                    InstanceAccessor("inverse", &XRRigidTransform::Inverse, nullptr),
+                    InstanceAccessor("inverse", &XRRigidTransform::Inverse, nullptr, napi_configurable),
                 });
 
+            // A live transform keeps its inverse alive, but an unreachable pair is collectible.
+            // Keep those edges outside the wrappers so inverse also works after Object.freeze.
+            Napi::Eval(env, R"JS(
+                proto => {
+                    const cache = new WeakMap();
+                    const get = cache.get.bind(cache), set = cache.set.bind(cache);
+                    const create = Function.prototype.call.bind(Object.getOwnPropertyDescriptor(proto, "inverse").get);
+                    Object.defineProperty(proto, "inverse", { configurable: false, get() {
+                        const cached = get(this);
+                        if (cached !== undefined) return cached;
+                        const inverse = create(this);
+                        set(this, inverse);
+                        set(inverse, this);
+                        return inverse;
+                    }});
+                }
+            )JS", "babylon-native://plugins/NativeXr/transformInverse.js").As<Napi::Function>().Call({func.Get("prototype")});
             env.Global().Set(JS_CLASS_NAME, func);
         }
 
@@ -195,9 +213,6 @@ namespace Babylon
                 for (auto& n : m_orientationValues)
                     n /= length;
             }
-            auto slot = Napi::Object::New(info.Env());
-            Value().DefineProperty(Napi::PropertyDescriptor::Value(Napi::Symbol::New(info.Env(), "XRRigidTransform inverse slot"), slot));
-            m_inverseSlot = Napi::Weak(slot);
         }
 
         void Update(XRRigidTransform* transform)
@@ -208,10 +223,11 @@ namespace Babylon
         void Update(const xr::Space& space, bool inverse)
         {
             UpdateValues(space, inverse);
-            if (m_hasInverse)
+            if (!m_inverse.IsEmpty())
             {
-                const auto cached = m_inverseSlot.Value().Get("value").As<Napi::Object>();
-                Unwrap(cached)->UpdateValues(xr::Space{InvertPose(space.Pose)}, inverse);
+                const auto cached = m_inverse.Value();
+                if (!cached.IsEmpty())
+                    Unwrap(cached)->UpdateValues(xr::Space{InvertPose(space.Pose)}, inverse);
             }
         }
 
@@ -284,23 +300,16 @@ namespace Babylon
         Napi::ObjectReference m_position{};
         Napi::ObjectReference m_orientation{};
         Napi::Reference<Napi::Float32Array> m_matrix{};
-        Napi::ObjectReference m_inverseSlot{};
-        bool m_hasInverse{};
+        Napi::ObjectReference m_inverse{};
 
         Napi::Value Inverse(const Napi::CallbackInfo& info)
         {
-            if (m_hasInverse)
-            {
-                return m_inverseSlot.Value().Get("value");
-            }
             auto result = New(info.Env());
             auto* inverse = Unwrap(result);
             inverse->Update(InvertPose(GetNativePose()));
-            // JS owns both sides of this cycle. Persistent N-API references here
-            // would keep every queried transform alive for the runtime's lifetime.
-            m_inverseSlot.Value().Set("value", result);
-            inverse->m_inverseSlot.Value().Set("value", Value());
-            m_hasInverse = inverse->m_hasInverse = true;
+            auto self = Value();
+            m_inverse = Napi::Weak(result);
+            inverse->m_inverse = Napi::Weak(self);
             return result;
         }
 
