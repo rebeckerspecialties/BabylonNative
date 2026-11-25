@@ -63,6 +63,7 @@ set(SOURCES
     "Source/Tests.NativeXr.ControllerLocations.cpp"
     "Source/Tests.NativeXr.FrameCallbackQueue.cpp"
     "Source/Tests.NativeXr.GamepadSnapshot.cpp"
+    "Source/Tests.NativeXr.PointerEvent.cpp"
     "Source/Tests.NativeXr.VideoClock.cpp"
     "Source/Tests.NativeXr.VideoPixels.cpp"
     "Source/Tests.NativeXr.ReferenceSpace.cpp"
