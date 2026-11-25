@@ -6,6 +6,7 @@
 #include "../../../Plugins/NativeXr/Source/XRRigidTransform.h"
 #include "../../../Plugins/NativeXr/Source/XRReferenceSpace.h"
 #include "../../../Plugins/NativeXr/Source/XRView.h"
+#include "../../../Plugins/NativeXr/Source/XRViewerPose.h"
 
 #include <gtest/gtest.h>
 #include <cmath>
@@ -90,6 +91,29 @@ TEST(NativeXrReferenceSpace, RetainedEyeViewsMaterializeIndependentSnapshots)
         EXPECT_FLOAT_EQ(right.Get("projectionMatrix").As<Napi::Float32Array>()[8], 0.13f);
         EXPECT_FLOAT_EQ(transform.Get("matrix").As<Napi::Float32Array>()[12], -0.032f);
         EXPECT_FLOAT_EQ(right.Get("transform").As<Napi::Object>().Get("matrix").As<Napi::Float32Array>()[12], 0.032f);
+    });
+}
+
+TEST(NativeXrReferenceSpace, ViewerPoseKeepsItsOwnTransformAndFrozenEyeList)
+{
+    RunReferenceSpaceTest([](Napi::Env env) {
+        Babylon::XRView::Initialize(env);
+        Babylon::XRViewerPose::Initialize(env);
+        EXPECT_TRUE(Napi::Eval(env, R"JS(
+            (() => {
+                const left = new XRView(), right = new XRView();
+                const at = x => new XRRigidTransform({x});
+                const a = new XRViewerPose([left, right], at(1), false);
+                const b = new XRViewerPose([right], at(2), true);
+                const empty = new XRViewerPose();
+                return Object.isFrozen(a.views) && a.views === a.views &&
+                    a.views.length === 2 && a.views[0] === left && a.views[1] === right &&
+                    b.views.length === 1 && b.views[0] === right && empty.views.length === 0 &&
+                    a.transform === a.transform && a.transform !== b.transform &&
+                    a.transform.position.x === 1 && b.transform.position.x === 2 &&
+                    !a.emulatedPosition && b.emulatedPosition;
+            })()
+        )JS", "viewer-pose-snapshots.js").As<Napi::Boolean>().Value());
     });
 }
 

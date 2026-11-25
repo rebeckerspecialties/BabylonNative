@@ -198,12 +198,8 @@ namespace Babylon
             std::optional<xr::Pose> inverse;
             if (referenceSpace && (referenceSpace->GetTransform() || referenceSpace->IsViewer()))
                 inverse = InvertPose(referenceSpace->OriginInNativeFrame(ViewerOrigin()));
-            m_jsXRViewerPose = Napi::Persistent(XRViewerPose::New(info));
+            m_jsXRViewerPose = Napi::Persistent(XRViewerPose::New(info, m_frame, inverse));
             m_viewerPoseSpace = Napi::Persistent(space);
-            XRViewerPose::Unwrap(m_jsXRViewerPose.Value())->Update(
-                info,
-                m_frame,
-                inverse);
 
             return m_jsXRViewerPose.Value();
         }
