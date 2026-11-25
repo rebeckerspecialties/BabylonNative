@@ -12,6 +12,7 @@
 #include <napi/env.h>
 
 #include <condition_variable>
+#include <chrono>
 #include <functional>
 #include <future>
 #include <map>
@@ -145,6 +146,9 @@ namespace Babylon::Graphics
         std::condition_variable m_frameSyncCV{};
         bool m_frameBlocked{true};
         size_t m_pendingFrameScopes{};
+#ifdef __ANDROID__
+        std::chrono::steady_clock::time_point m_lastScopeRelease{};
+#endif
 
         std::queue<std::function<void(ScreenShotData)>> m_screenShotCallbacks{};
         std::mutex m_screenShotCallbacksMutex{};

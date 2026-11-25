@@ -336,6 +336,9 @@ endif()
 
 target_include_directories(napi ${INCLUDE_DIRECTORIES})
 target_link_libraries(napi ${LINK_LIBRARIES})
+if(ANDROID AND NAPI_JAVASCRIPT_ENGINE STREQUAL "V8")
+    target_link_libraries(napi PRIVATE log)
+endif()
 
 if(NAPI_JAVASCRIPT_ENGINE STREQUAL "Hermes")
     if(JSR_NAPI_SHARED)

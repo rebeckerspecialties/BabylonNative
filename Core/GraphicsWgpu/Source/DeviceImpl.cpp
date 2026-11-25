@@ -2,6 +2,8 @@
 #include "WgpuInterop.h"
 #if defined(__ANDROID__)
 #include "AndroidWindow.h"
+#include <android/log.h>
+#include <sys/system_properties.h>
 #endif
 
 #include <Babylon/JsRuntime.h>
@@ -22,6 +24,24 @@
 namespace
 {
     constexpr auto JS_GRAPHICS_NAME = "_Graphics";
+#if defined(__ANDROID__)
+    struct HostFrameTiming
+    {
+        using Clock = std::chrono::steady_clock;
+        Clock::time_point StartReturned{};
+        const void* Device{};
+        unsigned Logged{};
+    };
+    HostFrameTiming* GetHostFrameTiming()
+    {
+        static const bool enabled = [] {
+            char value[PROP_VALUE_MAX]{};
+            return __system_property_get("debug.babylon.xr_timing", value) == 1 && value[0] == '1';
+        }();
+        static thread_local HostFrameTiming timing{};
+        return enabled ? &timing : nullptr;
+    }
+#endif
 }
 
 namespace Babylon::Graphics
@@ -505,10 +525,22 @@ namespace Babylon::Graphics
 
         m_frameStartDispatcher.tick(*cancellationSource);
         m_beforeRenderDispatcher.tick(*cancellationSource);
+#if defined(__ANDROID__)
+        if (auto* timing = GetHostFrameTiming())
+        {
+            timing->Device = this;
+            timing->StartReturned = HostFrameTiming::Clock::now();
+        }
+#endif
     }
 
     void DeviceImpl::FinishRenderingCurrentFrame()
     {
+#if defined(__ANDROID__)
+        auto* timing = GetHostFrameTiming();
+        const auto entered = timing ? HostFrameTiming::Clock::now() : HostFrameTiming::Clock::time_point{};
+        HostFrameTiming::Clock::time_point lastRelease{};
+#endif
         std::shared_ptr<arcana::cancellation_source> cancellationSource{};
         std::shared_future<std::shared_ptr<WgpuNative>> pendingWgpu{};
         std::shared_ptr<WgpuNative> wgpu{};
@@ -566,8 +598,14 @@ namespace Babylon::Graphics
         {
             std::unique_lock lock{m_frameSyncMutex};
             m_frameSyncCV.wait(lock, [this] { return m_pendingFrameScopes == 0; });
+#ifdef __ANDROID__
+            if (timing) lastRelease = m_lastScopeRelease;
+#endif
             m_frameBlocked = true;
         }
+#if defined(__ANDROID__)
+        const auto scopesDrained = timing ? HostFrameTiming::Clock::now() : HostFrameTiming::Clock::time_point{};
+#endif
 
         if (tickBeforeRender)
         {
@@ -590,6 +628,21 @@ namespace Babylon::Graphics
             wgpu->Render();
         }
 
+#if defined(__ANDROID__)
+        if (timing && timing->Device == this && timing->Logged < 32)
+        {
+            const auto ms = [](auto d) { return std::chrono::duration<double, std::milli>(d).count(); };
+            const auto host = ms(entered - timing->StartReturned);
+            const auto scopes = ms(scopesDrained - entered);
+            const auto render = ms(HostFrameTiming::Clock::now() - scopesDrained);
+            if (host > 19 || scopes > 16 || render > 5)
+            {
+                const auto wake = lastRelease >= entered ? ms(scopesDrained - lastRelease) : -1.;
+                __android_log_print(ANDROID_LOG_INFO, "BabylonHost", "hostInterval=%.2f finishToDrain=%.2f releaseToWake=%.2f drainToAfterRender=%.2f", host, scopes, wake, render);
+                ++timing->Logged;
+            }
+        }
+#endif
         m_afterRenderDispatcher.tick(*cancellationSource);
 
         if (pendingCallbacks.empty())
@@ -704,6 +757,10 @@ namespace Babylon::Graphics
         {
             std::lock_guard lock{m_frameSyncMutex};
             --m_pendingFrameScopes;
+#ifdef __ANDROID__
+            if (m_pendingFrameScopes == 0 && GetHostFrameTiming())
+                m_lastScopeRelease = std::chrono::steady_clock::now();
+#endif
         }
         m_frameSyncCV.notify_all();
     }

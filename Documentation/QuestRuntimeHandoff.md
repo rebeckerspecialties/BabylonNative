@@ -158,6 +158,14 @@ menu blocked the waiting XR task for 300 ms; the headset then reported 29/60
 FPS with 7.9 ms app GPU time. Never replace its V8 adapter with the one
 from Samples when profiling; verify DT_NEEDED for the actual installed library.
 
+To identify JS allocation producers, set `debug.babylon.alloc=1` before a
+diagnostic Samples launch. V8 samples allocations (including collected objects)
+for 30 seconds starting 35 seconds after isolate startup. Read `BabylonAlloc`
+in logcat for that PID/TID; check that the first menu was visible throughout.
+Bytes are statistical estimates by JS call stack, including allocations made
+inside native calls. They are neither retained size nor GPU memory. Reset the
+property to 0 and relaunch before timing. No driver layer or debugger is needed.
+
 Silent texture movies have a second requirement: MediaPlayer on Quest Android
 does not advance a playback clock without an audio track or attached Surface.
 Drive the independent texture decoder from monotonic playing time in that case

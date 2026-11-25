@@ -13,6 +13,7 @@
 #include <optional>
 #include <stdexcept>
 #ifdef __ANDROID__
+#include "V8AllocationSample.h"
 #include <android/log.h>
 #include <sys/system_properties.h>
 #include <chrono>
@@ -74,6 +75,13 @@ namespace Babylon
                 return *m_platform;
             }
 
+#ifdef __ANDROID__
+            auto ForegroundRunner(v8::Isolate* isolate)
+            {
+                return static_cast<v8::Platform&>(*m_platform).GetForegroundTaskRunner(isolate);
+            }
+#endif
+
         private:
             std::unique_ptr<Internal::V8Platform> m_platform;
 
@@ -115,6 +123,15 @@ namespace Babylon
             v8::HandleScope isolate_handle_scope{isolate};
             v8::Local<v8::Context> context = v8::Context::New(isolate);
             v8::Context::Scope context_scope{context};
+
+#ifdef __ANDROID__
+            char allocations[PROP_VALUE_MAX]{};
+            if (__system_property_get("debug.babylon.alloc", allocations) && std::string_view{allocations} == "1")
+            {
+                const auto runner = Module::Instance().ForegroundRunner(isolate);
+                runner->PostDelayedTask(std::make_unique<Internal::V8AllocationSample>(runner), 35);
+            }
+#endif
 
             Napi::Env env = Napi::Attach(context, [this](std::function<void()> task) {
                 Dispatch([task = std::move(task)](Napi::Env) {

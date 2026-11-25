@@ -16,6 +16,9 @@
 #include <cstdlib>
 #include <sstream>
 #include "NativeXrImpl.h"
+#if defined(__ANDROID__) && defined(BABYLON_NATIVE_XR_OPENXR)
+#include <time.h>
+#endif
 
 namespace Babylon
 {
@@ -367,6 +370,9 @@ namespace Babylon
                         self->m_beginTask.reset();
                         std::rethrow_exception(result.error());
                     }
+#if defined(__ANDROID__) && defined(BABYLON_NATIVE_XR_OPENXR)
+                    self->m_sessionState->Session->HintApplicationThread();
+#endif
                 });
         }
 
@@ -504,18 +510,37 @@ namespace Babylon
                 arcana::make_task(m_runtimeScheduler, m_sessionState->CancellationSource, [this, frameScope{std::make_shared<Graphics::FrameCompletionScope>(m_sessionState->GraphicsContext.AcquireFrameCompletionScope())}, thisRef{shared_from_this()}]() {
 #if defined(__ANDROID__) && defined(BABYLON_NATIVE_XR_OPENXR)
                     auto* timing = m_sessionState->Frame->Timing;
-                    if (timing) timing->Started = std::chrono::steady_clock::now();
+                    const auto threadTime = [] {
+                        timespec ts{};
+                        clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ts);
+                        return std::chrono::seconds{ts.tv_sec} + std::chrono::nanoseconds{ts.tv_nsec};
+                    };
+                    if (timing)
+                    {
+                        timing->Started = std::chrono::steady_clock::now();
+                        timing->ThreadCPU = threadTime();
+                    }
 #endif
                     BeginUpdate();
 
                     {
                         arcana::trace_region scheduleRegion{"NativeXR::ScheduleFrame invoke JS callbacks"};
+#if defined(__ANDROID__) && defined(BABYLON_NATIVE_XR_OPENXR)
+                        if (timing) timing->DispatchStarted = std::chrono::steady_clock::now();
+#endif
                         m_sessionState->ScheduleFrameCallbacks.Dispatch(m_sessionState->Frame);
+#if defined(__ANDROID__) && defined(BABYLON_NATIVE_XR_OPENXR)
+                        if (timing) timing->DispatchFinished = std::chrono::steady_clock::now();
+#endif
                     }
 
                     EndUpdate();
 #if defined(__ANDROID__) && defined(BABYLON_NATIVE_XR_OPENXR)
-                    if (timing) timing->Finished = std::chrono::steady_clock::now();
+                    if (timing)
+                    {
+                        timing->ThreadCPU = threadTime() - timing->ThreadCPU;
+                        timing->Finished = std::chrono::steady_clock::now();
+                    }
 #endif
                 }).then(arcana::inline_scheduler, m_sessionState->CancellationSource, [this, thisRef{shared_from_this()}](const arcana::expected<void, std::exception_ptr>& result) {
                       if (!m_sessionState->CancellationSource.cancelled() && result.has_error())
@@ -858,11 +883,14 @@ namespace Babylon
             arcana::trace_region endFrameRegion{"NativeXR::EndFrame"};
 
 #if defined(__ANDROID__) && defined(BABYLON_NATIVE_XR_OPENXR)
+            auto* timing = m_sessionState->Frame->Timing;
+            if (timing) timing->ReleaseStarted = std::chrono::steady_clock::now();
             const auto& colorTextures = m_sessionState->FrameColorTextureIds;
             if (!colorTextures.empty() && !babylon_wgpu_native_prepare_openxr_textures_for_release(colorTextures.data(), colorTextures.size()))
             {
                 throw std::runtime_error{"NativeXR failed to prepare its WebGPU color textures for OpenXR release: " + GetLastWgpuError()};
             }
+            if (timing) timing->ReleaseFinished = std::chrono::steady_clock::now();
 #endif
 
             if (!ShouldUseAsyncXrComposite() && !babylon_wgpu_native_queue_wait_submitted_work())

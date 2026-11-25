@@ -445,6 +445,9 @@ namespace xr
                 struct CallbackTiming
                 {
                     std::chrono::steady_clock::time_point Started{}, Finished{};
+                    std::chrono::steady_clock::time_point DispatchStarted{}, DispatchFinished{};
+                    std::chrono::steady_clock::time_point ReleaseStarted{}, ReleaseFinished{};
+                    std::chrono::nanoseconds ThreadCPU{};
                 };
                 // Only set during an opt-in Android frame-pacing diagnostic.
                 CallbackTiming* Timing{};
@@ -481,6 +484,7 @@ namespace xr
             bool SupportsWarpDepth(int64_t format) const;
             bool SupportsFoveation(double scale) const;
             void EnableImmersiveAr();
+            void HintApplicationThread();
             void SetFoveation(double amount);
             WarpImages AcquireWarpImages(int64_t format);
             void MarkWarpImagesSubmitted(const Pose& delta);

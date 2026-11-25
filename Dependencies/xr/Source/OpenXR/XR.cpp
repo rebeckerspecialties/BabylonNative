@@ -13,6 +13,7 @@
 #include <openxr/openxr.h>
 #include <openxr/openxr_platform.h>
 #include <android/log.h>
+#include <unistd.h>
 #include <sys/system_properties.h>
 #include "CompositionLayers.h"
 #include "PassthroughLayer.h"
@@ -89,12 +90,16 @@ namespace xr
                 {
                     auto ms = [](auto duration) { return std::chrono::duration<double, std::milli>(duration).count(); };
                     __android_log_print(ANDROID_LOG_INFO, "BabylonNative",
-                        "XR predicted gap frame=%u delta=%.2fms prevPrepare=%.2f prevApp=%.2f prevEnd=%.2f hostGap=%.2f wait=%.2f jsQueue=%.2f jsWork=%.2f afterJs=%.2f",
+                        "XR predicted gap frame=%u delta=%.2fms prevPrepare=%.2f prevApp=%.2f prevEnd=%.2f hostGap=%.2f wait=%.2f jsQueue=%.2f jsWork=%.2f afterJs=%.2f dispatch=%.2f threadCPU=%.2f toRelease=%.2f prepareRelease=%.2f",
                         Frames, static_cast<double>(delta) / 1e6, ms(Prepared-WaitReturned), ms(EndStarted-Prepared),
                         ms(EndReturned - EndStarted), ms(entered - EndReturned), ms(now - entered),
                         Callback.Started >= Prepared ? ms(Callback.Started - Prepared) : -1.,
                         Callback.Finished >= Callback.Started && Callback.Started >= Prepared ? ms(Callback.Finished - Callback.Started) : -1.,
-                        Callback.Finished >= Prepared ? ms(EndStarted - Callback.Finished) : -1.);
+                        Callback.Finished >= Prepared ? ms(EndStarted - Callback.Finished) : -1.,
+                        Callback.DispatchStarted >= Prepared ? ms(Callback.DispatchFinished - Callback.DispatchStarted) : -1.,
+                        Callback.Finished >= Prepared ? ms(Callback.ThreadCPU) : -1.,
+                        Callback.Finished >= Prepared && Callback.ReleaseStarted >= Callback.Finished ? ms(Callback.ReleaseStarted - Callback.Finished) : -1.,
+                        Callback.ReleaseStarted >= Prepared && Callback.ReleaseFinished >= Callback.ReleaseStarted ? ms(Callback.ReleaseFinished - Callback.ReleaseStarted) : -1.);
                     ++Logged;
                 }
                 DisplayTime = frame.predictedDisplayTime;
@@ -258,6 +263,10 @@ namespace xr
             };
             Cylinder = enable(XR_KHR_COMPOSITION_LAYER_CYLINDER_EXTENSION_NAME);
             const bool convertTime = enable(XR_KHR_CONVERT_TIMESPEC_TIME_EXTENSION_NAME);
+            char threadRoles[PROP_VALUE_MAX]{};
+            __system_property_get("debug.babylon.xr_thread", threadRoles);
+            const bool useThreadRoles = (threadRoles[0] == '1' || threadRoles[0] == '2') && enable(XR_KHR_ANDROID_THREAD_SETTINGS_EXTENSION_NAME);
+            HintScriptThread = threadRoles[0] == '2';
             AndroidSurface = enable(XR_KHR_ANDROID_SURFACE_SWAPCHAIN_EXTENSION_NAME);
             const bool querySpaceWarp = enable(XR_FB_SPACE_WARP_EXTENSION_NAME);
             const bool queryPassthrough = enable(XR_FB_PASSTHROUGH_EXTENSION_NAME);
@@ -292,6 +301,11 @@ namespace xr
                 instanceResult = xrCreateInstance(&createInfo, &Instance);
             }
             CheckXr(instanceResult, "xrCreateInstance");
+            if (useThreadRoles)
+            {
+                xrGetInstanceProcAddr(Instance, "xrSetAndroidApplicationThreadKHR",
+                    reinterpret_cast<PFN_xrVoidFunction*>(&SetApplicationThread));
+            }
 
             auto systemInfo = MakeXr<XrSystemGetInfo>(XR_TYPE_SYSTEM_GET_INFO);
             systemInfo.formFactor = XR_FORM_FACTOR_HEAD_MOUNTED_DISPLAY;
@@ -397,6 +411,8 @@ namespace xr
         bool AppOwnedVulkan{};
         bool DisplayRefreshRateSupported{};
         PFN_xrConvertTimeToTimespecTimeKHR ToMonotonicTime{};
+        PFN_xrSetAndroidApplicationThreadKHR SetApplicationThread{};
+        bool HintScriptThread{};
         bool Cylinder{}, Cube{}, Equirect{}, Equirect2{}, AndroidSurface{};
         uint32_t MaxLayers{};
         uint32_t MotionWidth{}, MotionHeight{};
@@ -891,6 +907,7 @@ namespace xr
                         beginInfo.primaryViewConfigurationType = VIEW_CONFIGURATION_TYPE;
                         CheckXr(xrBeginSession(Session, &beginInfo), "xrBeginSession");
                         SessionRunning = true;
+                        RendererRoleAttempted = false;
                         if (UsesPassthrough) Passthrough.Open(System.Instance, Session, xrGetInstanceProcAddr);
                     }
                     else if (SessionState == XR_SESSION_STATE_STOPPING && SessionRunning)
@@ -984,6 +1001,13 @@ namespace xr
             }
 
             auto waitInfo = MakeXr<XrFrameWaitInfo>(XR_TYPE_FRAME_WAIT_INFO);
+            if (!RendererRoleAttempted && System.SetApplicationThread)
+            {
+                RendererRoleAttempted = true;
+                const auto tid = static_cast<uint32_t>(gettid());
+                const auto result = System.SetApplicationThread(Session, XR_ANDROID_THREAD_TYPE_RENDERER_MAIN_KHR, tid);
+                __android_log_print(ANDROID_LOG_INFO, "BabylonNative", "OpenXR renderer thread tid=%u result=%d", tid, result);
+            }
             const auto entered = Timing ? FrameTimingProbe::Clock::now() : FrameTimingProbe::Clock::time_point{};
             CheckXr(xrWaitFrame(Session, &waitInfo, &FrameState), "xrWaitFrame");
             if (Timing) Timing->AfterWait(entered, FrameState);
@@ -1251,6 +1275,7 @@ namespace xr
         float DepthNearZ{System::DEFAULT_DEPTH_NEAR_Z};
         float DepthFarZ{System::DEFAULT_DEPTH_FAR_Z};
         bool SessionRunning{};
+        bool RendererRoleAttempted{};
         bool SessionEnded{};
         bool FrameBegun{};
         bool FrameShouldRender{};
@@ -1392,6 +1417,16 @@ namespace xr
             (shape == LayerShape::Cylinder && m_impl->System.Cylinder) || (shape == LayerShape::Equirect && m_impl->System.Equirect);
     }
     bool System::SupportsImmersiveAr() const { return m_impl->SupportsAlphaBlend || m_impl->SupportsPassthrough; }
+
+    void System::Session::HintApplicationThread()
+    {
+        if (m_impl->System.HintScriptThread && m_impl->System.SetApplicationThread)
+        {
+            const auto tid = static_cast<uint32_t>(gettid());
+            const auto result = m_impl->System.SetApplicationThread(m_impl->Session, XR_ANDROID_THREAD_TYPE_APPLICATION_MAIN_KHR, tid);
+            __android_log_print(ANDROID_LOG_INFO, "BabylonNative", "OpenXR application thread tid=%u result=%d", tid, result);
+        }
+    }
 
     void System::Session::EnableImmersiveAr()
     {
