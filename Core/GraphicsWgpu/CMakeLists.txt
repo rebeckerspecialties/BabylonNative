@@ -57,6 +57,8 @@ babylon_add_rust_static_crate(babylon_graphics_backend
         "${RUST_CRATE_DIR}/src/presentation_retirement.rs"
         "${RUST_CRATE_DIR}/src/upstream_wgpu_native/compute.rs"
         "${BABYLON_RUST_WORKSPACE_DIR}/Polyfills/CanvasWgpu/Rust/src/lib.rs"
+        ${BABYLON_NATIVE_CANVAS_PATCH}
+        ${BABYLON_NATIVE_CANVAS_SHADER_PATCH}
         ${WGPU_NATIVE_RUNTIME_INPUTS}
     CARGO_ARGS ${WGPU_NATIVE_CARGO_ARGS}
     CARGO_ENV ${WGPU_NATIVE_CARGO_ENV}

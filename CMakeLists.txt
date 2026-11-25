@@ -83,10 +83,13 @@ FetchContent_Declare(wgpu_native
     EXCLUDE_FROM_ALL)
 set(BABYLON_NATIVE_CANVAS_REV dde7023118892974f14d4c7dd2c44efba7ccb1d0) # upstream v0.28.0
 set(BABYLON_NATIVE_CANVAS_PATCH "${CMAKE_CURRENT_LIST_DIR}/Patches/femtovg/0002-share-device-pipelines-0.28.patch")
+set(BABYLON_NATIVE_CANVAS_SHADER_PATCH "${CMAKE_CURRENT_LIST_DIR}/Patches/femtovg/0003-isolate-image-filter-pipelines.patch")
 FetchContent_Declare(canvas_femtovg
     GIT_REPOSITORY https://github.com/femtovg/femtovg.git
     GIT_TAG ${BABYLON_NATIVE_CANVAS_REV}
     PATCH_COMMAND ${CMAKE_COMMAND} "-DPATCH_FILE=${BABYLON_NATIVE_CANVAS_PATCH}"
+        -P "${CMAKE_CURRENT_LIST_DIR}/Patches/apply_patch_if_needed.cmake"
+        COMMAND ${CMAKE_COMMAND} "-DPATCH_FILE=${BABYLON_NATIVE_CANVAS_SHADER_PATCH}"
         -P "${CMAKE_CURRENT_LIST_DIR}/Patches/apply_patch_if_needed.cmake"
     EXCLUDE_FROM_ALL)
 # Shader and Vulkan driver corrections at the same wgpu revision as Cargo.toml.
@@ -405,13 +408,15 @@ set(BABYLON_NATIVE_PLUGIN_TESTUTILS ON CACHE BOOL "" FORCE)
 if(BABYLON_NATIVE_WGPU_USE_UPSTREAM_NATIVE)
     FetchContent_MakeAvailable_With_Message(wgpu_native)
     FetchContent_MakeAvailable_With_Message(canvas_femtovg)
-    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${BABYLON_NATIVE_CANVAS_PATCH}")
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${BABYLON_NATIVE_CANVAS_PATCH}" "${BABYLON_NATIVE_CANVAS_SHADER_PATCH}")
     execute_process(COMMAND git rev-parse HEAD WORKING_DIRECTORY "${canvas_femtovg_SOURCE_DIR}"
         OUTPUT_VARIABLE _canvas_rev OUTPUT_STRIP_TRAILING_WHITESPACE COMMAND_ERROR_IS_FATAL ANY)
     if(NOT _canvas_rev STREQUAL BABYLON_NATIVE_CANVAS_REV)
         message(FATAL_ERROR "The canvas source must use femtovg ${BABYLON_NATIVE_CANVAS_REV}.")
     endif()
     execute_process(COMMAND git apply --reverse --check "${BABYLON_NATIVE_CANVAS_PATCH}"
+        WORKING_DIRECTORY "${canvas_femtovg_SOURCE_DIR}" COMMAND_ERROR_IS_FATAL ANY)
+    execute_process(COMMAND git apply --reverse --check "${BABYLON_NATIVE_CANVAS_SHADER_PATCH}"
         WORKING_DIRECTORY "${canvas_femtovg_SOURCE_DIR}" COMMAND_ERROR_IS_FATAL ANY)
     file(STRINGS "${CMAKE_CURRENT_LIST_DIR}/Cargo.toml" _shader_wgpu_dependencies REGEX "^wgpu = ")
     if(NOT _shader_wgpu_dependencies)
