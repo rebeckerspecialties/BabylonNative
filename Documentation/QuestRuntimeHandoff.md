@@ -5,6 +5,15 @@ second graphics device, driver tracing, or camera diagnostics that restart the c
 
 ## Known-good inputs
 
+- **Quest 1 passthrough projection:** check an entire fixed-pose, post-placement
+  side-by-side display recording with `node Apps/scripts/checkQuestPortalEyes.mjs capture.mp4`.
+  The asynchronous baseline lost the complete right doorway in 31/186 frames.
+  A GPU memory barrier still lost 32/361 complete and 20 partial right doorways.
+  Waiting outside the context mutex for the final projection submission had
+  zero complete or partial losses in 1,559 captured frames (22 seconds).
+  The app was rendering only 4–5 new frames/s. Separately test floor lock
+  under translation; compositor frames are not independent app frames.
+
 - For current APKs use the BabylonNative gitlink in [Samples draft #1](https://github.com/rebeckerspecialties/babylonnative-webxr-samples/pull/1); do not substitute the latest checkout. The [earlier clean ARM64 artifact](https://github.com/rebeckerspecialties/babylonnative-webxr-samples/actions/runs/45291729947) predates stereo cube arrays and lazy XR snapshots.
 - Cube: mirror the *entire* source strip before slicing, not just the order or just the face pixels. The six decoded faces match the original transform exactly.
 - Android video: the direct XR media surface played the reference VP8; the old texture path displayed green stripes while the video clock and RGB changed. Read CPU-accessible MediaCodec output images; use plane position/limit, strides, crop and color range. Actual texture samples at 12.5 and 13.5 s matched both source eyes (<0.30/255 mean error, correlation >0.999). Separate final-display markers verified eye routing off/max, including swapped/duplicate controls.
