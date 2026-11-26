@@ -370,6 +370,26 @@ namespace Babylon
                 });
         }
 
+        void NativeXr::Impl::ReleaseJavaScriptReferences()
+        {
+            if (!m_sessionState)
+                return;
+
+            // A queued frame-start task can outlive the JS environment. It may retain
+            // the native session but must not own any N-API references when destroyed.
+            auto& state = *m_sessionState;
+            state.ScheduleFrameCallbacks.ClearPending();
+            state.CreateRenderTexture.Reset();
+            state.DestroyRenderTexture.Reset();
+            state.ActiveViewConfigurations.clear();
+            state.ViewConfigurationStartViewIdx.clear();
+            state.TextureToViewConfigurationMap.clear();
+#if defined(__ANDROID__) && defined(BABYLON_NATIVE_XR_OPENXR)
+            state.AcquiredLayers.clear();
+            state.Warp = {};
+#endif
+        }
+
         arcana::task<void, std::exception_ptr> NativeXr::Impl::EndSessionAsync()
         {
             if (m_sessionEnding || !m_beginTask)

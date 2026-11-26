@@ -126,7 +126,17 @@ namespace Babylon::Embedding
             };
         }
 
+#if BABYLON_NATIVE_PLUGIN_NATIVEXR
+        m_appRuntime.emplace(std::move(appRuntimeOptions), [this] {
+            if (m_nativeXr)
+            {
+                m_nativeXr->ReleaseJavaScriptReferences();
+                m_nativeXr.reset();
+            }
+        });
+#else
         m_appRuntime.emplace(std::move(appRuntimeOptions));
+#endif
 
         // ScriptLoader's dispatcher captures &m_appRuntime, so ~ScriptLoader
         // must run before ~AppRuntime.
@@ -145,9 +155,8 @@ namespace Babylon::Embedding
         //   1. SaveShaderCache: ~ViewImpl already ran ViewImpl::Suspend, so
         //      the engine is quiescent and a host-thread Save is race-free.
         //   2. ~ScriptLoader before ~AppRuntime (dispatcher captures it).
-        //   3. Canvas / NativeInput / NativeXr hold JS-thread-bound state;
-        //      drop them before joining the JS thread.
-        //   4. ~AppRuntime joins the JS thread.
+        //   3. Drop the host handles for Canvas and NativeInput.
+        //   4. ~AppRuntime releases NativeXr references on its own thread and joins it.
         //   5. ShaderCache::Disable balances first-attach Enable.
         //   6. Device + DeviceUpdate last (JS thread referenced them).
         //
@@ -165,10 +174,6 @@ namespace Babylon::Embedding
 
 #if BABYLON_NATIVE_PLUGIN_NATIVEINPUT
         m_input = nullptr;
-#endif
-
-#if BABYLON_NATIVE_PLUGIN_NATIVEXR
-        m_nativeXr.reset();
 #endif
 
         m_appRuntime.reset();

@@ -70,6 +70,7 @@ namespace Babylon
         bool m_delayedTaskSchedulerRegistered{};
         std::thread m_thread;
         std::atomic_bool m_terminationRequested{false};
+        std::function<void()> m_beforeEnvironmentShutdown;
     };
 
 #ifdef __APPLE__
@@ -129,9 +130,15 @@ namespace Babylon
     }
 
     AppRuntime::AppRuntime(Options options)
+        : AppRuntime{std::move(options), {}}
+    {
+    }
+
+    AppRuntime::AppRuntime(Options options, std::function<void()> beforeEnvironmentShutdown)
         : m_options{std::move(options)}
         , m_impl{std::make_unique<Impl>()}
     {
+        m_impl->m_beforeEnvironmentShutdown = std::move(beforeEnvironmentShutdown);
         m_impl->m_thread = std::thread{[this] { RunPlatformTier(); }};
 
         Dispatch([this](Napi::Env env) {
@@ -163,6 +170,10 @@ namespace Babylon
 
         Napi::HandleScope scope{env};
         JsRuntime::Close(m_impl->m_jsRuntimeState);
+        if (auto cleanup = std::move(m_impl->m_beforeEnvironmentShutdown))
+        {
+            cleanup();
+        }
         ShutdownEnvironment(env);
 
         if (m_impl->m_delayedTaskSchedulerRegistered)

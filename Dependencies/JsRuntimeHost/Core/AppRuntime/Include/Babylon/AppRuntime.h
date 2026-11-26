@@ -35,6 +35,9 @@ namespace Babylon
 
         AppRuntime();
         AppRuntime(Options options);
+        // Release host-owned JS references after dispatch has stopped, on the JS thread
+        // while the environment is still attached. The callback must not schedule work.
+        AppRuntime(Options options, std::function<void()> beforeEnvironmentShutdown);
         ~AppRuntime();
 
         // Copy semantics
