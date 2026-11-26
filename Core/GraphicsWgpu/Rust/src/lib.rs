@@ -1867,21 +1867,58 @@ pub extern "C" fn babylon_wgpu_native_prepare_openxr_textures_for_release(
     texture_ids: *const u64,
     count: usize,
 ) -> bool {
+    babylon_wgpu_native_finish_openxr_images(texture_ids, count, false)
+}
+
+#[no_mangle]
+pub extern "C" fn babylon_wgpu_native_finish_openxr_images(
+    texture_ids: *const u64,
+    count: usize,
+    wait_for_completion: bool,
+) -> bool {
     if count == 0 {
         return true;
     }
-    run_with_active_backend(
+    enum Release {
+        Failed,
+        Submitted,
+        Wait(wgpu::Device, wgpu::SubmissionIndex),
+    }
+    let ticket = run_with_active_backend(
         "NativeXR.prepareOpenXRTexturesForRelease",
-        false,
+        Release::Failed,
         |backend| {
             if texture_ids.is_null() {
                 return Err("NativeXR color texture list was null".to_string());
             }
             let ids = unsafe { std::slice::from_raw_parts(texture_ids, count) };
-            backend.prepare_openxr_textures_for_release(ids)?;
-            Ok(true)
+            let submitted = backend.prepare_openxr_textures_for_release(ids)?;
+            Ok(match submitted {
+                Some(index) if wait_for_completion => Release::Wait(backend.release_device(), index),
+                _ => Release::Submitted,
+            })
         },
-    )
+    );
+    match ticket {
+        Release::Failed => false,
+        Release::Submitted => true,
+        Release::Wait(device, index) => {
+            // Polling can run callbacks. Never poll while holding the global active-context mutex.
+            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| device.poll(wgpu::PollType::Wait {
+                submission_index: Some(index), timeout: None,
+            }))) {
+                Ok(Ok(_)) => true,
+                Ok(Err(error)) => {
+                    set_last_error(&format!("Waiting for OpenXR image release: {error}"));
+                    false
+                }
+                Err(payload) => {
+                    set_last_error(&format!("Waiting for OpenXR image release: {}", panic_payload_to_string(payload.as_ref())));
+                    false
+                }
+            }
+        }
+    }
 }
 
 #[no_mangle]
@@ -7234,12 +7271,16 @@ mod upstream_wgpu_native {
             Ok(())
         }
 
+        pub(super) fn release_device(&self) -> wgpu::Device {
+            self.runtime.device.clone()
+        }
+
         pub fn prepare_openxr_textures_for_release(
             &mut self,
             texture_ids: &[u64],
-        ) -> Result<(), String> {
+        ) -> Result<Option<wgpu::SubmissionIndex>, String> {
             if texture_ids.is_empty() {
-                return Ok(());
+                return Ok(None);
             }
             let mut encoder =
                 self.runtime
@@ -7317,14 +7358,15 @@ mod upstream_wgpu_native {
             }
             #[cfg(target_os = "android")]
             self.eye_timer.finish(&self.runtime.device, &self.runtime.queue, &mut encoder);
-            self.runtime.queue.submit(Some(encoder.finish()));
+            let submission: Option<wgpu::SubmissionIndex> = self.runtime.queue.submit(Some(encoder.finish())).into();
+            let submission = submission.ok_or_else(|| "OpenXR image release commands were not submitted".to_owned())?;
             for id in texture_ids {
                 let texture = self.resources.textures.get_mut(id).unwrap();
                 if texture.xr_release == XrReleaseState::FirstUse {
                     texture.xr_release = XrReleaseState::Initialized;
                 }
             }
-            Ok(())
+            Ok(Some(submission))
         }
 
         pub fn queue_write_texture(
@@ -10291,10 +10333,11 @@ mod upstream_wgpu_native {
             let descriptor = r#"{"size":{"width":1,"height":1},"format":"rgba8unorm","usage":19}"#;
             let left = context.create_texture(descriptor).unwrap();
             let right = context.create_texture(descriptor).unwrap();
-            context.prepare_openxr_textures_for_release(&[]).unwrap();
+            assert!(context.prepare_openxr_textures_for_release(&[]).unwrap().is_none());
             assert!(context.prepare_openxr_textures_for_release(&[left, u64::MAX]).is_err());
             assert!(context.resources.textures[&left].xr_release == super::XrReleaseState::FirstUse);
-            context.prepare_openxr_textures_for_release(&[left]).unwrap();
+            let index = context.prepare_openxr_textures_for_release(&[left]).unwrap().expect("nonempty release submission");
+            context.release_device().poll(wgpu::PollType::Wait { submission_index: Some(index), timeout: Some(std::time::Duration::from_secs(5)) }).unwrap();
             assert_eq!(context.read_texture_pixel_rgba(left, 0, 0).unwrap(), [0; 4]);
             for (id, pixel) in [(left, [10, 20, 30, 255]), (right, [30, 20, 10, 255])] {
                 let tex = &context.resources.textures[&id].texture;

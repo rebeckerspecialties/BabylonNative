@@ -155,6 +155,7 @@ namespace Babylon
 #if defined(__ANDROID__) && defined(BABYLON_NATIVE_XR_OPENXR)
                 // Destroy the OpenXR session before returning the window to Vulkan WSI.
                 std::optional<gsl::final_action<void (*)()>> ResumeWindowPresentation;
+                bool WaitForProjectionRelease{};
                 std::map<uint64_t, ViewConfiguration::RenderTarget> AcquiredLayers;
                 ViewConfiguration::RenderTarget Warp;
                 uint32_t WarpViews{};

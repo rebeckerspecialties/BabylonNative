@@ -294,6 +294,7 @@ extern "C"
     bool babylon_wgpu_native_queue_submit(const uint64_t* command_buffer_ids, size_t command_buffer_count);
     bool babylon_wgpu_native_queue_wait_submitted_work();
     bool babylon_wgpu_native_prepare_openxr_textures_for_release(const uint64_t* texture_ids, size_t count);
+    bool babylon_wgpu_native_finish_openxr_images(const uint64_t* texture_ids, size_t count, bool waitForCompletion);
     bool babylon_wgpu_native_queue_write_texture(
         const char* destination_json,
         const uint8_t* data,

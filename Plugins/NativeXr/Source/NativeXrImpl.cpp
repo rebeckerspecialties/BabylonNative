@@ -16,6 +16,10 @@
 #include <cstdlib>
 #include <sstream>
 #include "NativeXrImpl.h"
+#if defined(__ANDROID__) && defined(BABYLON_NATIVE_XR_OPENXR)
+#include <cstring>
+#include <sys/system_properties.h>
+#endif
 
 namespace Babylon
 {
@@ -346,7 +350,14 @@ namespace Babylon
                         .then(m_sessionState->GraphicsContext.AfterRenderScheduler(), arcana::cancellation::none(), [this, thisRef{shared_from_this()}, graphicsBindingLifetime{std::move(graphicsBindingLifetime)}, immersiveAr](std::shared_ptr<xr::System::Session> session) {
                             static_cast<void>(graphicsBindingLifetime);
 #if defined(__ANDROID__) && defined(BABYLON_NATIVE_XR_OPENXR)
-                            if (immersiveAr) session->EnableImmersiveAr();
+                            if (immersiveAr)
+                            {
+                                session->EnableImmersiveAr();
+                                // The original Quest passthrough compositor can display an unfinished right eye.
+                                char product[PROP_VALUE_MAX]{};
+                                __system_property_get("ro.product.device", product);
+                                m_sessionState->WaitForProjectionRelease = std::strcmp(product, "monterey") == 0;
+                            }
 #else
                             static_cast<void>(immersiveAr);
 #endif
@@ -859,7 +870,7 @@ namespace Babylon
 
 #if defined(__ANDROID__) && defined(BABYLON_NATIVE_XR_OPENXR)
             const auto& colorTextures = m_sessionState->FrameColorTextureIds;
-            if (!colorTextures.empty() && !babylon_wgpu_native_prepare_openxr_textures_for_release(colorTextures.data(), colorTextures.size()))
+            if (!colorTextures.empty() && !babylon_wgpu_native_finish_openxr_images(colorTextures.data(), colorTextures.size(), m_sessionState->WaitForProjectionRelease))
             {
                 throw std::runtime_error{"NativeXR failed to prepare its WebGPU color textures for OpenXR release: " + GetLastWgpuError()};
             }
