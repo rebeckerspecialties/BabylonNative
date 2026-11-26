@@ -89,5 +89,10 @@ namespace Babylon
         {
             m_impl->SetSessionStateChangedCallback(std::move(callback));
         }
+
+        void NativeXr::ReleaseJavaScriptReferences()
+        {
+            m_impl->ReleaseJavaScriptReferences();
+        }
     }
 }

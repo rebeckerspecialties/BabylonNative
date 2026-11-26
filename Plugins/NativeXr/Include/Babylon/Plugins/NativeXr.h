@@ -25,6 +25,8 @@ namespace Babylon::Plugins
 
         void UpdateWindow(void* windowPtr);
         void SetSessionStateChangedCallback(std::function<void(bool)> callback);
+        // Called on the JS thread after the host has stopped driving graphics frames.
+        void ReleaseJavaScriptReferences();
 
     private:
         NativeXr(std::shared_ptr<Impl> impl);
