@@ -7193,27 +7193,28 @@ mod upstream_wgpu_native {
                     return Err(format!("GPUCommandBuffer {id} is invalid or submitted more than once"));
                 }
             }
-            let mut buffers = Vec::with_capacity(command_buffer_ids.len() + 1);
             let encoded_pending_writes = !self.pending_buffer_writes.is_empty();
-            if encoded_pending_writes {
+            let uploads = encoded_pending_writes.then(|| {
                 let mut uploads = self.runtime.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                     label: Some("babylon-native-webgpu.web-command-uploads"),
                 });
                 self.encode_pending_buffer_writes(&mut uploads);
                 self.staging_belt.finish();
-                buffers.push(uploads.finish());
-            }
+                uploads.finish()
+            });
             #[cfg(target_os = "android")]
             let mut next_warp = self.warp_writes;
-            for id in command_buffer_ids {
+            // submit drains the iterator synchronously. The queue retains the GPU
+            // resources; the bridge needs no intermediate command-buffer array.
+            let commands = command_buffer_ids.iter().map(|id| {
                 let command = self.resources.command_buffers.remove(id).unwrap();
                 #[cfg(target_os = "android")]
                 if let (Some(frame), Some(writes)) = (&mut next_warp, command.warp) {
                     frame.submit(&writes);
                 }
-                buffers.push(command.buffer);
-            }
-            self.runtime.queue.submit(buffers);
+                command.buffer
+            });
+            self.runtime.queue.submit(uploads.into_iter().chain(commands));
             #[cfg(target_os = "android")]
             { self.warp_writes = next_warp; }
             self.presentation_damage.invalidate();
@@ -10254,6 +10255,33 @@ mod upstream_wgpu_native {
     #[cfg(test)]
     mod tests {
         use super::map_texture_format;
+
+        #[test]
+        #[ignore = "requires a native GPU adapter; run explicitly on device"]
+        fn queue_submit_orders_upload_before_multiple_commands_and_consumes_each_once() {
+            let mut context = super::InteropBackendContext::create(super::LocalBootstrapConfig {
+                width: 16, height: 16, surface_layer: std::ptr::null_mut(), prefer_low_power: false, hdr10: false,
+            }).unwrap();
+            let usage = (wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST).bits();
+            let source = context.create_buffer(4, usage, false).unwrap();
+            let readback_usage = (wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST).bits();
+            let result = context.create_buffer(8, readback_usage, false).unwrap();
+            let first = context.create_command_encoder().unwrap();
+            context.command_encoder_copy_buffer_to_buffer(first, source, 0, result, 0, 4).unwrap();
+            let first = context.command_encoder_finish(first).unwrap();
+            let second = context.create_command_encoder().unwrap();
+            context.command_encoder_clear_buffer(second, source, 0, 4).unwrap();
+            context.command_encoder_copy_buffer_to_buffer(second, source, 0, result, 4, 4).unwrap();
+            let second = context.command_encoder_finish(second).unwrap();
+            context.write_buffer(source, 0, &[1, 2, 3, 4]).unwrap();
+            context.queue_submit(&[first, second]).unwrap();
+            for id in [first, second] {
+                assert!(context.queue_submit(&[id]).is_err());
+            }
+            let mut actual = [0xff; 8];
+            context.read_buffer(result, 0, &mut actual).unwrap();
+            assert_eq!(actual, [1, 2, 3, 4, 0, 0, 0, 0]);
+        }
 
         #[test]
         #[ignore = "requires a native GPU adapter; run explicitly on device"]
