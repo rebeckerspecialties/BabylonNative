@@ -97,6 +97,11 @@ prototype. Its scheduling predates the maintained runtime's post-GC task;
 do not cherry-pick the old polling loop. Measure finalizer producers and
 validate teardown on `Dependencies/JsRuntimeHost` before changing scheduling.
 
+Use the [maintained finalizer probe](https://github.com/rebeckerspecialties/BabylonNative/pull/37)
+for post-GC timing and the [allocation comparison](https://github.com/rebeckerspecialties/BabylonNative/pull/39)
+for producer counts. The [XR teardown test](https://github.com/rebeckerspecialties/BabylonNative/pull/43)
+checks owner-thread release before environment shutdown; timing alone does not test teardown.
+
 | Fork PR | Scope | Next implementation check | Next device check |
 |---|---|---|---|
 | [JsRuntimeHost #4](https://github.com/rebeckerspecialties/JsRuntimeHost/pull/4) | Historical v7 port. The maintained monorepo adapter is upstream BabylonNative #2100; do not reapply this tree wholesale. | Diff detach and pinned-pointer behavior against #2100 rather than rebasing an archived runtime. | Run the Quest Node Lite typed-array fixture and run the pinned-byte-pointer case separately on iOS system JSC. |
