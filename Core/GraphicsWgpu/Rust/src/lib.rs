@@ -9,6 +9,7 @@
 extern crate wgpu_native;
 
 mod error_bridge;
+mod pipeline_breadcrumb;
 mod pipeline_compiler;
 mod presentation_damage;
 #[cfg(target_os = "android")]
@@ -5211,6 +5212,7 @@ mod upstream_wgpu_native {
             if profile_pipeline_markers_enabled() {
                 eprintln!("NativeWebGPU shader-profile: id={id} code={}", serde_json::to_string(code).unwrap());
             }
+            crate::pipeline_breadcrumb::shader(id, code);
             Ok(id)
         }
 
@@ -5397,6 +5399,7 @@ mod upstream_wgpu_native {
 
         fn prepare_render_pipeline(&self, descriptor_json: &str) -> Result<PipelineBuild, String> {
             let descriptor = parse_json(descriptor_json)?;
+            let breadcrumb = crate::pipeline_breadcrumb::enabled().then(|| descriptor_json.to_owned());
             let multiview_mask = xr_view_mask(&descriptor, &self.runtime.device)?;
             let layout = descriptor.get("layout").and_then(native_id).and_then(|id| {
                 self.resources
@@ -5572,7 +5575,7 @@ mod upstream_wgpu_native {
                     ),
                     report,
                     || {
-                        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                        let descriptor = wgpu::RenderPipelineDescriptor {
                             label: label.as_deref(),
                             layout: layout.as_ref(),
                             vertex: wgpu::VertexState {
@@ -5587,7 +5590,8 @@ mod upstream_wgpu_native {
                             fragment,
                             multiview_mask,
                             cache: None,
-                        })
+                        };
+                        crate::pipeline_breadcrumb::compile(breadcrumb.as_deref(), || device.create_render_pipeline(&descriptor))
                     },
                 )?;
 
