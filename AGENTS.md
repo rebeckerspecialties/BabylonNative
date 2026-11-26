@@ -1,5 +1,12 @@
 # BabylonNative wgpu Branch Notes
 
+Android frame-owner experiment: start Playground with `--ez xrFrameThread true` and
+`--es args app:///Scripts/native_xr_wgpu_smoke.js`; omit the boolean for the
+ordinary pre-armed callback. Check for a focused stereo submission in the same PID
+and the dedicated-owner TID before comparing VrApi FPS and stale counts. Keep the
+switch off by default: two matched 25-second Quest 1 windows per mode averaged
+71.66/71.64 fps (pre-armed/dedicated), with 26 stale counts in each pair.
+
 For physical Quest acceptance, use the [runtime handoff](Documentation/QuestRuntimeHandoff.md):
 verify both eyes and education playback separately from timed layer runs. Importing
 a decoder buffer is not a sampling test. Keep hosted simulator screenshots opt-in.

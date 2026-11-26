@@ -35,6 +35,7 @@ public class PlaygroundActivity extends Activity {
 
     private long mRuntimeHandle = 0;
     private BabylonView mView;
+    private OpenXrFrameView mFrameThreadView;
 
     @Override
     protected void onCreate(Bundle icicle) {
@@ -86,7 +87,11 @@ public class PlaygroundActivity extends Activity {
             BabylonNative.runtimeLoadScript(mRuntimeHandle, "app:///Scripts/playground_runner.js");
         }
 
-        mView = new BabylonView(getApplication(), mRuntimeHandle);
+        if (getIntent().getBooleanExtra("xrFrameThread", false)) {
+            mFrameThreadView = new OpenXrFrameView(this, mRuntimeHandle);
+        } else {
+            mView = new BabylonView(getApplication(), mRuntimeHandle);
+        }
 
         // Optional fixed render size in CSS pixels (e.g. --ei width 600
         // --ei height 400 for validation tests), applied before the surface
@@ -97,7 +102,7 @@ public class PlaygroundActivity extends Activity {
             applySurfaceSize(width, height);
         }
 
-        setContentView(mView);
+        setContentView(mFrameThreadView != null ? mFrameThreadView : mView);
     }
 
     private boolean hasAsset(String path) {
@@ -116,7 +121,8 @@ public class PlaygroundActivity extends Activity {
     private void applySurfaceSize(int width, int height) {
         // Same device pixel ratio as the native Device (densityDpi / 160).
         float dpr = getResources().getConfiguration().densityDpi / 160.0f;
-        mView.setSurfaceSize(Math.round(width * dpr), Math.round(height * dpr));
+        if (mFrameThreadView != null) mFrameThreadView.getHolder().setFixedSize(Math.round(width * dpr), Math.round(height * dpr));
+        else mView.setSurfaceSize(Math.round(width * dpr), Math.round(height * dpr));
     }
 
     /**
@@ -181,14 +187,16 @@ public class PlaygroundActivity extends Activity {
         // Process-wide: every Runtime auto-suspends (each subscribed in
         // runtimeCreate); cross-cutting subsystems (NativeCamera,
         // NativeXr) also hook this via AndroidExtensions::Globals.
-        BabylonNative.pause();
+        if (mFrameThreadView != null) mFrameThreadView.pauseRuntime();
+        else BabylonNative.pause();
         super.onPause();
     }
 
     @Override
     protected void onResume() {
         super.onResume();
-        BabylonNative.resume();
+        if (mFrameThreadView != null) mFrameThreadView.resumeRuntime();
+        else BabylonNative.resume();
     }
 
     @Override
@@ -196,7 +204,8 @@ public class PlaygroundActivity extends Activity {
         // Surface lifecycle (view detach) has already fired; just
         // release the Runtime.
         if (mRuntimeHandle != 0) {
-            BabylonNative.runtimeDestroy(mRuntimeHandle);
+            if (mFrameThreadView != null) mFrameThreadView.destroyRuntime();
+            else BabylonNative.runtimeDestroy(mRuntimeHandle);
             mRuntimeHandle = 0;
         }
         super.onDestroy();
