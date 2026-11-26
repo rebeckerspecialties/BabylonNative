@@ -439,6 +439,7 @@ namespace Babylon
             session.Set("environmentBlendMode", immersiveAr ? "alpha-blend" : "opaque");
 #if defined(__ANDROID__) && defined(BABYLON_NATIVE_XR_OPENXR)
             session.Set("interactionMode", "world-space");
+            if (immersiveAr) m_localFloorHeight = std::make_shared<float>(-1.6f);
 #else
             session.Set("interactionMode", immersiveAr ? "screen-space" : "world-space");
 #endif
@@ -620,7 +621,7 @@ namespace Babylon
 
         Napi::Value XRSession::RequestReferenceSpace(const Napi::CallbackInfo& info)
         {
-            return XRReferenceSpace::Request(info, m_enabledFeatures);
+            return XRReferenceSpace::Request(info, m_enabledFeatures, m_localFloorHeight);
         }
 
 #if defined(__ANDROID__) && defined(BABYLON_NATIVE_XR_OPENXR)
@@ -978,6 +979,8 @@ namespace Babylon
                 if (m_renderStateFrame.lock() != frame)
                 {
                     m_renderStateFrame = frame;
+                    if (m_localFloorHeight && frame->LocalFloorHeight)
+                        *m_localFloorHeight = *frame->LocalFloorHeight;
                     const auto displayTime = frame->PredictedDisplayTime.value_or(std::chrono::steady_clock::now());
                     m_frameMilliseconds = m_originMilliseconds + std::chrono::duration<double, std::milli>(displayTime - m_clockOrigin).count();
                     if (!m_pendingRenderState.IsEmpty())

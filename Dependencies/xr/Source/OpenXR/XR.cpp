@@ -867,6 +867,7 @@ namespace xr
                 xrDestroySpace(AppSpace);
             }
             if (HeadSpace != XR_NULL_HANDLE) xrDestroySpace(HeadSpace);
+            if (FloorSpace != XR_NULL_HANDLE) xrDestroySpace(FloorSpace);
             if (Session != XR_NULL_HANDLE)
             {
                 xrDestroySession(Session);
@@ -1058,6 +1059,13 @@ namespace xr
             CheckXr(xrLocateSpace(HeadSpace,AppSpace,FrameState.predictedDisplayTime,&head),"locate viewer reference space");
             constexpr auto valid = XR_SPACE_LOCATION_POSITION_VALID_BIT | XR_SPACE_LOCATION_ORIENTATION_VALID_BIT;
             if ((head.locationFlags & valid) == valid) HeadPose = Space{ToPose(head.pose)};
+            if (FloorSpace != XR_NULL_HANDLE)
+            {
+                auto floor = MakeXr<XrSpaceLocation>(XR_TYPE_SPACE_LOCATION);
+                CheckXr(xrLocateSpace(FloorSpace, AppSpace, FrameState.predictedDisplayTime, &floor), "locate stage floor");
+                if (floor.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT)
+                    LocalFloorHeight = floor.pose.position.y;
+            }
             const double projectionScale = ProjectionScale.load();
             for (uint32_t viewIndex = 0; viewIndex < locatedViewCount; ++viewIndex)
             {
@@ -1212,6 +1220,8 @@ namespace xr
         XrSession Session{XR_NULL_HANDLE};
         XrSpace AppSpace{XR_NULL_HANDLE};
         XrSpace HeadSpace{XR_NULL_HANDLE};
+        XrSpace FloorSpace{XR_NULL_HANDLE};
+        std::optional<float> LocalFloorHeight;
         std::optional<Space> HeadPose;
         XrSessionState SessionState{XR_SESSION_STATE_UNKNOWN};
         XrFrameState FrameState{MakeXr<XrFrameState>(XR_TYPE_FRAME_STATE)};
@@ -1408,6 +1418,12 @@ namespace xr
         {
             throw std::system_error{std::make_error_code(std::errc::not_supported), "OpenXR immersive AR is unavailable"};
         }
+        // LOCAL_FLOOR keeps LOCAL's axes and horizontal origin; only STAGE's height is used.
+        auto info = MakeXr<XrReferenceSpaceCreateInfo>(XR_TYPE_REFERENCE_SPACE_CREATE_INFO);
+        info.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_STAGE;
+        info.poseInReferenceSpace.orientation.w = 1.f;
+        const auto result = xrCreateReferenceSpace(m_impl->Session, &info, &m_impl->FloorSpace);
+        if (result != XR_ERROR_REFERENCE_SPACE_UNSUPPORTED) CheckXr(result, "create optional stage floor");
         __android_log_print(ANDROID_LOG_INFO, "BabylonNative", "OpenXR immersive AR: %s",
             m_impl->AlphaBlend ? "environment alpha blend" : "compositor reconstruction layer");
     }
@@ -1518,6 +1534,7 @@ namespace xr
     System::Session::Frame::Frame(Session::Impl& sessionImpl)
         : Views{sessionImpl.ActiveFrameViews}
         , ViewerSpace{sessionImpl.HeadPose}
+        , LocalFloorHeight{sessionImpl.LocalFloorHeight}
         , InputSources{sessionImpl.InputSources}
         , FeaturePointCloud{sessionImpl.FeaturePointCloud}
         , EyeTrackerSpace{sessionImpl.EyeTrackerSpace}

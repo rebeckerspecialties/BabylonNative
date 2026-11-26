@@ -32,7 +32,8 @@
               android:configChanges="orientation|keyboardHidden|screenSize">
       <intent-filter>
         <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
+        <category android:name="android.intent.category.LAUNCHER" />
+        <category android:name="com.oculus.intent.category.VR" />
       </intent-filter>
       <intent-filter >
         <action android:name="android.intent.action.VIEW" />
@@ -54,8 +55,9 @@
   </application>
   <uses-feature
       android:name="android.software.xr.api.openxr"
-      android:version="0x00010001"
+      android:version="0x00010000"
       android:required="true" />
+  <uses-feature android:name="com.oculus.feature.PASSTHROUGH" android:required="false" />
   <uses-feature android:glEsVersion="0x00030000" android:required="true" />
   <uses-permission android:name="org.khronos.openxr.permission.OPENXR" />
   <uses-permission android:name="org.khronos.openxr.permission.OPENXR_SYSTEM" />

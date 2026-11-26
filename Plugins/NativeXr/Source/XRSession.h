@@ -103,6 +103,7 @@ namespace Babylon
 #endif
             bool m_warpEnabled{};
             std::vector<std::string> m_enabledFeatures{};
+            std::shared_ptr<float> m_localFloorHeight;
 
             std::vector<std::pair<std::string, Napi::FunctionReference>> m_eventNamesAndCallbacks{};
 
