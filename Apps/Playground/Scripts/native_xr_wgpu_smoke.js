@@ -136,12 +136,15 @@ globalThis.__babylonUseWebGPU = true;
                 disableTeleportation: true
             }).then(function (xr) {
                 reportStatus("native-xr-smoke:xr-created");
+                if (engine.isWebGPU) {
+                    xr.baseExperience.featuresManager.enableFeature(BABYLON.WebXRLayers.Name, "latest");
+                }
 
                 xr.baseExperience.onStateChangedObservable.add(function (state) {
                     reportStatus("native-xr-smoke:xr-state=" + String(state));
                 });
 
-                return xr.baseExperience.enterXRAsync("immersive-ar", "unbounded", xr.renderTarget, {
+                return xr.baseExperience.enterXRAsync("immersive-ar", "local", xr.renderTarget, {
                     optionalFeatures: ["hit-test"]
                 });
             }).then(function () {
