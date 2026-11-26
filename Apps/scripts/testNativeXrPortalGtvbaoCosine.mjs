@@ -178,7 +178,10 @@ test("half precision, the default, evaluates the same slab and slice distributio
     assert.equal(processor.finalizeShaders("v", shader).fragmentCode, "enable f16;\n" + shader);
     assert.equal(processor.finalizeShaders("v", "enable f16;\n" + shader).fragmentCode, "enable f16;\n" + shader);
     assert.deepEqual(processor.finalizeShaders("v", "fn main() {}"), { vertexCode: "v", fragmentCode: "fn main() {}" });
-    assert.throws(() => c.__nativePlaygroundConfigureEngine({ enabledExtensions: [], _getShaderProcessor: () => processor }), /requires shader-f16/);
+    const explicit = context();
+    explicit.__nativeArPortalAoPrecision = "half";
+    vm.runInContext(source, explicit);
+    assert.throws(() => explicit.__nativePlaygroundConfigureEngine({ enabledExtensions: [] }), /requires shader-f16/);
     const unknown = context();
     unknown.__nativeArPortalAoPrecision = "quarter";
     assert.throws(() => vm.runInContext(source, unknown), /Unknown portal AO precision: quarter/);
@@ -189,6 +192,8 @@ test("half precision, the default, evaluates the same slab and slice distributio
     vm.runInContext(source, plain);
     assert.doesNotMatch(plain.BABYLON.ShaderStore.ShadersStoreWGSL.ssao2PixelShader, /vec3h|f16|portalSliceCdfHalf/);
     assert.equal(plain.__nativePlaygroundRequiredFeatures, undefined);
+    c.__nativePlaygroundConfigureEngine({ enabledExtensions: [] });
+    assert.equal(c.BABYLON.ShaderStore.ShadersStoreWGSL.ssao2PixelShader, plain.BABYLON.ShaderStore.ShadersStoreWGSL.ssao2PixelShader);
 });
 
 test("the bilinear switch keeps the published AO read and adds only the cutout visibility", () => {
@@ -341,13 +346,49 @@ test("setup rejects cameras and pipelines it cannot reshape", () => {
     c.__nativeArPortalStartProfile(scene({ activeCamera: { mode: B.Camera.ORTHOGRAPHIC_CAMERA } }), () => {});
     assert.throws(() => observers.pop()(), /perspective camera/);
     c.__nativeArPortalStartProfile(scene({}), () => {});
-    assert.throws(() => observers.pop()(), /unallocated pre-pass SSAO2 pipeline/);
+    assert.throws(() => observers.pop()(), /unallocated SSAO2 pipeline/);
     const pass = (allocated) => ({ _textures: { length: allocated ? 1 : 0 }, _options: 0.3 });
     c.__nativeArPortalStartProfile(scene({ postProcessRenderPipelineManager: { supportedPipelines: [{
         name: "native-xr-portal-ssao2", _prePassRenderer: {}, _ssaoPostProcess: pass(false),
         _blurHPostProcess: pass(false), _blurVPostProcess: pass(true), _ssaoCombinePostProcess: pass(false) }] } }), () => {});
-    assert.throws(() => observers.pop()(), /unallocated pre-pass SSAO2 pipeline/);
+    assert.throws(() => observers.pop()(), /unallocated SSAO2 pipeline/);
 });
+
+for (const separateGeometry of [true, false]) {
+    test("each eye binds current geometry and projection; separate geometry=" + separateGeometry, () => {
+        const c = install();
+        Object.assign(c.BABYLON, { GeometryBufferRenderer: B.GeometryBufferRenderer, Matrix: B.Matrix, PostProcess: class {} });
+        const pass = () => ({ _textures: [], _options: 0.5, onApplyObservable: new B.Observable() });
+        const ao = pass(), h = pass(), v = pass(), combine = pass();
+        const left = B.Matrix.Identity(), right = B.Matrix.Identity();
+        left.m[8] = -0.05;
+        right.m[8] = 0.05;
+        let eye = 0, installed;
+        const camera = { mode: B.Camera.PERSPECTIVE_CAMERA, _postProcesses: [ao, h, v, combine],
+            attachPostProcess: p => { installed = p; } };
+        const target = () => ({ textures: eye ? ["R-normal", "R-depth"] : ["L-depth", "L-normal"] });
+        const index = (isDepth) => isDepth ? eye : 1 - eye;
+        const renderer = separateGeometry ?
+            { getGBuffer: target, getTextureIndex: type => index(type === B.GeometryBufferRenderer.DEPTH_TEXTURE_TYPE) } :
+            { getRenderTarget: target, getIndex: type => index(type === B.Constants.PREPASS_DEPTH_TEXTURE_TYPE) };
+        const pipeline = { name: "native-xr-portal-ssao2", _ssaoPostProcess: ao, _blurHPostProcess: h, _blurVPostProcess: v,
+            _ssaoCombinePostProcess: combine, [separateGeometry ? "_geometryBufferRenderer" : "_prePassRenderer"]: renderer };
+        const scene = { activeCamera: camera, materials: [], getEngine: () => ({}),
+            postProcessRenderPipelineManager: { supportedPipelines: [pipeline] }, onBeforeRenderObservable: { addOnce: cb => cb() }, onDisposeObservable: new B.Observable() };
+        c.__nativeArPortalStartProfile(scene, () => {});
+        for (eye of [0, 1, 0]) {
+            scene.activeCamera = { getProjectionMatrix: () => eye ? right : left };
+            const bound = {};
+            installed.onApply({ setTexture: (k, value) => { bound[k] = value; }, setMatrix: (k, value) => { bound[k] = value; }, setFloat() {}, setMatrix3x3() {} });
+            assert.deepEqual(bound, { depthSampler: eye ? "R-depth" : "L-depth", normalSampler: eye ? "R-normal" : "L-normal", projection: eye ? right : left });
+        }
+        if (separateGeometry) {
+            scene.activeCamera = camera;
+            renderer.normalsAreUnsigned = true;
+            assert.throws(() => c.__nativeArPortalStartProfile(scene, () => {}), /signed geometry-buffer normals/);
+        }
+    });
+}
 
 for (const retainColorCopy of [true, false]) {
     test("geometry feeds AO without replacing scene color; color copy=" + retainColorCopy, () => {
