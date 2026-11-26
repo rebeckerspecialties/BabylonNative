@@ -5,6 +5,16 @@ second graphics device, driver tracing, or camera diagnostics that restart the c
 
 ## Known-good inputs
 
+- To make the Playground icon launch Hill Valley, build Android Release with
+  `"-PplaygroundDefaultArgs=$(sh Apps/scripts/runPortalAr.sh print:quest1)"`.
+  Explicit intent arguments still win. Test the icon with a normal MAIN launch:
+  the adb script alone does not test which scene the icon opens.
+- Never overlap immersive qualification with standalone GPU CTS jobs. During a
+  Quest lockup the previous kernel log showed a `cts_runner` with OOM score
+  adjustment -1000 invoking the OOM killer; Home and Samples were both killed.
+  Use a normal Android bug report's LAST KMSG after a reboot; distinguish faults
+  logged during shutdown from the event that stopped tracking.
+
 - For current APKs use the BabylonNative gitlink in [Samples draft #1](https://github.com/rebeckerspecialties/babylonnative-webxr-samples/pull/1); do not substitute the latest checkout. The [earlier clean ARM64 artifact](https://github.com/rebeckerspecialties/babylonnative-webxr-samples/actions/runs/45291729947) predates stereo cube arrays and lazy XR snapshots.
 - Cube: mirror the *entire* source strip before slicing, not just the order or just the face pixels. The six decoded faces match the original transform exactly.
 - Android video: the direct XR media surface played the reference VP8; the old texture path displayed green stripes while the video clock and RGB changed. Read CPU-accessible MediaCodec output images; use plane position/limit, strides, crop and color range. Actual texture samples at 12.5 and 13.5 s matched both source eyes (<0.30/255 mean error, correlation >0.999). Separate final-display markers verified eye routing off/max, including swapped/duplicate controls.

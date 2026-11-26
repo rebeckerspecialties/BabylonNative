@@ -51,7 +51,8 @@ public class PlaygroundActivity extends Activity {
         //     --es args "'app:///Scripts/validation_native.js --test \"Directional light\"'"
         // Parsed before the Runtime is created so options such as --headless and
         // --debug-trace apply to it, as on the desktop hosts.
-        if (parseCommandLine(splitArguments(getIntent().getStringExtra("args"))) >= 0) {
+        String arguments = getIntent().hasExtra("args") ? getIntent().getStringExtra("args") : BuildConfig.DEFAULT_PLAYGROUND_ARGS;
+        if (parseCommandLine(splitArguments(arguments)) >= 0) {
             finish();
             return;
         }
@@ -65,7 +66,7 @@ public class PlaygroundActivity extends Activity {
         // A staged Factotum bundle is self-contained and opts into the
         // lightweight DOM/WebGPU host. Without it, retain the normal
         // Babylon.js smoke-scene behavior.
-        if (hasAsset("Scripts/factotum_native_bootstrap.js")) {
+        if (!getIntent().hasExtra("args") && BuildConfig.DEFAULT_PLAYGROUND_ARGS.isEmpty() && hasAsset("Scripts/factotum_native_bootstrap.js")) {
             BabylonNative.runtimeLoadScript(
                     mRuntimeHandle, "app:///Scripts/babylon_lite_bootstrap.js");
             BabylonNative.runtimeLoadScript(

@@ -27,4 +27,7 @@ test("the launch preset is explicit, and only first-generation Quest defaults to
     }
     assert.match(run("monterey", "adb:test", "ssao2").stdout, /native_xr_portal_profile_prepass/);
     assert.equal(run("monterey", "adb:test", "invalid").status, 2);
+    const baked = run("unused", "print:quest1");
+    assert.equal(baked.status, 0);
+    assert.ok(run("monterey", "adb:test").stdout.includes("'" + baked.stdout.trim() + "'"));
 });

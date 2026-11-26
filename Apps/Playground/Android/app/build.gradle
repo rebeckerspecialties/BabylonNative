@@ -32,9 +32,11 @@ def sanitizerAbiToArch = [
 
 android {
     compileSdk = 34
+    buildFeatures { buildConfig = true }
 
     defaultConfig {
         applicationId "com.android.babylonnative.playground"
+        buildConfigField "String", "DEFAULT_PLAYGROUND_ARGS", groovy.json.JsonOutput.toJson(providers.gradleProperty("playgroundDefaultArgs").getOrElse(""))
         minSdkVersion "${platformVersion}"
         targetSdkVersion 29
         ndkVersion "28.2.13676358"
@@ -249,6 +251,11 @@ tasks.register('copyFiles') {
             include '*.png'
             include '*.jpg'
             include '*.ktx2'
+            into 'src/main/assets/Scripts'
+        }
+        copy {
+            // Match the app:///Scripts/ resource URLs used by the other Playground hosts.
+            from '../../Scripts/native_xr_portal_assets'
             into 'src/main/assets/Scripts'
         }
         copy {
