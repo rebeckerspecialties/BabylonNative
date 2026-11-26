@@ -412,6 +412,7 @@ namespace xr
                 
                 std::vector<View>& Views;
                 std::optional<Space> ViewerSpace;
+                std::optional<float> LocalFloorHeight;
                 std::optional<std::chrono::steady_clock::time_point> PredictedDisplayTime;
                 std::vector<InputSource>& InputSources;
                 std::vector<FeaturePoint>& FeaturePointCloud;

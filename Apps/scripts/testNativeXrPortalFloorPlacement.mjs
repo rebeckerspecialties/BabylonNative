@@ -11,6 +11,36 @@ const context = vm.createContext({ BABYLON });
 vm.runInContext(source, context);
 const findFloor = context.findNativeArPortalFloorForPosition;
 const point = (x, y, z) => new BABYLON.Vector3(x, y, z);
+const pose = (matrix) => ({ transform: { matrix: matrix.asArray() } });
+const downwardAim = pose(BABYLON.Matrix.RotationX(-Math.PI / 4).multiply(BABYLON.Matrix.Translation(0, 1, 0)));
+
+test("controller selection uses the reference floor, not a head or eye position", () => {
+    const floor = pose(BABYLON.Matrix.Translation(3, -1.5, 4));
+    for (const rightHanded of [true, false]) {
+        const hit = context.portalReferenceFloorPoint(downwardAim, floor, rightHanded);
+        assert.ok(hit.equalsWithEpsilon(point(3, -1.5, rightHanded ? 3 : -3), 1e-5));
+    }
+});
+
+test("missing, emulated, parallel, upward and excessively distant rays do not place", () => {
+    const floor = pose(BABYLON.Matrix.Identity());
+    for (const aim of [null, { ...downwardAim, emulatedPosition: true }, floor,
+        pose(BABYLON.Matrix.RotationX(0.6).multiply(BABYLON.Matrix.Translation(0, 1, 0))),
+        pose(BABYLON.Matrix.RotationX(-0.01).multiply(BABYLON.Matrix.Translation(0, 1, 0)))]) {
+        assert.equal(context.portalReferenceFloorPoint(aim, floor, true), null);
+    }
+    assert.equal(context.portalReferenceFloorPoint(downwardAim, null, true), null);
+});
+
+test("floor placement survives a native adapter that reuses its pose for both lookups", () => {
+    const reused = { transform: { matrix: new Float32Array(16) } };
+    const frame = { getPose(source) {
+        reused.transform.matrix.set(source === "floor" ? BABYLON.Matrix.Translation(2, -1.5, 4).asArray() : downwardAim.transform.matrix);
+        return reused;
+    } };
+    const hit = context.portalTrackedFloorPoint(frame, "aim", "floor", "local", true, { transform: { matrix: new Float32Array(16) } });
+    assert.ok(hit.equalsWithEpsilon(point(2, -1.5, 3), 1e-5));
+});
 const plane = (points = [[-1, -1], [1, -1], [1, 1], [-1, 1]], transform = BABYLON.Matrix.Identity()) => ({
     polygonDefinition: points.map(([x, z]) => point(x, 0, z)),
     transformationMatrix: transform,

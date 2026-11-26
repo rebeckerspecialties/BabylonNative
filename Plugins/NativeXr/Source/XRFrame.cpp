@@ -196,7 +196,7 @@ namespace Babylon
             }
             auto* referenceSpace = XRReferenceSpace::Unwrap(space);
             std::optional<xr::Pose> inverse;
-            if (referenceSpace && (referenceSpace->GetTransform() || referenceSpace->IsViewer()))
+            if (referenceSpace && (referenceSpace->HasOffset() || referenceSpace->IsViewer()))
                 inverse = InvertPose(referenceSpace->OriginInNativeFrame(ViewerOrigin()));
             m_jsXRViewerPose = Napi::Persistent(XRViewerPose::New(info));
             m_viewerPoseSpace = Napi::Persistent(space);
@@ -277,6 +277,17 @@ namespace Babylon
         Napi::Value XRFrame::GetPoseData(const Napi::CallbackInfo& info)
         {
             auto* referenceSpace = XRReferenceSpace::Unwrap(info[1].As<Napi::Object>());
+            if (!info[0].IsExternal())
+            {
+                if (!m_poseAccess || !m_frame) return Napi::Boolean::New(info.Env(), false);
+                const auto space = LocateSpace(info[0]);
+                if (!space || !referenceSpace) return Napi::Boolean::New(info.Env(), false);
+                const auto pose = ComposePoses(InvertPose(referenceSpace->OriginInNativeFrame(ViewerOrigin())), *space);
+                auto vectors = info[2].As<Napi::ArrayBuffer>();
+                auto matrix = info[3].As<Napi::ArrayBuffer>();
+                m_transform.Update(xr::Space{pose}, vectors, matrix, false);
+                return Napi::Boolean::New(info.Env(), true);
+            }
             const auto* address = info[0].As<Napi::External<xr::Space>>().Data();
             if (!m_frame || std::any_of(m_frame->InputSources.begin(), m_frame->InputSources.end(),
                 [address](const auto& source) { return source.HasUnavailableControllerPose(address); }))

@@ -2,6 +2,7 @@
 
 #include <stdexcept>
 #include <algorithm>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -42,7 +43,7 @@ namespace Babylon
             return env.Global().Get(JS_CLASS_NAME).As<Napi::Function>().New({type});
         }
 
-        static Napi::Promise Request(const Napi::CallbackInfo& info, const std::vector<std::string>& enabledFeatures)
+        static Napi::Promise Request(const Napi::CallbackInfo& info, const std::vector<std::string>& enabledFeatures, const std::shared_ptr<float>& localFloorHeight = {})
         {
             auto deferred = Napi::Promise::Deferred::New(info.Env());
             try
@@ -71,7 +72,14 @@ namespace Babylon
                 }
                 else
                 {
-                    deferred.Resolve(XRReferenceSpace::FromType(info.Env(), typeValue));
+                    auto space = XRReferenceSpace::FromType(info.Env(), typeValue);
+                    if (type == XRReferenceSpaceType::LOCAL_FLOOR && localFloorHeight)
+                    {
+                        auto* reference = Unwrap(space);
+                        reference->m_jsTransform.Reset();
+                        reference->m_floorHeight = localFloorHeight;
+                    }
+                    deferred.Resolve(space);
                 }
             }
             catch (const Napi::Error& error)
@@ -119,6 +127,7 @@ namespace Babylon
         }
 
         bool IsViewer() const { return m_viewer; }
+        bool HasOffset() { return m_floorHeight || GetTransform(); }
 
         xr::Pose OriginInNativeFrame(const xr::Pose& viewer)
         {
@@ -134,13 +143,17 @@ namespace Babylon
         xr::Pose GetPoseInReferenceSpace(const xr::Pose& nativePose)
         {
             auto* transform = GetTransform();
-            return transform == nullptr ? nativePose : ComposePoses(InvertPose(transform->GetNativePose()), nativePose);
+            auto pose = nativePose;
+            if (m_floorHeight) pose.Position.Y -= *m_floorHeight;
+            return transform == nullptr ? pose : ComposePoses(InvertPose(transform->GetNativePose()), pose);
         }
 
         xr::Pose GetPoseInNativeSpace(const xr::Pose& referencePose)
         {
             auto* transform = GetTransform();
-            return transform == nullptr ? referencePose : ComposePoses(transform->GetNativePose(), referencePose);
+            auto pose = transform == nullptr ? referencePose : ComposePoses(transform->GetNativePose(), referencePose);
+            if (m_floorHeight) pose.Position.Y += *m_floorHeight;
+            return pose;
         }
 
     private:
@@ -161,14 +174,17 @@ namespace Babylon
                     ComposePoses(current->GetNativePose(), offset->GetNativePose()));
                 auto space = XRReferenceSpace::New(info.Env(), composedTransform);
                 Unwrap(space)->m_viewer = m_viewer;
+                Unwrap(space)->m_floorHeight = m_floorHeight;
                 return space;
             }
             auto space = XRReferenceSpace::New(info);
             Unwrap(space)->m_viewer = m_viewer;
+            Unwrap(space)->m_floorHeight = m_floorHeight;
             return space;
         }
 
         Napi::ObjectReference m_jsTransform{};
+        std::shared_ptr<float> m_floorHeight;
         bool m_viewer{};
     };
 } // Babylon

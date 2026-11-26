@@ -47,6 +47,28 @@ setNativeArPortalDefault("__nativeArPortalExitDelayMs", 70000);
 
 // Plane hit tests may include an infinite extension. Auto-placement must remain
 // inside the observed floor polygon, with only a small edge-noise allowance.
+// Intersect WebXR's -Z target ray with local-floor, then map the result to scene space.
+function portalReferenceFloorPoint(aim, floor, rightHanded) {
+    if (!aim || !floor || aim.emulatedPosition || floor.emulatedPosition) return null;
+    var ray = aim.transform.matrix;
+    var distance = ray[13] / ray[9];
+    if (!(ray[9] > 0 && distance >= 0.35 && distance <= 6)) return null;
+    var x = ray[12] - ray[8] * distance, z = ray[14] - ray[10] * distance;
+    var m = floor.transform.matrix;
+    var result = new BABYLON.Vector3(x * m[0] + z * m[8] + m[12],
+        x * m[1] + z * m[9] + m[13], x * m[2] + z * m[10] + m[14]);
+    if (!rightHanded) result.z = -result.z;
+    return Number.isFinite(result.x) && Number.isFinite(result.y) && Number.isFinite(result.z) ? result : null;
+}
+
+function portalTrackedFloorPoint(frame, ray, floor, space, rightHanded, floorSnapshot) {
+    var origin = frame.getPose(floor, space);
+    if (!origin || origin.emulatedPosition) return null;
+    // Some native XR frame adapters reuse one pose for every getPose call.
+    floorSnapshot.transform.matrix.set(origin.transform.matrix);
+    return portalReferenceFloorPoint(frame.getPose(ray, floor), floorSnapshot, rightHanded);
+}
+
 function findNativeArPortalFloorForPosition(position, floorPlanes) {
     if (!position || !Number.isFinite(position.x) || !Number.isFinite(position.y) || !Number.isFinite(position.z)) {
         return null;
@@ -1297,7 +1319,7 @@ function findNativeArPortalFloorForPosition(position, floorPlanes) {
         var nativeHitTestEntityTypes = globalThis.__nativeArPortalAllowEstimatedPointPlacement === true ? ["plane", "point"] : ["plane"];
         var xrTest = fm.enableFeature(BABYLON.WebXRHitTest.Name, "latest", {
             entityTypes: nativeHitTestEntityTypes
-        });
+        }, true, false);
         var xrCamera = xr.baseExperience.camera;
         createPortalEnvironmentTexture(scene);
         var nativePlaneDetector = null;
@@ -1311,6 +1333,7 @@ function findNativeArPortalFloorForPosition(position, floorPlanes) {
 
         function getPlaneSemanticType(plane) {
             try {
+                if (plane && plane.xrPlane && plane.xrPlane.semanticLabel) return plane.xrPlane.semanticLabel;
                 var sceneObject = plane && plane.xrPlane ? plane.xrPlane.parentSceneObject : null;
                 return String(sceneObject && sceneObject.type ? sceneObject.type : "none");
             } catch (error) {
@@ -1417,7 +1440,7 @@ function findNativeArPortalFloorForPosition(position, floorPlanes) {
 
         if (globalThis.__nativeArPortalEnablePlaneDetection !== false && BABYLON.WebXRPlaneDetector) {
             try {
-                nativePlaneDetector = fm.enableFeature(BABYLON.WebXRPlaneDetector.Name, "latest");
+                nativePlaneDetector = fm.enableFeature(BABYLON.WebXRPlaneDetector.Name, "latest", {}, true, false);
                 reportStatus("native-xr-portal:plane-detection=enabled");
                 nativePlaneDetector.onPlaneAddedObservable.add(function (plane) {
                     trackSemanticFloorPlane(plane);
@@ -1452,7 +1475,7 @@ function findNativeArPortalFloorForPosition(position, floorPlanes) {
                 nativeAnchorSystem = fm.enableFeature(BABYLON.WebXRAnchorSystem.Name, "latest", {
                     doNotRemoveAnchorsOnSessionEnded: false,
                     clearAnchorsOnSessionInit: true
-                });
+                }, true, false);
                 reportStatus("native-xr-portal:anchors=enabled");
             } catch (error) {
                 reportStatus("native-xr-portal:anchors-error:" + String(error && error.message ? error.message : error));
@@ -2141,12 +2164,40 @@ function findNativeArPortalFloorForPosition(position, floorPlanes) {
             }
         };
 
+        var referenceFloor = null;
+        var floorSnapshot = { transform: { matrix: new Float32Array(16) } };
+        var sessionManager = xr.baseExperience.sessionManager;
+        function controllerFloorPoint(frame, source) {
+            if (!referenceFloor || !source || source.targetRayMode !== "tracked-pointer" || !sessionManager.referenceSpace) return null;
+            return portalTrackedFloorPoint(frame, source.targetRaySpace, referenceFloor, sessionManager.referenceSpace,
+                scene.useRightHandedSystem, floorSnapshot);
+        }
+        function selectReferenceFloor(event) {
+            if (portalAppearded) return;
+            var point = controllerFloorPoint(event.frame, event.inputSource);
+            if (!point) return;
+            hitTest = { position: point };
+            reportStatus("native-xr-portal:user-selected-reference-floor");
+            scene.onPointerDown();
+        }
         xr.baseExperience.sessionManager.onXRSessionInit.add(function () {
             rectangle.isVisible = false;
             requestNativePlaneDetection("session-init");
+            var session = sessionManager.session;
+            var features = session.enabledFeatures;
+            if (features && features.includes("local-floor") &&
+                !(features.includes("plane-detection") && features.includes("hit-test"))) {
+                session.requestReferenceSpace("local-floor").then(function (floor) {
+                    if (sessionManager.session !== session) return;
+                    referenceFloor = floor;
+                    session.addEventListener("select", selectReferenceFloor);
+                    reportStatus("native-xr-portal:aim-at-floor-and-select");
+                }).catch(function (error) { reportStatus("native-xr-portal:reference-floor-error:" + error); });
+            }
         });
         xr.baseExperience.sessionManager.onXRSessionEnded.add(function () {
             rectangle.isVisible = true;
+            referenceFloor = null;
         });
         xr.baseExperience.onStateChangedObservable.add(function (state) {
             reportStatus("native-xr-portal:xr-state=" + String(state));
@@ -2154,8 +2205,8 @@ function findNativeArPortalFloorForPosition(position, floorPlanes) {
 
         setTimeout(function () {
             reportStatus("native-xr-portal:enter-request");
-            xr.baseExperience.enterXRAsync("immersive-ar", "unbounded", xr.renderTarget, {
-                optionalFeatures: ["hit-test", "plane-detection", "anchors"]
+            xr.baseExperience.enterXRAsync("immersive-ar", "local", xr.renderTarget, {
+                optionalFeatures: ["hit-test", "plane-detection", "anchors", "local-floor"]
             }).then(function () {
                 reportStatus("native-xr-portal:xr-entered");
                 requestNativePlaneDetection("xr-entered");
@@ -2176,7 +2227,18 @@ function findNativeArPortalFloorForPosition(position, floorPlanes) {
         }, 6500);
 
         scene.onBeforeRenderObservable.add(function () {
-            applyMarkerVisibility(!portalAppearded && markerSettleHasCandidate);
+            var showMarker = !portalAppearded && markerSettleHasCandidate;
+            if (!portalAppearded && referenceFloor && sessionManager.currentFrame) {
+                for (var source of sessionManager.session.inputSources) {
+                    var point = controllerFloorPoint(sessionManager.currentFrame, source);
+                    if (point) {
+                        marker.position.copyFrom(point);
+                        showMarker = true;
+                        break;
+                    }
+                }
+            }
+            applyMarkerVisibility(showMarker);
 
             if (portalPosition && portalAppearded) {
                 var now = performance.now();
