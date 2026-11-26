@@ -11,6 +11,8 @@ This branch is a durable WebGPU/wgpu-native fork, not an upstream bgfx replaceme
 - Canonical BabylonNative checkout: `/Users/matt/src/BabylonNative` on branch `wgpu`.
 - Babylon.js fork checkout used for staged upstream fixes: `/Users/matt/src/Babylon.js` on branch `codex/webgpu-wgsl-gui3d-particles`.
 - Prefer the canonical checkouts above. Codex worktrees under `/Users/matt/.codex/worktrees/...` may be detached and stale.
+- Runtime changes, tests and handoffs for JsRuntimeHost, AndroidExtensions and UrlLib belong in this monorepo. The old forks are for provenance only. The [handoff ledger](Documentation/QuestRuntimeHandoff.md) maps their historical PRs to the maintained ones.
+- Keep one active Quest installation per app. Before replacing a differently signed package, confirm which app's data may be cleared. Retain CI run links, APK hashes and compact device receipts; remove superseded local APKs and test-only installs after qualification.
 - Use Rust through rustup, especially `/Users/matt/.rustup/toolchains/1.94.1-aarch64-apple-darwin/bin`, so Rust LLVM stays aligned with the Xcode 26.5/LTO work.
 - Do not commit build outputs or generated dependency trees. Build artifacts should stay under top-level build directories.
 
