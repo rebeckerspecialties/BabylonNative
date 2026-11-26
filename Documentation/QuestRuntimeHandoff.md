@@ -3,6 +3,16 @@
 Start with this file, not the historical timing logs. The renderer is wgpu/Vulkan. Do not enable GLES, a
 second graphics device, driver tracing, or camera diagnostics that restart the compositor.
 
+**Native render-pipeline diagnostics (fork).** For an unexpected compiler failure, set
+`adb shell setprop log.tag.BabylonPipeline DEBUG` **before starting a fresh process**.
+Record ordinary `adb logcat -v threadtime -s BabylonPipeline:D`. Each shader has a
+source fingerprint; concatenate descriptor chunks for the same PID and pipeline ID by byte
+offset. `begin` and `returned` bracket the native call on its actual compiler thread,
+including asynchronous creation. A return is not proof that WebGPU validation succeeded.
+Compare an unmatched begin to the faulting TID and stack; a truncated log or another thread
+still compiling at exit does not identify a faulty shader. Restore the previous log level
+and restart before timing. On non-Android hosts opt in with `BABYLON_NATIVE_PIPELINE_BREADCRUMBS=1`.
+
 ## Known-good inputs
 
 - For current APKs use the BabylonNative gitlink in [Samples draft #1](https://github.com/rebeckerspecialties/babylonnative-webxr-samples/pull/1); do not substitute the latest checkout. The [earlier clean ARM64 artifact](https://github.com/rebeckerspecialties/babylonnative-webxr-samples/actions/runs/45291729947) predates stereo cube arrays and lazy XR snapshots.
