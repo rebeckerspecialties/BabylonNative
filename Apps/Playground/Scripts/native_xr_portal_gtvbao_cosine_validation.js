@@ -53,12 +53,14 @@
           "                let side = select(-1.0, 1.0, ((stepIndex + slice + cell.x + cell.y) & 1u) == 0u);";
     // "half" evaluates each sample's slab and slice angles in 16-bit floats, in
     // units of the AO radius. Reconstruction, depth and the plane tests stay f32.
+    var automaticPrecision = globalThis.__nativeArPortalAoPrecision === undefined;
     var precision = globalThis.__nativeArPortalAoPrecision ?? "half";
     if (precision !== "full" && precision !== "half") {
         throw new Error("Unknown portal AO precision: " + precision);
     }
     var halfPrecision = precision === "half";
-    var sampleTail = halfPrecision ? `let offset = vec3h(delta * inverseRadius);
+    function slabSample(half) {
+        return half ? `let offset = vec3h(delta * inverseRadius);
                 let rayH = vec3h(ray);
                 let b = dot(offset, rayH);
                 let discriminant = b * b - dot(offset, offset) + 1.0h;
@@ -81,7 +83,8 @@
                 mask |= portalIntervalMask(
                     portalSliceCdf(front.x, front.y, sinGamma, cosGamma, lower, inverseTotal),
                     portalSliceCdf(back.x, back.y, sinGamma, cosGamma, lower, inverseTotal), jitter);`;
-    var halfFunctions = halfPrecision ? `
+    }
+    var halfFunctions = `
 // portalSliceCdf for a point given by its view and tangent components, in
 // 16-bit floats. slice is (sinGamma, cosGamma, lower, inverseTotal).
 fn portalSliceCdfHalf(point: vec2h, slice: vec4h) -> f16 {
@@ -103,11 +106,11 @@ fn portalSliceCdfHalf(point: vec2h, slice: vec4h) -> f16 {
     let away = slice.z + 0.25h * (cos2 * slice.y - sin2 * slice.x) + 0.5h * angle * slice.x;
     return clamp(select(away, towards, p.y >= 0.0h) * slice.w, 0.0h, 1.0h);
 }
-` : "";
-    var halfSlice = halfPrecision ? `
+`;
+    var halfSlice = `
         let viewH = vec3h(view);
         let tangentH = vec3h(tangent);
-        let sliceH = vec4h(vec4f(sinGamma, cosGamma, lower, inverseTotal));` : "";
+        let sliceH = vec4h(vec4f(sinGamma, cosGamma, lower, inverseTotal));`;
     // Slices are a fixed angle apart, so each is the previous one rotated by constants.
     var sliceAngle = Math.PI / sampleLayout.slices;
     var sliceCos = Math.cos(sliceAngle).toFixed(9);
@@ -292,6 +295,11 @@ fn main(input: FragmentInputs) -> FragmentOutputs {
         globalThis.__nativePlaygroundConfigureEngine = function (engine) {
             if (configureEngine) configureEngine(engine);
             if (!engine.enabledExtensions.includes("shader-f16")) {
+                if (automaticPrecision) {
+                    precision = "full";
+                    store.ssao2PixelShader = occlusionShader(false);
+                    return;
+                }
                 throw new Error("Half-precision portal AO requires shader-f16 on the device.");
             }
             var processor = engine._getShaderProcessor(BABYLON.ShaderLanguage.WGSL);
@@ -307,7 +315,8 @@ fn main(input: FragmentInputs) -> FragmentOutputs {
         };
         globalThis.__nativePlaygroundRequiredFeatures = Array.from(new Set((globalThis.__nativePlaygroundRequiredFeatures || []).concat(["shader-f16"])));
     }
-    store.ssao2PixelShader = `
+    function occlusionShader(half) {
+        return `
 varying vUV: vec2f;
 var textureSamplerSampler: sampler;
 var textureSampler: texture_2d<f32>;
@@ -368,7 +377,7 @@ fn portalClipSlab(delta: vec3f, ray: vec3f, thickness: f32, radiusSquared: f32) 
     return vec2f(max(0.0, -b - extent), min(thickness, -b + extent));
 }
 
-${halfFunctions}
+${half ? halfFunctions : ""}
 // Position of a cell in the 4x4 ordered-dither sequence. Every 4x4 block of
 // AO texels holds each of the 16 phases once. A static random field would
 // instead show through moving shadows as a pattern fixed to the screen.
@@ -426,7 +435,7 @@ fn main(input: FragmentInputs) -> FragmentOutputs {
         let lower = 0.25 * cosGamma + 0.5 * (gamma - 1.5707963) * sinGamma;
         let inverseTotal = 1.0 / total;
         let clipDirection = uniforms.projection * vec4f(tangent * safeRadius, 0.0);
-        let jitter = fract(noise.y + f32(slice) * 0.61803398875);${halfSlice}
+        let jitter = fract(noise.y + f32(slice) * 0.61803398875);${half ? halfSlice : ""}
         var mask = 0u;
         for (var stepIndex = 0u; stepIndex < PORTAL_STEPS_PER_SIDE; stepIndex++) {
             let sampleNoise = fract(noise.y + f32(slice + stepIndex * PORTAL_STEPS_PER_SIDE) * 0.61803398875);
@@ -450,7 +459,7 @@ fn main(input: FragmentInputs) -> FragmentOutputs {
                 // Thickness follows this sample's camera ray, not the center pixel's ray.
                 let ray = normalize(sampleRay);
                 let thickness = portalThickness(height, dot(ray, normal), footprint, safeRadius);
-${sampleTail}
+${slabSample(half)}
             }
         }
         // Each slice carries the projected normal's length times its unoccluded integral.
@@ -517,7 +526,8 @@ fn main(input: FragmentInputs) -> FragmentOutputs {
 #endif
 #endif
 `;
-
+    }
+    store.ssao2PixelShader = occlusionShader(halfPrecision);
     includes.pbrBlockPrePass = normalWrites.reduce(function (block, write) {
         return block.replace(write, "\n#if defined(ALPHABLEND) || defined(ALPHATEST)\nfragData[PREPASS_NORMAL_INDEX] = vec4f(vec3f(0.0), finalColor.a);\n#else\n$&\n#endif\n");
     }, prePassBlock);
@@ -544,11 +554,26 @@ fn main(input: FragmentInputs) -> FragmentOutputs {
             return candidate.name === "native-xr-portal-ssao2";
         });
         var prepass = pipeline && pipeline._prePassRenderer;
+        var gbuffer = pipeline && pipeline._geometryBufferRenderer;
         var ssao = pipeline && pipeline._ssaoPostProcess;
         var blurs = pipeline && [pipeline._blurHPostProcess, pipeline._blurVPostProcess];
         var combinePass = pipeline && pipeline._ssaoCombinePostProcess;
-        if (!prepass || !ssao || [ssao, blurs[0], blurs[1], combinePass].some(function (pass) { return pass._textures.length !== 0; })) {
-            throw new Error("Portal AO requires an unallocated pre-pass SSAO2 pipeline.");
+        if ((!prepass && !gbuffer) || !ssao || [ssao, blurs[0], blurs[1], combinePass].some(function (pass) { return pass._textures.length !== 0; })) {
+            throw new Error("Portal AO requires an unallocated SSAO2 pipeline with depth and normal textures.");
+        }
+        if (gbuffer && gbuffer.normalsAreUnsigned) {
+            throw new Error("Portal AO requires signed geometry-buffer normals.");
+        }
+        // Pre-pass layouts can change between cameras. Resolve both attachments
+        // from the current layout when the pass is applied, not at installation.
+        function bindGeometryInputs(effect, depth) {
+            var textures = prepass ? prepass.getRenderTarget().textures : gbuffer.getGBuffer().textures;
+            effect.setTexture("normalSampler", textures[prepass ? prepass.getIndex(BABYLON.Constants.PREPASS_NORMAL_TEXTURE_TYPE) :
+                gbuffer.getTextureIndex(BABYLON.GeometryBufferRenderer.NORMAL_TEXTURE_TYPE)]);
+            if (depth) {
+                effect.setTexture("depthSampler", textures[prepass ? prepass.getIndex(BABYLON.Constants.PREPASS_DEPTH_TEXTURE_TYPE) :
+                    gbuffer.getTextureIndex(BABYLON.GeometryBufferRenderer.DEPTH_TEXTURE_TYPE)]);
+            }
         }
         // A pass owns its input target. The AO pass now receives the AO-resolution
         // geometry, and the filter is defined on the AO texel grid, so the geometry,
@@ -577,12 +602,10 @@ fn main(input: FragmentInputs) -> FragmentOutputs {
         });
         geometry.autoClear = false;
         geometry.onApply = function (effect) {
-            var target = prepass.getRenderTarget();
-            effect.setTexture("depthSampler", target.textures[prepass.getIndex(BABYLON.Constants.PREPASS_DEPTH_TEXTURE_TYPE)]);
-            effect.setTexture("normalSampler", target.textures[prepass.getIndex(BABYLON.Constants.PREPASS_NORMAL_TEXTURE_TYPE)]);
+            bindGeometryInputs(effect, true);
             bindReconstruction(effect);
             effect.setFloat("maxZ", pipeline.maxZ);
-            if (prepass.generateNormalsInWorldSpace) {
+            if ((prepass || gbuffer).generateNormalsInWorldSpace) {
                 scene.activeCamera.getViewMatrix().toNormalMatrix(normalMatrix);
                 var m = normalMatrix.m;
                 normalToView.set([m[0], m[1], m[2], m[4], m[5], m[6], m[8], m[9], m[10]]);
@@ -593,13 +616,11 @@ fn main(input: FragmentInputs) -> FragmentOutputs {
         };
         ssao.onApply = function () {};
         combinePass.onApplyObservable.add(function (effect) {
-            var target = prepass.getRenderTarget();
-            effect.setTexture("normalSampler", target.textures[prepass.getIndex(BABYLON.Constants.PREPASS_NORMAL_TEXTURE_TYPE)]);
+            bindGeometryInputs(effect, surfaceAwareUpsample);
             if (!surfaceAwareUpsample) return;
             // The published combine effect declares no such sampler, and the engine
             // only binds post-process inputs to declared channels.
             engine._bindTexture(0, ssao.inputTexture.texture, "geometrySampler");
-            effect.setTexture("depthSampler", target.textures[prepass.getIndex(BABYLON.Constants.PREPASS_DEPTH_TEXTURE_TYPE)]);
             effect.setFloat("maxZ", pipeline.maxZ);
             bindReconstruction(effect);
         });
@@ -617,7 +638,7 @@ fn main(input: FragmentInputs) -> FragmentOutputs {
             var texture = material.albedoTexture || material.diffuseTexture;
             var alphaTextured = !!(texture && texture.hasAlpha);
             if (alphaTextured && (material.needAlphaBlending() || material.needAlphaTesting())) cutouts++;
-            return material.needAlphaBlending() && !alphaTextured && prepass.excludedMaterials.indexOf(material) === -1;
+            return prepass && material.needAlphaBlending() && !alphaTextured && prepass.excludedMaterials.indexOf(material) === -1;
         });
         panes.forEach(function (material) { prepass.excludedMaterials.push(material); });
         // Geometry produces normals/depth for AO, never the scene color used by
@@ -628,6 +649,7 @@ fn main(input: FragmentInputs) -> FragmentOutputs {
         scene.onDisposeObservable.add(function () { geometry.dispose(camera); });
         status("native-xr-portal:gtvbao=cosine-weighted:slices=" + sampleLayout.slices + ":stepsPerSide=" + sampleLayout.steps +
             ":samples=" + sampleLayout.slices * sampleLayout.steps * (sampleLayout.paired ? 2 : 1) + ":bits=32:precision=" + precision + ":noise=ordered-4x4:filter=box4*box2" +
-            ":geometry=ao-resolution-plane-filtered:upsample=" + (surfaceAwareUpsample ? "surface-aware" : "bilinear") + ":color-only-panes=" + panes.length + ":cutouts=" + cutouts + ":cutout-visibility=" + cutoutLiteral);
+            ":source=" + (prepass ? "pre-pass" : "geometry-buffer") + ":geometry=ao-resolution-plane-filtered:upsample=" + (surfaceAwareUpsample ? "surface-aware" : "bilinear") +
+            ":color-only-panes=" + panes.length + ":cutouts=" + cutouts + ":cutout-visibility=" + cutoutLiteral);
     }
 })();
