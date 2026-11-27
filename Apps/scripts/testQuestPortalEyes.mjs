@@ -34,3 +34,28 @@ test("reject empty and partial captures even after a complete good frame", async
     await assert.rejects(checkFrames([]), /truncated/);
     await assert.rejects(checkFrames([eyeFrame(true,true), Buffer.alloc(1)]), /truncated/);
 });
+
+test("centered capture rejects additional jambs on either eye even when coverage increases", async () => {
+    const make = (extra) => {
+        const rgb = Buffer.alloc(640 * 320 * 3);
+        for (const eye of [0, 1]) {
+            for (const x0 of eye === extra ? [60, 125, 198] : [60, 198]) {
+                for (let y = 92; y < 251; y++) {
+                    for (let x = x0; x < x0 + 14; x++) {
+                        const i = 3 * (640 * y + eye * 320 + x);
+                        rgb[i] = x - x0 < 4 ? 32 : 255;
+                        rgb[i + 1] = rgb[i + 2] = 255;
+                    }
+                }
+            }
+        }
+        return rgb;
+    };
+    for (const extra of [0, 1]) {
+        const frames = [make(-1), make(extra), make(-1)];
+        assert.equal((await checkFrames(frames)).firstBadFrame, null);
+        const checked = await checkFrames(frames, true);
+        assert.equal(checked.firstBadFrame, 1);
+        assert.deepEqual(checked.badJambCounts, extra ? [0, 1] : [1, 0]);
+    }
+});
