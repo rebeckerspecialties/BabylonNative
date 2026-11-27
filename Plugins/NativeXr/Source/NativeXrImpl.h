@@ -164,6 +164,7 @@ namespace Babylon
                 std::shared_ptr<xr::System::Session> Session{};
                 std::shared_ptr<xr::System::Session::Frame> Frame{};
                 arcana::cancellation_source CancellationSource{};
+                std::mutex FrameScheduleMutex{};
                 bool FrameScheduled{false};
                 FrameCallbackQueue<std::function<void(const std::shared_ptr<const xr::System::Session::Frame>&)>> ScheduleFrameCallbacks{};
                 arcana::task<void, std::exception_ptr> FrameTask{arcana::task_from_result<std::exception_ptr>()};
@@ -176,7 +177,7 @@ namespace Babylon
             void BeginUpdate();
             void EndUpdate();
             void EndFrame();
-            void SchedulePendingFrame();
+            void SchedulePendingFrame(bool previousFrameFinished = false);
 
             void NotifySessionStateChanged(bool isSessionActive);
         };

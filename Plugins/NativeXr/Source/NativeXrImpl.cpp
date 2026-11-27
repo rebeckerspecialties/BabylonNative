@@ -423,6 +423,7 @@ namespace Babylon
             // Don't try to end the session while it is still starting.
             m_beginTask->then(arcana::inline_scheduler, arcana::cancellation::none(), [this, thisRef{shared_from_this()}] {
                                        // Also don't try to end the session while a frame is in progress.
+                                       std::scoped_lock lock{m_sessionState->FrameScheduleMutex};
                                        return m_sessionState->FrameTask;
                                    })
                             .then(m_sessionState->GraphicsContext.AfterRenderScheduler(), arcana::cancellation::none(), [this, thisRef{shared_from_this()}](const arcana::expected<void, std::exception_ptr>&) {
@@ -463,23 +464,25 @@ namespace Babylon
             // callback; starting it immediately races BeginFrame/EndFrame.
             m_sessionState->ScheduleFrameCallbacks.Enqueue(std::move(callback));
 
-            if (m_sessionState->FrameScheduled)
-            {
-                return;
-            }
-
             SchedulePendingFrame();
         }
 
-        void NativeXr::Impl::SchedulePendingFrame()
+        void NativeXr::Impl::SchedulePendingFrame(bool previousFrameFinished)
         {
             assert(m_sessionState != nullptr);
 
+            // JS can enqueue a new request concurrently with AfterRender rearming.
+            // Publish the decision and its task together, including for session shutdown.
+            std::scoped_lock lock{m_sessionState->FrameScheduleMutex};
+            if (previousFrameFinished)
+            {
+                m_sessionState->FrameScheduled = false;
+            }
             XrTrace("SchedulePendingFrame scheduled=%d callbacks=%zu",
                 m_sessionState->FrameScheduled ? 1 : 0,
                 m_sessionState->ScheduleFrameCallbacks.PendingCount());
 
-            if (m_sessionState->FrameScheduled || m_sessionState->ScheduleFrameCallbacks.PendingCount() == 0)
+            if (m_sessionState->FrameScheduled || m_sessionState->CancellationSource.cancelled() || m_sessionState->ScheduleFrameCallbacks.PendingCount() == 0)
             {
                 return;
             }
@@ -506,8 +509,7 @@ namespace Babylon
                 if (!m_sessionState->Frame->IsTracking)
                 {
                     EndFrame();
-                    m_sessionState->FrameScheduled = false;
-                    SchedulePendingFrame();
+                    SchedulePendingFrame(true);
                     return arcana::task_from_result<std::exception_ptr>();
                 }
 #endif
@@ -542,8 +544,7 @@ namespace Babylon
                 // next frame and leave that frame's EndFrame without an active frame.
                 return arcana::make_task(m_sessionState->GraphicsContext.AfterRenderScheduler(), arcana::cancellation::none(), [this, thisRef{shared_from_this()}] {
                     EndFrame();
-                    m_sessionState->FrameScheduled = false;
-                    SchedulePendingFrame();
+                    SchedulePendingFrame(true);
                 });
             });
         }
