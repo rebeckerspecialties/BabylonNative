@@ -155,6 +155,7 @@ namespace Babylon
 #if defined(__ANDROID__) && defined(BABYLON_NATIVE_XR_OPENXR)
                 // Destroy the OpenXR session before returning the window to Vulkan WSI.
                 std::optional<gsl::final_action<void (*)()>> ResumeWindowPresentation;
+                bool WaitForProjectionRelease{};
                 std::map<uint64_t, ViewConfiguration::RenderTarget> AcquiredLayers;
                 ViewConfiguration::RenderTarget Warp;
                 uint32_t WarpViews{};
@@ -163,6 +164,7 @@ namespace Babylon
                 std::shared_ptr<xr::System::Session> Session{};
                 std::shared_ptr<xr::System::Session::Frame> Frame{};
                 arcana::cancellation_source CancellationSource{};
+                std::mutex FrameScheduleMutex{};
                 bool FrameScheduled{false};
                 FrameCallbackQueue<std::function<void(const std::shared_ptr<const xr::System::Session::Frame>&)>> ScheduleFrameCallbacks{};
                 arcana::task<void, std::exception_ptr> FrameTask{arcana::task_from_result<std::exception_ptr>()};
@@ -175,7 +177,7 @@ namespace Babylon
             void BeginUpdate();
             void EndUpdate();
             void EndFrame();
-            void SchedulePendingFrame();
+            void SchedulePendingFrame(bool previousFrameFinished = false);
 
             void NotifySessionStateChanged(bool isSessionActive);
         };

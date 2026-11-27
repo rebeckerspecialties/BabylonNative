@@ -1,5 +1,9 @@
 # BabylonNative wgpu Branch Notes
 
+For Quest projection changes, verify a fixed-pose stereo recording with
+`Apps/scripts/checkQuestPortalEyes.mjs`. A single good screenshot or a
+COPY_SRC readback can hide intermittent loss; see the Quest runtime handoff.
+
 For physical Quest acceptance, use the [runtime handoff](Documentation/QuestRuntimeHandoff.md):
 verify both eyes and education playback separately from timed layer runs. Importing
 a decoder buffer is not a sampling test. Keep hosted simulator screenshots opt-in.
