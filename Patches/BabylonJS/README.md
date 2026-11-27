@@ -270,3 +270,20 @@ clear; adding a spectator restores normal clearing. Eye clears are unchanged.
 
 The pinned-release integration fixture can be run with
 `node Apps/scripts/questMenuLadder/spectator.cjs /path/to/babylonjs-9.37.1.tgz`.
+
+`0011-postprocess-camera-output-layer.patch` preserves the camera output target's
+array slice on the last post-process. Previously the right eye wrote into layer
+zero even though direct scene draws respected the eye's layer. Exercise the
+installed bundle with `node --test Apps/scripts/testBabylonPostProcessOutput.mjs`;
+compare both eyes on-device using the portal's `ssao2-geometry` control.
+
+`0012-isolate-camera-prepass-presentation.patch` completes the backport of
+[Babylon.js #19227](https://github.com/BabylonJS/Babylon.js/pull/19227) at
+`d11b41ee93`. Independent eyes clear the shared pre-pass input separately;
+consecutive cameras on one canvas retain color. An allocated single-view
+target supplies its own background color without receiving an MRT clear notification.
+Only a ready terminal pass clears the actual camera output; viewport and
+array slice are independent. Keep the no-mirror spectator policy from 0010.
+For a centered, fixed-pose Quest recording use
+`node Apps/scripts/checkQuestPortalEyes.mjs CAPTURE.mp4 --centered` on the
+release-test branch: checking bright pixel area alone missed a doubled jamb.
