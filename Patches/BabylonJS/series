@@ -13,3 +13,4 @@
 0009-invalidate-only-existing-submeshes.patch
 0010-no-mirror-parent-clear.patch
 0011-postprocess-camera-output-layer.patch
+0012-isolate-camera-prepass-presentation.patch
