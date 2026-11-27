@@ -18,7 +18,7 @@ function fixture() {
     const manager = new PostProcessManager(scene);
     function aim(layer) {
         const renderTarget = {};
-        camera.outputRenderTarget = { renderTarget, _bindFrameBuffer: () => engine.bindFramebuffer(renderTarget, undefined, undefined, undefined, false, 0, layer) };
+        camera.outputRenderTarget = { renderTarget, getViewCount: () => 1, _bindFrameBuffer: (_face, _layer, fullscreen = false) => engine.bindFramebuffer(renderTarget, undefined, undefined, undefined, fullscreen, 0, layer) };
         return renderTarget;
     }
     return { manager, camera, binds, aim };
@@ -34,7 +34,7 @@ test("the final post-process follows the camera's current array slice, including
     }
 });
 
-test("explicit faces, fullscreen, independent targets and the canvas keep their original binding", () => {
+test("fullscreen keeps the eye slice; explicit faces and independent targets do not inherit it", () => {
     const { aim, binds, manager } = fixture();
     const output = aim(1);
     const offscreen = {};
@@ -44,7 +44,22 @@ test("explicit faces, fullscreen, independent targets and the canvas keep their 
     manager._finalizeFrame(false, offscreen);
     manager._finalizeFrame(false);
     assert.deepEqual(binds, [
-        [output, 0, undefined, undefined, false], [output, 3, undefined, undefined, false],
-        [output, undefined, undefined, undefined, true], [offscreen, undefined, undefined, undefined, false], "screen",
+        [output, 0, undefined, undefined, false, 0, undefined], [output, 3, undefined, undefined, false, 0, undefined],
+        [output, undefined, undefined, undefined, true, 0, 1], [offscreen, undefined, undefined, undefined, false, 0, undefined], "screen",
     ]);
+});
+
+test("the pinned bundle defers a terminal camera clear while its effect is compiling", () => {
+    const { aim, manager, camera } = fixture();
+    const eye = aim(1);
+    const clears = [];
+    manager._scene._bindFrameBuffer = (view, clear) => {
+        assert.equal(view, camera);
+        clears.push(clear);
+    };
+    for (const ready of [false, true, false]) {
+        camera._postProcesses[0].isReady = () => ready;
+        manager._finalizeFrame(false, eye, undefined, undefined, false, undefined, true);
+    }
+    assert.deepEqual(clears, [false, true, false]);
 });

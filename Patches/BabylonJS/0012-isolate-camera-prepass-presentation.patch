@@ -1,0 +1,358 @@
+diff --git a/packages/dev/core/src/Engines/Extensions/engine.multiview.pure.ts b/packages/dev/core/src/Engines/Extensions/engine.multiview.pure.ts
+index f4fe0fd551..3f41a2feee 100644
+--- a/packages/dev/core/src/Engines/Extensions/engine.multiview.pure.ts
++++ b/packages/dev/core/src/Engines/Extensions/engine.multiview.pure.ts
+@@ -201,9 +201,13 @@ export function RegisterEngineMultiview(): void {
+         if (!this._multiviewSceneUbo) {
+             this._createMultiviewUbo();
+         }
++        const output = camera.outputRenderTarget;
+         camera.outputRenderTarget = camera._multiviewTexture;
+-        this._renderForCamera(camera);
+-        camera.outputRenderTarget = null;
++        try {
++            this._renderForCamera(camera);
++        } finally {
++            camera.outputRenderTarget = output;
++        }
+ 
+         // Consume the multiview texture through a shader for each eye
+         for (let index = 0; index < camera._rigCameras.length; index++) {
+@@ -212,7 +216,7 @@ export function RegisterEngineMultiview(): void {
+             engine.setViewport(this._activeCamera.viewport);
+             if (this.postProcessManager) {
+                 this.postProcessManager._prepareFrame();
+-                this.postProcessManager._finalizeFrame(this._activeCamera.isIntermediate);
++                this.postProcessManager._finalizeFrame(this._activeCamera.isIntermediate, this._activeCamera.outputRenderTarget?.renderTarget ?? undefined);
+             }
+         }
+     };
+diff --git a/packages/dev/core/src/Materials/Textures/renderTargetTexture.pure.ts b/packages/dev/core/src/Materials/Textures/renderTargetTexture.pure.ts
+index 4f1b65114a..f97cfbc65a 100644
+--- a/packages/dev/core/src/Materials/Textures/renderTargetTexture.pure.ts
++++ b/packages/dev/core/src/Materials/Textures/renderTargetTexture.pure.ts
+@@ -715,9 +715,16 @@ export class RenderTargetTexture extends Texture implements IRenderTargetTexture
+             }
+ 
+             if (this._postProcessManager) {
+-                this._postProcessManager._finalizeFrame(false, this._renderTarget ?? undefined, this._currentFaceIndex, this._postProcesses, this.ignoreCameraViewport);
++                this._postProcessManager._finalizeFrame(
++                    false,
++                    this._renderTarget ?? undefined,
++                    this._currentFaceIndex,
++                    this._postProcesses,
++                    this.ignoreCameraViewport,
++                    this._currentLayer
++                );
+             } else if (this._currentUseCameraPostProcess) {
+-                this._scene!.postProcessManager._finalizeFrame(false, this._renderTarget ?? undefined, this._currentFaceIndex);
++                this._scene!.postProcessManager._finalizeFrame(false, this._renderTarget ?? undefined, this._currentFaceIndex, undefined, false, this._currentLayer);
+             }
+ 
+             if (!this._disableEngineStages) {
+@@ -1163,8 +1170,9 @@ export class RenderTargetTexture extends Texture implements IRenderTargetTexture
+      * @internal
+      * @param faceIndex face index to bind to if this is a cubetexture
+      * @param layer defines the index of the texture to bind in the array
++     * @param forceFullscreenViewport overrides the target's viewport policy for an explicit bind
+      */
+-    public _bindFrameBuffer(faceIndex: number = 0, layer = 0) {
++    public _bindFrameBuffer(faceIndex: number = 0, layer = 0, forceFullscreenViewport = this.ignoreCameraViewport) {
+         const scene = this.getScene();
+         if (!scene) {
+             return;
+@@ -1172,7 +1180,7 @@ export class RenderTargetTexture extends Texture implements IRenderTargetTexture
+ 
+         const engine = scene.getEngine();
+         if (this._renderTarget) {
+-            engine.bindFramebuffer(this._renderTarget, this.isCube ? faceIndex : undefined, undefined, undefined, this.ignoreCameraViewport, 0, layer);
++            engine.bindFramebuffer(this._renderTarget, this.isCube ? faceIndex : undefined, undefined, undefined, forceFullscreenViewport, 0, layer);
+         }
+     }
+ 
+diff --git a/packages/dev/core/src/PostProcesses/postProcessManager.ts b/packages/dev/core/src/PostProcesses/postProcessManager.ts
+index 045d9af55e..c8e33b1cc7 100644
+--- a/packages/dev/core/src/PostProcesses/postProcessManager.ts
++++ b/packages/dev/core/src/PostProcesses/postProcessManager.ts
+@@ -5,6 +5,7 @@ import { VertexBuffer } from "../Buffers/buffer.pure";
+ import { Constants } from "../Engines/constants";
+ import { type DataBuffer } from "../Buffers/dataBuffer";
+ import { type RenderTargetWrapper } from "../Engines/renderTargetWrapper";
++import { type RenderTargetTexture } from "../Materials/Textures/renderTargetTexture.pure";
+ import { Observable } from "../Misc/observable";
+ import { type Scene } from "../scene";
+ 
+@@ -133,6 +134,22 @@ export class PostProcessManager {
+         lodLevel = 0,
+         doNotBindFrambuffer = false,
+         numPostsProcesses = postProcesses.length
++    ): void {
++        this._directRender(postProcesses, targetTexture, null, false, faceIndex, undefined, forceFullscreenViewport, lodLevel, doNotBindFrambuffer, numPostsProcesses);
++    }
++
++    /** @internal */
++    public _directRender(
++        postProcesses: PostProcess[],
++        targetTexture: Nullable<RenderTargetWrapper>,
++        output: Nullable<RenderTargetTexture> | undefined,
++        presentToCamera: boolean,
++        faceIndex = 0,
++        layer?: number,
++        forceFullscreenViewport = false,
++        lodLevel = 0,
++        doNotBindFrambuffer = false,
++        numPostsProcesses = postProcesses.length
+     ): void {
+         const engine = this._scene.getEngine();
+ 
+@@ -140,7 +157,11 @@ export class PostProcessManager {
+             if (index < postProcesses.length - 1) {
+                 postProcesses[index + 1].activate(this._scene.activeCamera || this._scene, targetTexture?.texture);
+             } else {
+-                if (targetTexture) {
++                if (presentToCamera) {
++                    this._scene._bindFrameBuffer(this._scene.activeCamera, postProcesses[index].isReady());
++                } else if (output) {
++                    output._bindFrameBuffer(faceIndex, layer, forceFullscreenViewport);
++                } else if (targetTexture) {
+                     engine.bindFramebuffer(targetTexture, faceIndex, undefined, undefined, forceFullscreenViewport, lodLevel);
+                 } else if (!doNotBindFrambuffer) {
+                     engine.restoreDefaultFramebuffer();
+@@ -177,6 +198,8 @@ export class PostProcessManager {
+      * @param faceIndex The index of the face to bind the target texture to.
+      * @param postProcesses The array of post processes to render.
+      * @param forceFullscreenViewport force gl.viewport to be full screen eg. 0,0,textureWidth,textureHeight (default: false)
++     * @param layer Explicit output slice when rendering an array or volume texture.
++     * @param presentToCamera Use the scene's camera bind-and-clear when pre-pass deferred it to presentation.
+      * @internal
+      */
+     public _finalizeFrame(
+@@ -184,7 +207,9 @@ export class PostProcessManager {
+         targetTexture?: RenderTargetWrapper,
+         faceIndex?: number,
+         postProcesses?: Array<PostProcess>,
+-        forceFullscreenViewport = false
++        forceFullscreenViewport = false,
++        layer?: number,
++        presentToCamera = false
+     ): void {
+         const camera = this._scene.activeCamera;
+ 
+@@ -208,11 +233,15 @@ export class PostProcessManager {
+             } else {
+                 if (targetTexture) {
+                     const output = camera.outputRenderTarget;
+-                    if (output?.renderTarget === targetTexture && faceIndex === undefined && !forceFullscreenViewport) {
+-                        // An output target can bind a view of an array (for example, the right eye).
+-                        output._bindFrameBuffer();
++                    if (output?.renderTarget === targetTexture && faceIndex === undefined && layer === undefined) {
++                        // The camera target owns the layer selection (e.g. one eye of a projection layer).
++                        if (presentToCamera && !doNotPresent && output.getViewCount() === 1) {
++                            this._scene._bindFrameBuffer(camera, pp.isReady());
++                        } else {
++                            output._bindFrameBuffer(undefined, undefined, forceFullscreenViewport);
++                        }
+                     } else {
+-                        engine.bindFramebuffer(targetTexture, faceIndex, undefined, undefined, forceFullscreenViewport);
++                        engine.bindFramebuffer(targetTexture, faceIndex, undefined, undefined, forceFullscreenViewport, 0, layer);
+                     }
+                     pp._outputTexture = targetTexture;
+                 } else {
+diff --git a/packages/dev/core/src/Rendering/prePassRenderer.pure.ts b/packages/dev/core/src/Rendering/prePassRenderer.pure.ts
+index dffe3c2dc7..0944e9b94e 100644
+--- a/packages/dev/core/src/Rendering/prePassRenderer.pure.ts
++++ b/packages/dev/core/src/Rendering/prePassRenderer.pure.ts
+@@ -529,17 +529,13 @@ export class PrePassRenderer {
+             }
+         }
+ 
+-        this._setupOutputForThisPass(this._currentTarget, camera);
+-    }
+-
+-    private _prepareFrame(prePassRenderTarget: PrePassRenderTarget, faceIndex?: number, layer?: number) {
+-        if (prePassRenderTarget.renderTargetTexture) {
+-            prePassRenderTarget.renderTargetTexture._prepareFrame(this._scene, faceIndex, layer, prePassRenderTarget.renderTargetTexture.useCameraPostProcesses);
+-        } else if (this._postProcessesSourceForThisPass.length) {
+-            this._scene.postProcessManager._prepareFrame();
+-        } else {
+-            this._engine.restoreDefaultFramebuffer();
++        this._bindFrameBuffer();
++        if (camera) {
++            // Sequential cameras reuse this MRT, even when their final output slices are distinct.
++            this._clearAuxiliaryAttachments();
++            this._scene._clear();
+         }
++        this._setupOutputForThisPass(this._currentTarget, camera);
+     }
+ 
+     /**
+@@ -560,9 +556,13 @@ export class PrePassRenderer {
+         return true;
+     }
+ 
+-    private _renderPostProcesses(prePassRenderTarget: PrePassRenderTarget, faceIndex?: number) {
++    private _renderPostProcesses(prePassRenderTarget: PrePassRenderTarget, faceIndex?: number, layer?: number) {
+         const firstPP = this._postProcessesSourceForThisPass[0];
+-        const outputTexture = firstPP ? firstPP.inputTexture : prePassRenderTarget.renderTargetTexture ? prePassRenderTarget.renderTargetTexture.renderTarget : null;
++        const camera = this._scene.activeCamera;
++        // The composition shader is single-view. A multiview attachment requires a view-aware pass.
++        const cameraOutput =
++            !camera?._multiviewTexture && camera?.outputRenderTarget?.getViewCount() === 1 && camera.outputRenderTarget.renderTarget ? camera.outputRenderTarget : null;
++        const rtt = prePassRenderTarget.renderTargetTexture;
+ 
+         // Build post process chain for this prepass post draw
+         let postProcessChain = this._currentTarget._beforeCompositionPostProcesses;
+@@ -576,10 +576,32 @@ export class PrePassRenderer {
+             postProcessChain.push(this._currentTarget.imageProcessingPostProcess);
+         }
+ 
+-        // Activates and renders the chain
++        if (rtt) {
++            rtt._prepareFrame(this._scene, faceIndex, layer, rtt.useCameraPostProcesses);
++        } else if (firstPP) {
++            this._scene.postProcessManager._prepareFrame();
++        } else if (!postProcessChain.length) {
++            if (cameraOutput) {
++                cameraOutput._bindFrameBuffer();
++            } else {
++                this._engine.restoreDefaultFramebuffer();
++            }
++        }
++
+         if (postProcessChain.length) {
++            const destination = rtt ?? cameraOutput;
++            const outputTexture = firstPP ? firstPP.inputTexture : (destination?.renderTarget ?? null);
++            // An intermediate does not inherit the final eye or array slice.
++            const output = outputTexture && destination?.renderTarget === outputTexture ? destination : null;
+             this._scene.postProcessManager._prepareFrame(this._currentTarget.renderTarget?.texture, postProcessChain);
+-            this._scene.postProcessManager.directRender(postProcessChain, outputTexture, false, faceIndex);
++            this._scene.postProcessManager._directRender(
++                postProcessChain,
++                outputTexture,
++                output,
++                !rtt && !firstPP && !!cameraOutput,
++                output || outputTexture?.isCube ? faceIndex : undefined,
++                layer
++            );
+         }
+     }
+ 
+@@ -588,8 +610,7 @@ export class PrePassRenderer {
+      */
+     public _afterDraw(faceIndex?: number, layer?: number) {
+         if (this._enabled && this._currentTarget.enabled) {
+-            this._prepareFrame(this._currentTarget, faceIndex, layer);
+-            this._renderPostProcesses(this._currentTarget, faceIndex);
++            this._renderPostProcesses(this._currentTarget, faceIndex, layer);
+         }
+     }
+ 
+@@ -605,18 +626,20 @@ export class PrePassRenderer {
+         if (this._enabled && this._currentTarget.enabled) {
+             this._bindFrameBuffer();
+ 
+-            // Clearing other attachment with 0 on all other attachments
+-            this._engine.bindAttachments(this._clearAttachments);
+-            this._engine.clear(this._clearColor, true, false, false);
+-            if (this._useSpecificClearForDepthTexture) {
+-                this._engine.bindAttachments(this._clearDepthAttachments);
+-                this._engine.clear(this._clearDepthColor, true, false, false);
+-            }
+-            // Regular clear color with the scene clear color of the 1st attachment
+-            this._engine.bindAttachments(this._defaultAttachments);
++            this._clearAuxiliaryAttachments();
+         }
+     }
+ 
++    private _clearAuxiliaryAttachments(): void {
++        this._engine.bindAttachments(this._clearAttachments);
++        this._engine.clear(this._clearColor, true, false, false);
++        if (this._useSpecificClearForDepthTexture) {
++            this._engine.bindAttachments(this._clearDepthAttachments);
++            this._engine.clear(this._clearDepthColor, true, false, false);
++        }
++        this._engine.bindAttachments(this._defaultAttachments);
++    }
++
+     // eslint-disable-next-line @typescript-eslint/no-unused-vars
+     private _bindFrameBuffer() {
+         if (this._enabled && this._currentTarget.enabled) {
+@@ -782,7 +805,6 @@ export class PrePassRenderer {
+             firstPP = firstCameraPP;
+         }
+ 
+-        this._bindFrameBuffer();
+         this._linkInternalTexture(prePassRenderTarget, firstPP);
+     }
+ 
+diff --git a/packages/dev/core/src/Rendering/prePassRendererSceneComponent.pure.ts b/packages/dev/core/src/Rendering/prePassRendererSceneComponent.pure.ts
+index 1ee14e093e..46bae3907f 100644
+--- a/packages/dev/core/src/Rendering/prePassRendererSceneComponent.pure.ts
++++ b/packages/dev/core/src/Rendering/prePassRendererSceneComponent.pure.ts
+@@ -91,7 +91,7 @@ export class PrePassRendererSceneComponent implements ISceneComponent {
+     private _beforeClearStage() {
+         if (this.scene.prePassRenderer) {
+             this.scene.prePassRenderer._setRenderTarget(null);
+-            this.scene.prePassRenderer._clear();
++            this.scene.prePassRenderer.update();
+         }
+     }
+ 
+diff --git a/packages/dev/core/src/XR/webXRLayerRenderTargetTexture.ts b/packages/dev/core/src/XR/webXRLayerRenderTargetTexture.ts
+index 7326d64d19..36fc93b307 100644
+--- a/packages/dev/core/src/XR/webXRLayerRenderTargetTexture.ts
++++ b/packages/dev/core/src/XR/webXRLayerRenderTargetTexture.ts
+@@ -21,8 +21,9 @@ export class WebXRLayerRenderTargetTexture extends RenderTargetTexture {
+      * @internal
+      * @param faceIndex face index to bind to if this is a cubetexture
+      * @param layer defines the index of the texture to bind in the array; defaults to {@link layerIndex}
++     * @param forceFullscreenViewport overrides the target's viewport policy for an explicit bind
+      */
+-    public override _bindFrameBuffer(faceIndex: number = 0, layer: number = this.layerIndex) {
+-        super._bindFrameBuffer(faceIndex, layer);
++    public override _bindFrameBuffer(faceIndex: number = 0, layer: number = this.layerIndex, forceFullscreenViewport = this.ignoreCameraViewport) {
++        super._bindFrameBuffer(faceIndex, layer, forceFullscreenViewport);
+     }
+ }
+diff --git a/packages/dev/core/src/scene.pure.ts b/packages/dev/core/src/scene.pure.ts
+index 511f14037e..35d0b3fc1f 100644
+--- a/packages/dev/core/src/scene.pure.ts
++++ b/packages/dev/core/src/scene.pure.ts
+@@ -5134,7 +5134,8 @@ export class Scene implements IAnimatable, IClipPlanesHolder, IAssetContainer {
+         );
+     }
+ 
+-    private _bindFrameBuffer(camera: Nullable<Camera>, clear = true) {
++    /** @internal */
++    public _bindFrameBuffer(camera: Nullable<Camera>, clear = true) {
+         if (!this._useCurrentFrameBuffer) {
+             if (camera && camera._multiviewTexture) {
+                 camera._multiviewTexture._bindFrameBuffer();
+@@ -5354,7 +5355,7 @@ export class Scene implements IAnimatable, IClipPlanesHolder, IAssetContainer {
+         if (this.postProcessManager && !camera._multiviewTexture) {
+             // if the camera has an output render target, render the post process to the render target
+             const texture = camera.outputRenderTarget ? camera.outputRenderTarget.renderTarget! : undefined;
+-            this.postProcessManager._finalizeFrame(camera.isIntermediate, texture);
++            this.postProcessManager._finalizeFrame(camera.isIntermediate, texture, undefined, undefined, false, undefined, this.prePass);
+         }
+ 
+         // After post process
+@@ -5513,7 +5514,8 @@ export class Scene implements IAnimatable, IClipPlanesHolder, IAssetContainer {
+         }
+     }
+ 
+-    private _clear(): void {
++    /** @internal */
++    public _clear(): void {
+         if (this.autoClearDepthAndStencil || this.autoClear) {
+             this._engine.clear(this._clearColor, this.autoClear || this.forceWireframe || this.forcePointsCloud, this.autoClearDepthAndStencil, this.autoClearDepthAndStencil);
+         }
+@@ -5845,7 +5847,7 @@ export class Scene implements IAnimatable, IClipPlanesHolder, IAssetContainer {
+             }
+ 
+             // Clear
+-            if (!this._canSkipParentClear(this.activeCamera)) {
++            if (!this.prePass && !this._canSkipParentClear(this.activeCamera)) {
+                 this._clearFrameBuffer(this.activeCamera);
+             }
+ 
